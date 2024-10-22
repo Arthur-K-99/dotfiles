@@ -8,6 +8,7 @@
 - btop
 - oh-my-posh
 - zoxide
+- eza
 
 # tmux
 

@@ -52,11 +52,16 @@ zstyle ':fzf-tab:complete:__zoxide_z:*' fzf-preview 'ls --color $realpath'
 # Aliases
 alias cat='bat'
 alias fzf='fzf --preview "bat --color=always --style=numbers --line-range=:500 {}"'
-alias la='ls -la --color'
-alias ll='ls -l --color'
-alias ls='ls --color'
+alias ls='eza'
+alias la='eza -la --icons=always'
+alias ll='eza -ll --icons=always'
+alias tree='eza --tree --icons=always'
 alias vim='nvim'
 alias c='clear'
+
+# Variables
+export XDG_CONFIG_HOME="$HOME/.config"
+export EZA_CONFIG_DIR="$HOME/.config/eza"
 
 # Shell integrations
 eval "$(fzf --zsh)"
