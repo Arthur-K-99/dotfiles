@@ -1,4 +1,4 @@
-# Prereq
+# Install these tools
 
 - [A Nerdfont (CaskaydiaCove NF Mono)](https://www.nerdfonts.com/font-downloads)
 - zsh
