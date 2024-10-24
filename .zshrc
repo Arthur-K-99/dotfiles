@@ -64,5 +64,5 @@ export XDG_CONFIG_HOME="$HOME/.config"
 export EZA_CONFIG_DIR="$HOME/.config/eza"
 
 # Shell integrations
-eval "$(fzf --zsh)"
 eval "$(zoxide init --cmd cd zsh)"
+[ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
