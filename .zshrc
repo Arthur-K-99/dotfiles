@@ -64,6 +64,11 @@ alias tree='eza --tree --icons=always'
 alias vim='nvim'
 alias c='clear'
 
+# Variables
+export XDG_CONFIG_HOME="$HOME/.config"
+export EZA_CONFIG_DIR="$HOME/.config/eza"
+export PATH=$PATH:$HOME/.local/bin
+
 # Shell integrations
 eval "$(zoxide init --cmd cd zsh)"
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
