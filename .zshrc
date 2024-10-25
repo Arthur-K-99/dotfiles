@@ -1,3 +1,8 @@
+# Variables
+export XDG_CONFIG_HOME="$HOME/.config"
+export EZA_CONFIG_DIR="$HOME/.config/eza"
+export PATH=$PATH:$HOME/.local/bin
+
 # Zinit installation
 ZINIT_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}/zinit/zinit.git"
 [ ! -d $ZINIT_HOME ] && mkdir -p "$(dirname $ZINIT_HOME)"
@@ -58,10 +63,6 @@ alias ll='eza -ll --icons=always'
 alias tree='eza --tree --icons=always'
 alias vim='nvim'
 alias c='clear'
-
-# Variables
-export XDG_CONFIG_HOME="$HOME/.config"
-export EZA_CONFIG_DIR="$HOME/.config/eza"
 
 # Shell integrations
 eval "$(zoxide init --cmd cd zsh)"
