@@ -55,7 +55,11 @@ zstyle ':fzf-tab:complete:cd:*' fzf-preview 'ls --color $realpath'
 zstyle ':fzf-tab:complete:__zoxide_z:*' fzf-preview 'ls --color $realpath'
 
 # Aliases
-alias cat='bat'
+if command -v bat &> /dev/null; then
+    alias cat='bat'
+elif command -v batcat &> /dev/null; then
+    alias cat='batcat'
+fi
 alias fzf='fzf --preview "bat --color=always --style=numbers --line-range=:500 {}"'
 alias ls='eza'
 alias la='eza -la --icons=always'
