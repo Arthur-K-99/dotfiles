@@ -1,0 +1,16 @@
+# Terminal essentials
+Microsoft.PowerShell
+Microsoft.WindowsTerminal
+
+# Shell tools
+JanDeDobbeleer.OhMyPosh
+sharkdp.bat
+junegunn.fzf
+ajeetdsouza.zoxide
+aristocratos.btop
+
+# Editor
+Neovim.Neovim
+
+# Dev tools
+GitHub.cli

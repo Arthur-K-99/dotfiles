@@ -70,5 +70,8 @@ alias vim='nvim'
 alias c='clear'
 
 # Shell integrations
-eval "$(zoxide init --cmd cd zsh)"
+command -v zoxide &>/dev/null && eval "$(zoxide init --cmd cd zsh)"
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
+
+# Machine-specific overrides (not tracked in repo)
+[ -f "$HOME/.zshrc.local" ] && source "$HOME/.zshrc.local"

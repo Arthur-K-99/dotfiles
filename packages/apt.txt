@@ -1,0 +1,11 @@
+# Shell
+zsh
+
+# Terminal tools
+tmux
+bat
+fzf
+btop
+neovim
+
+# Note: eza, zoxide, oh-my-posh are not in apt — installed by scripts/bootstrap_tools.sh

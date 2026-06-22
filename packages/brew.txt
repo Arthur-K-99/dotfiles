@@ -1,0 +1,14 @@
+# Terminal tools
+bat
+eza
+fzf
+zoxide
+btop
+tmux
+gh
+
+# Shell
+oh-my-posh
+
+# Editor
+neovim
