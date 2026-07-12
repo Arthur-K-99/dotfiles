@@ -1,3 +1,11 @@
+# Bootstrap prerequisites
+ca-certificates
+curl
+git
+gnupg
+unzip
+wget
+
 # Shell
 zsh
 
@@ -7,5 +15,6 @@ bat
 fzf
 btop
 neovim
+gh
 
 # Note: eza, zoxide, oh-my-posh are not in apt — installed by scripts/bootstrap_tools.sh

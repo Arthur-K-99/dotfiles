@@ -1,33 +1,36 @@
 # Variables
 export XDG_CONFIG_HOME="$HOME/.config"
 export EZA_CONFIG_DIR="$HOME/.config/eza"
-export PATH=$PATH:$HOME/.local/bin
-export TERM=xterm-256color
+typeset -U path PATH
+path=("$HOME/.local/bin" $path)
 
 # Zinit installation
 ZINIT_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}/zinit/zinit.git"
-[ ! -d $ZINIT_HOME ] && mkdir -p "$(dirname $ZINIT_HOME)"
-[ ! -d $ZINIT_HOME/.git ] && git clone https://github.com/zdharma-continuum/zinit.git "$ZINIT_HOME"
-source "${ZINIT_HOME}/zinit.zsh"
+if [[ -r "$ZINIT_HOME/zinit.zsh" ]]; then
+    source "$ZINIT_HOME/zinit.zsh"
+fi
 
 # Plugins
-zinit light zsh-users/zsh-syntax-highlighting
-zinit light zsh-users/zsh-completions
-zinit light zsh-users/zsh-autosuggestions
-zinit light Aloxaf/fzf-tab
+if (( $+functions[zinit] )); then
+    zinit light zsh-users/zsh-syntax-highlighting
+    zinit light zsh-users/zsh-completions
+    zinit light zsh-users/zsh-autosuggestions
+    zinit light Aloxaf/fzf-tab
+fi
 
 # For macOS
-if [[ -f "/opt/homebrew/bin/brew" ]] then
-  # If you're using macOS, you'll want this enabled
-  eval "$(/opt/homebrew/bin/brew shellenv)"
+if [[ -x "/opt/homebrew/bin/brew" ]]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)"
 fi
 
 # oh-my-posh
-eval "$(oh-my-posh init zsh --config https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/main/themes/catppuccin_macchiato.omp.json)"
+if (( $+commands[oh-my-posh] )); then
+    eval "$(oh-my-posh init zsh --config "$XDG_CONFIG_HOME/oh-my-posh/config.omp.json")"
+fi
 
 # Load completions
 autoload -Uz compinit && compinit
-zinit cdreplay -q
+(( $+functions[zinit] )) && zinit cdreplay -q
 
 # Keybindings
 bindkey -e
@@ -58,10 +61,11 @@ zstyle ':fzf-tab:complete:__zoxide_z:*' fzf-preview 'ls --color $realpath'
 # Aliases
 if command -v bat &> /dev/null; then
     alias cat='bat'
+    alias fzf='fzf --preview "bat --color=always --style=numbers --line-range=:500 {}"'
 elif command -v batcat &> /dev/null; then
     alias cat='batcat'
+    alias fzf='fzf --preview "batcat --color=always --style=numbers --line-range=:500 {}"'
 fi
-alias fzf='fzf --preview "bat --color=always --style=numbers --line-range=:500 {}"'
 alias ls='eza'
 alias la='eza -la --icons=always'
 alias ll='eza -ll --icons=always'

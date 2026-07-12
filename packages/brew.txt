@@ -7,8 +7,5 @@ btop
 tmux
 gh
 
-# Shell
-oh-my-posh
-
 # Editor
 neovim
