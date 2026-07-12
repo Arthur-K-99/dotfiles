@@ -40,6 +40,14 @@ check_macos_font() {
 }
 
 echo "Checking commands..."
+
+# nvm is a shell function, so load it before checking it and its default Node.js.
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+if [ -s "$NVM_DIR/nvm.sh" ]; then
+    # shellcheck disable=SC1091
+    source "$NVM_DIR/nvm.sh"
+fi
+
 check_command git git
 check_command zsh zsh
 check_command tmux tmux
@@ -51,6 +59,9 @@ check_command btop btop
 check_command neovim nvim
 check_command gh gh
 check_command oh-my-posh oh-my-posh
+check_command nvm nvm
+check_command node node
+check_command npm npm
 
 if [ "$(uname)" = "Darwin" ]; then
     echo "Checking font..."

@@ -49,11 +49,13 @@ Native Windows installs PowerShell, Windows Terminal, and command-line tools thr
 | eza | Yes | No |
 | bat, fzf, zoxide, btop | Yes | Yes |
 | Neovim | Yes | Yes |
+| nvm + Node.js LTS + npm | Yes | No |
 | CaskaydiaCove Nerd Font | macOS; manual on Linux | Yes |
 
 ## After install
 
 - **tmux plugins:** Open tmux and press `prefix + I` (Ctrl+A, I) if plugins aren't active.
+- **Node.js:** The Unix installer installs the current LTS release as the `nvm` default. Use `nvm install <version>` and `nvm use <version>` to manage other releases.
 - **Font:** Set your terminal font to `CaskaydiaCove NF Mono`. On Linux, download it manually from [nerdfonts.com](https://www.nerdfonts.com/font-downloads) and install to `~/.local/share/fonts/`.
 - **Machine-specific config:** Add anything that shouldn't be in the repo to `~/.zshrc.local` (sourced automatically).
 - **Windows machine-specific config:** Put private or machine-only PowerShell settings in `~/.powershell.local.ps1`.

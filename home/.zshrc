@@ -23,6 +23,11 @@ if [[ -x "/opt/homebrew/bin/brew" ]]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
 fi
 
+# nvm (Node.js and npm)
+export NVM_DIR="$HOME/.nvm"
+[[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"
+[[ -s "$NVM_DIR/bash_completion" ]] && source "$NVM_DIR/bash_completion"
+
 # oh-my-posh
 if (( $+commands[oh-my-posh] )); then
     eval "$(oh-my-posh init zsh --config "$XDG_CONFIG_HOME/oh-my-posh/config.omp.json")"

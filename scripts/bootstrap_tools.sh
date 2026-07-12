@@ -39,6 +39,40 @@ else
     echo "oh-my-posh already installed"
 fi
 
+# nvm, plus a default LTS release of Node.js (which includes npm)
+NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+    echo "Installing nvm..."
+    nvm_checkout="$(mktemp -d "${TMPDIR:-/tmp}/nvm.XXXXXX")"
+    trap 'rm -rf "$nvm_checkout"' EXIT
+    git clone --branch v0.40.5 --depth=1 https://github.com/nvm-sh/nvm.git "$nvm_checkout"
+    mkdir -p "$NVM_DIR"
+
+    # Homebrew may leave these pointing into its Cellar after `brew uninstall nvm`.
+    for nvm_file in nvm.sh nvm-exec bash_completion; do
+        if [ -L "$NVM_DIR/$nvm_file" ] && [ ! -e "$NVM_DIR/$nvm_file" ]; then
+            rm -f "$NVM_DIR/$nvm_file"
+        fi
+    done
+
+    # Merge the manager into the existing data directory without removing versions or aliases.
+    cp -R "$nvm_checkout"/. "$NVM_DIR"/
+    rm -rf "$nvm_checkout"
+    trap - EXIT
+else
+    echo "nvm already installed"
+fi
+
+# shellcheck disable=SC1091
+source "$NVM_DIR/nvm.sh"
+if [ "$(nvm version default)" = "N/A" ]; then
+    echo "Installing the latest LTS release of Node.js..."
+    nvm install --lts
+    nvm alias default 'lts/*'
+else
+    echo "Default Node.js already installed ($(nvm version default))"
+fi
+
 # Linux-only: tools not available in apt
 if [[ "$(uname)" != "Linux" ]]; then
     exit 0
