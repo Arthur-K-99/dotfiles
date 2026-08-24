@@ -84,3 +84,4 @@ command -v zoxide &>/dev/null && eval "$(zoxide init --cmd cd zsh)"
 
 # Machine-specific overrides (not tracked in repo)
 [ -f "$HOME/.zshrc.local" ] && source "$HOME/.zshrc.local"
+export SSH_AUTH_SOCK="$HOME/.bitwarden-ssh-agent.sock"
