@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
 DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/environment.sh
+source "$DOTFILES_DIR/scripts/lib/environment.sh"
 
 parse_list() {
     awk '!/^[[:space:]]*#/ && NF' "$1"
@@ -10,50 +10,46 @@ parse_list() {
 macos_cask_is_satisfied() {
     local package="$1"
 
-    if brew list --cask "$package" &>/dev/null; then
-        return 0
-    fi
-
     case "$package" in
         font-caskaydia-cove-nerd-font)
             compgen -G "$HOME/Library/Fonts/CaskaydiaCove*NerdFont*.ttf" >/dev/null || \
                 compgen -G "$HOME/Library/Fonts/CaskaydiaCove*NerdFont*.otf" >/dev/null
             ;;
         *)
-            return 1
+            brew list --cask "$package" &>/dev/null
             ;;
     esac
 }
 
 install_macos() {
+    local installer package
     if ! command -v brew &>/dev/null; then
         echo "Installing Homebrew..."
-        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-        if [ -x /opt/homebrew/bin/brew ]; then
-            eval "$(/opt/homebrew/bin/brew shellenv)"
-        elif [ -x /usr/local/bin/brew ]; then
-            eval "$(/usr/local/bin/brew shellenv)"
-        fi
+        installer="$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || return
+        /bin/bash -c "$installer" || return
+        dotfiles_init_environment || return
     fi
     echo "Installing Homebrew formulae..."
     while IFS= read -r package; do
-        brew install "$package"
+        brew install "$package" || return
     done < <(parse_list "$DOTFILES_DIR/packages/brew.txt")
     echo "Installing Homebrew casks..."
     while IFS= read -r package; do
         if macos_cask_is_satisfied "$package"; then
             echo "  already installed: $package"
+        elif brew list --cask "$package" &>/dev/null; then
+            echo "  repairing missing files: $package"
+            brew reinstall --cask "$package" || return
         else
-            brew install --cask "$package"
+            brew install --cask "$package" || return
         fi
     done < <(parse_list "$DOTFILES_DIR/packages/brew-casks.txt")
 }
 
-install_linux() {
+check_linux_distribution() {
     if [ ! -r /etc/os-release ]; then
         echo "Cannot identify this Linux distribution." >&2
-        exit 1
+        return 1
     fi
 
     # shellcheck disable=SC1091
@@ -63,22 +59,34 @@ install_linux() {
         *)
             echo "Unsupported Linux distribution: ${PRETTY_NAME:-${ID:-unknown}}" >&2
             echo "Currently supported: Debian and Ubuntu (including WSL)." >&2
-            exit 1
+            return 1
             ;;
     esac
+}
 
+install_linux() {
+    local package
+    local packages=()
+    check_linux_distribution || return
     echo "Updating apt..."
-    sudo apt-get update -qq
+    sudo apt-get update -qq || return
     echo "Installing apt packages..."
-    packages=()
     while IFS= read -r package; do
         packages+=("$package")
     done < <(parse_list "$DOTFILES_DIR/packages/apt.txt")
-    sudo apt-get install -y "${packages[@]}"
+    sudo apt-get install -y "${packages[@]}" || return
 }
 
-case "$(uname)" in
-    Darwin) install_macos ;;
-    Linux)  install_linux ;;
-    *)      echo "Unsupported OS: $(uname)"; exit 1 ;;
-esac
+install_packages_main() {
+    dotfiles_init_environment || return
+    case "$(uname)" in
+        Darwin) install_macos ;;
+        Linux)  install_linux ;;
+        *)      echo "Unsupported OS: $(uname)" >&2; return 1 ;;
+    esac
+}
+
+if [[ "${BASH_SOURCE[0]}" = "$0" ]]; then
+    set -euo pipefail
+    install_packages_main "$@"
+fi

@@ -1,6 +1,13 @@
 # Variables
 export XDG_CONFIG_HOME="$HOME/.config"
 export EZA_CONFIG_DIR="$HOME/.config/eza"
+
+# Discover Homebrew before loading plugins and keep user-installed tools first.
+if [[ -x "/opt/homebrew/bin/brew" ]]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+elif [[ -x "/usr/local/bin/brew" ]]; then
+    eval "$(/usr/local/bin/brew shellenv)"
+fi
 typeset -U path PATH
 path=("$HOME/.local/bin" $path)
 
@@ -18,13 +25,8 @@ if (( $+functions[zinit] )); then
     zinit light Aloxaf/fzf-tab
 fi
 
-# For macOS
-if [[ -x "/opt/homebrew/bin/brew" ]]; then
-    eval "$(/opt/homebrew/bin/brew shellenv)"
-fi
-
 # nvm (Node.js and npm)
-export NVM_DIR="$HOME/.nvm"
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 [[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"
 [[ -s "$NVM_DIR/bash_completion" ]] && source "$NVM_DIR/bash_completion"
 
@@ -83,5 +85,6 @@ command -v zoxide &>/dev/null && eval "$(zoxide init --cmd cd zsh)"
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 
 # Machine-specific overrides (not tracked in repo)
-[ -f "$HOME/.zshrc.local" ] && source "$HOME/.zshrc.local"
-export SSH_AUTH_SOCK="$HOME/.bitwarden-ssh-agent.sock"
+if [[ -f "$HOME/.zshrc.local" ]]; then
+    source "$HOME/.zshrc.local"
+fi

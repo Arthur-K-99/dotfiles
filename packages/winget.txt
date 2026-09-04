@@ -8,7 +8,7 @@ JanDeDobbeleer.OhMyPosh
 sharkdp.bat
 junegunn.fzf
 ajeetdsouza.zoxide
-aristocratos.btop
+aristocratos.btop4win
 
 # Editor
 Neovim.Neovim
