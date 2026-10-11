@@ -235,9 +235,11 @@ install_linux_tools() {
     install_github_release jesseduffield/lazygit 'lazygit_{version}_linux_{arch_go}.tar.gz' lazygit || return
     install_github_release jesseduffield/lazydocker 'lazydocker_{version}_Linux_{arch_go}.tar.gz' lazydocker || return
     install_github_release dandavison/delta 'delta-{version}-{arch}-unknown-linux-gnu.tar.gz' delta || return
-    install_github_release atuinsh/atuin 'atuin-{arch}-unknown-linux-gnu.tar.gz' atuin || return
+    # atuin and yazi publish glibc builds that need glibc 2.39, newer than
+    # Debian 12 and Ubuntu 22.04 ship; their musl builds run everywhere.
+    install_github_release atuinsh/atuin 'atuin-{arch}-unknown-linux-musl.tar.gz' atuin || return
     install_github_release carapace-sh/carapace-bin 'carapace-bin_{version}_linux_{arch_deb}.tar.gz' carapace || return
-    install_github_release sxyazi/yazi 'yazi-{arch}-unknown-linux-gnu.zip' yazi ya || return
+    install_github_release sxyazi/yazi 'yazi-{arch}-unknown-linux-musl.zip' yazi ya || return
     install_github_release bootandy/dust 'dust-{tag}-{arch}-unknown-linux-musl.tar.gz' dust || return
     install_github_release dalance/procs 'procs-{tag}-{arch}-linux.zip' procs || return
     install_github_release ducaale/xh 'xh-{tag}-{arch}-unknown-linux-musl.tar.gz' xh || return

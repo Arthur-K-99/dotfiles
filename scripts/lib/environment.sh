@@ -31,8 +31,10 @@ dotfiles_init_environment() {
         brew_environment="$("$brew_path" shellenv)" || return
         eval "$brew_environment" || return
     fi
+    # Release binaries land in DOTFILES_LOCAL_BIN (default ~/.local/bin).
+    local local_bin="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
     case ":${PATH:-}:" in
-        *":$HOME/.local/bin:"*) ;;
-        *) export PATH="$HOME/.local/bin${PATH:+:$PATH}" ;;
+        *":$local_bin:"*) ;;
+        *) export PATH="$local_bin${PATH:+:$PATH}" ;;
     esac
 }
