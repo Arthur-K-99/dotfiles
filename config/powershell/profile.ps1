@@ -7,15 +7,6 @@ if (Test-Path -LiteralPath $localBin) {
     $env:PATH = "$localBin$([IO.Path]::PathSeparator)$env:PATH"
 }
 
-# mise puts the runtimes from ~/.config/mise/config.toml on PATH and refreshes
-# them on directory changes, so it runs before anything that may need them.
-# Its directory hook needs PowerShell 7 and warns otherwise; Windows PowerShell
-# keeps the prompt hook, which refreshes PATH as well, so the warning is off.
-if (Get-Command mise -ErrorAction SilentlyContinue) {
-    if ($PSVersionTable.PSVersion.Major -lt 7) { $env:MISE_PWSH_CHPWD_WARNING = '0' }
-    (& mise activate pwsh) | Out-String | Invoke-Expression
-}
-
 $promptConfig = Join-Path $HOME ".config\oh-my-posh\config.omp.json"
 if ((Get-Command oh-my-posh -ErrorAction SilentlyContinue) -and (Test-Path $promptConfig)) {
     oh-my-posh init pwsh --config $promptConfig | Invoke-Expression
@@ -23,6 +14,16 @@ if ((Get-Command oh-my-posh -ErrorAction SilentlyContinue) -and (Test-Path $prom
 
 if (Get-Command zoxide -ErrorAction SilentlyContinue) {
     zoxide init powershell --cmd cd | Out-String | Invoke-Expression
+}
+
+# mise puts the runtimes from ~/.config/mise/config.toml on PATH and refreshes
+# them on directory changes. It runs after oh-my-posh so its prompt hook wraps
+# the prompt instead of being replaced by it; that hook is what refreshes PATH
+# in Windows PowerShell, whose lack of a directory-change event mise would
+# otherwise warn about on every start.
+if (Get-Command mise -ErrorAction SilentlyContinue) {
+    if ($PSVersionTable.PSVersion.Major -lt 7) { $env:MISE_PWSH_CHPWD_WARNING = '0' }
+    (& mise activate pwsh) | Out-String | Invoke-Expression
 }
 
 # direnv loads and unloads .envrc files on directory changes (direnv 2.33+).
