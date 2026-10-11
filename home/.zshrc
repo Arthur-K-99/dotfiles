@@ -15,18 +15,29 @@ path=("$HOME/.local/bin" $path)
 # changes only when the binary does. dotfiles_cached_init <name> <tool> <cmd...>
 # runs the command once, keeps the result in the cache and re-sources it until
 # the tool is upgraded. Nothing happens when the tool is absent.
+# The first line of a cache file records the binary's resolved path, size and
+# modification time plus the command, so upgrades (Homebrew keeps versions in
+# the path, packages change size) and changed arguments regenerate it.
 dotfiles_cached_init() {
     local name="$1" tool="$2"
     local cache="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/$name.zsh"
+    local binary key first_line tmp
+    local -A stat_fields
     shift 2
     (( $+commands[$tool] )) || return 1
-    if [[ ! -s "$cache" || "$cache" -ot "${commands[$tool]}" ]]; then
+    binary="${commands[$tool]:A}"
+    zmodload -F zsh/stat b:zstat 2>/dev/null || return 1
+    zstat -H stat_fields "$binary" 2>/dev/null || return 1
+    key="# dotfiles-cache $binary $stat_fields[size] $stat_fields[mtime] $*"
+    { IFS= read -r first_line < "$cache"; } 2>/dev/null
+    if [[ "$first_line" != "$key" ]]; then
         mkdir -p "${cache:h}" || return 1
-        if ! "$@" > "$cache.new"; then
-            rm -f "$cache.new"
+        tmp="$(mktemp "$cache.XXXXXX")" || return 1
+        if ! { print -r -- "$key"; "$@"; } > "$tmp"; then
+            rm -f "$tmp"
             return 1
         fi
-        mv -f "$cache.new" "$cache" || return 1
+        mv -f "$tmp" "$cache" || return 1
     fi
     source "$cache"
 }
@@ -46,10 +57,10 @@ export FZF_DEFAULT_OPTS="\
 # Ubuntu install bat as batcat. Ctrl-/ hides the preview pane.
 dotfiles_bat="$(command -v bat || command -v batcat)"
 export FZF_CTRL_T_OPTS="\
- --preview '[ -d {} ] && eza --tree --level=1 --color=always --icons=always {} || ${dotfiles_bat:-cat} --color=always --style=numbers --line-range=:500 {}'\
+ --preview '[ -d {} ] && LS_COLORS= eza --tree --level=1 --color=always --icons=always {} || ${dotfiles_bat:-cat} --color=always --style=numbers --line-range=:500 {}'\
  --preview-window=right,60%,border-left --bind=ctrl-/:toggle-preview"
 export FZF_ALT_C_OPTS="\
- --preview 'eza --tree --level=2 --color=always --icons=always {}'\
+ --preview 'LS_COLORS= eza --tree --level=2 --color=always --icons=always {}'\
  --preview-window=right,60%,border-left"
 unset dotfiles_bat
 # fd feeds fzf: it honours .gitignore and skips .git, so Ctrl-T and Alt-C
@@ -157,11 +168,13 @@ setopt interactive_comments
 # everything else that reads it. eza has its own theme.yml, which LS_COLORS
 # would override, so the wrapper blanks the variable for eza alone. Without
 # vivid, a small default uses the terminal's own palette.
-if (( $+commands[vivid] )); then
-    export LS_COLORS="$(vivid generate catppuccin-macchiato)"
+# vivid 0.9 added the Catppuccin themes; Debian 12 still ships 0.8.
+if (( $+commands[vivid] )) && dotfiles_ls_colors="$(vivid generate catppuccin-macchiato 2>/dev/null)" && [[ -n "$dotfiles_ls_colors" ]]; then
+    export LS_COLORS="$dotfiles_ls_colors"
 else
     export LS_COLORS="${LS_COLORS:-di=1;34:ln=36:so=35:pi=33:ex=1;32:bd=1;33:cd=1;33:su=1;31:sg=1;31:tw=1;34:ow=1;34}"
 fi
+unset dotfiles_ls_colors
 eza() { LS_COLORS= command eza "$@"; }
 
 # Completion styling
@@ -171,8 +184,8 @@ zstyle ':completion:*' menu no
 zstyle ':completion:*:descriptions' format '[%d]'
 zstyle ':fzf-tab:*' use-fzf-default-opts yes
 zstyle ':fzf-tab:*' switch-group '<' '>'
-zstyle ':fzf-tab:complete:cd:*' fzf-preview 'eza -1 --color=always --icons=always $realpath'
-zstyle ':fzf-tab:complete:__zoxide_z:*' fzf-preview 'eza -1 --color=always --icons=always $realpath'
+zstyle ':fzf-tab:complete:cd:*' fzf-preview 'LS_COLORS= eza -1 --color=always --icons=always $realpath'
+zstyle ':fzf-tab:complete:__zoxide_z:*' fzf-preview 'LS_COLORS= eza -1 --color=always --icons=always $realpath'
 
 # Aliases
 if command -v bat &> /dev/null; then

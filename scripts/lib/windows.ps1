@@ -308,14 +308,59 @@ function Invoke-DotfilesPackageInstall {
     Invoke-DotfilesFontInstall
 }
 
-# mise installs the runtimes declared in config/mise/config.toml, which the link
-# stage has placed at ~/.config/mise/config.toml, so this stage runs after it.
+# The linked theme.toml names these flavors. They are packages that ya installs
+# into ~/.config/yazi/flavors beside the managed files, so they are not linked.
+function Get-DotfilesYaziFlavors {
+    @('catppuccin-macchiato', 'catppuccin-latte')
+}
+
+function Get-DotfilesYaziFlavorFile {
+    param([string]$HomeDirectory, [string]$Flavor)
+    Join-Path $HomeDirectory ".config/yazi/flavors/$Flavor.yazi/flavor.toml"
+}
+
+function Install-DotfilesYaziFlavors {
+    param([string]$HomeDirectory)
+    $yaziConfig = Join-Path $HomeDirectory '.config/yazi'
+    $packageFile = Join-Path $yaziConfig 'package.toml'
+    # ya reads YAZI_CONFIG_HOME like yazi does; the profile points it at the same
+    # directory, and the previous value is restored once the packages are in place.
+    $savedConfigHome = $env:YAZI_CONFIG_HOME
+    $env:YAZI_CONFIG_HOME = $yaziConfig
+    try {
+        foreach ($flavor in Get-DotfilesYaziFlavors) {
+            $flavorFile = Get-DotfilesYaziFlavorFile $HomeDirectory $flavor
+            if (Test-Path -LiteralPath $flavorFile -PathType Leaf) { Write-Host "  already installed: yazi flavor $flavor"; continue }
+            $yaCommand = Get-DotfilesCommandPath 'ya'
+            if (-not $yaCommand) { throw 'ya is unavailable after package installation. Reopen PowerShell and rerun install.ps1 to install the yazi flavors.' }
+            # A flavor that package.toml already declares is installed from there;
+            # ya pkg add would reject it as a duplicate.
+            $arguments = @('pkg', 'add', "yazi-rs/flavors:$flavor")
+            if ((Test-Path -LiteralPath $packageFile -PathType Leaf) -and [IO.File]::ReadAllText($packageFile).Contains("flavors:$flavor")) {
+                $arguments = @('pkg', 'install')
+            }
+            Write-Host "  installing: yazi flavor $flavor"
+            $code = Invoke-DotfilesNativeCommand $yaCommand $arguments
+            if ($code -ne 0) { throw "ya $($arguments -join ' ') failed (exit code $code). Rerun install.ps1 to retry." }
+            if (-not (Test-Path -LiteralPath $flavorFile -PathType Leaf)) { throw "yazi flavor $flavor was not installed. Rerun install.ps1 to retry." }
+        }
+    } finally {
+        $env:YAZI_CONFIG_HOME = $savedConfigHome
+    }
+}
+
+# mise installs the runtimes declared in config/mise/config.toml and ya the yazi
+# flavors; both read files the link stage placed under ~/.config, so this stage
+# runs after it.
 function Invoke-DotfilesRuntimeInstall {
+    param([string]$HomeDirectory)
     $miseCommand = Get-DotfilesCommandPath 'mise'
     if (-not $miseCommand) { throw 'mise is unavailable after package installation. Reopen PowerShell and rerun install.ps1 to install the runtimes.' }
     Write-Host 'Installing runtimes declared in the mise configuration...'
     $code = Invoke-DotfilesNativeCommand $miseCommand @('install', '--yes')
     if ($code -ne 0) { throw "mise install failed (exit code $code). Rerun install.ps1 to retry." }
+    Write-Host 'Installing yazi flavors...'
+    Install-DotfilesYaziFlavors $HomeDirectory
 }
 
 function Invoke-DotfilesLink {
@@ -323,6 +368,18 @@ function Invoke-DotfilesLink {
     Write-Host 'Linking native Windows configuration...'
     $files = @(Get-DotfilesManagedFiles $DotfilesDir $HomeDirectory)
     foreach ($file in $files) { Set-DotfilesManagedFile $file.Source $file.Destination }
+    # Without ~/.gitconfig, `git config --global` writes into ~/.config/git/config,
+    # the managed file. The seed is created once and never touched again.
+    $gitConfig = Join-Path $HomeDirectory '.gitconfig'
+    if (-not (Get-DotfilesPathItem $gitConfig)) {
+        $seed = @(
+            '# Identity and credential helpers belong here; this file is not managed by the dotfiles repository.'
+            '# Shared settings live in ~/.config/git/config.'
+            ''
+        ) -join [Environment]::NewLine
+        [IO.File]::WriteAllText($gitConfig, $seed)
+        Write-Host "  created: $gitConfig"
+    }
 }
 
 function Get-DotfilesDoctorCommands {
@@ -352,6 +409,10 @@ function Invoke-DotfilesDoctor {
         $miseCommand = Get-DotfilesCommandPath 'mise'
         if ($miseCommand -and (Invoke-DotfilesNativeCommand $miseCommand @('which', 'node') -Quiet) -eq 0) { Write-Host '  [ok] Node.js via mise' }
         else { Write-Host '  [missing] Node.js via mise (rerun: scripts\install_runtimes.ps1)'; $failures++ }
+        foreach ($flavor in Get-DotfilesYaziFlavors) {
+            if (Test-Path -LiteralPath (Get-DotfilesYaziFlavorFile $HomeDirectory $flavor) -PathType Leaf) { Write-Host "  [ok] yazi flavor $flavor" }
+            else { Write-Host "  [missing] yazi flavor $flavor (rerun: scripts\install_runtimes.ps1)"; $failures++ }
+        }
     } catch { Write-Host "  [failed] $($_.Exception.Message)"; $failures++ }
     Write-Host 'Checking PowerShell modules...'
     try {
@@ -380,7 +441,7 @@ function Invoke-DotfilesInstall {
         Invoke-DotfilesLink $DotfilesDir $HomeDirectory
         $stage = 'Installing runtimes'
         Write-Host "==> $stage"
-        Invoke-DotfilesRuntimeInstall
+        Invoke-DotfilesRuntimeInstall $HomeDirectory
         $stage = 'Verifying setup'
         Write-Host "==> $stage"
         Invoke-DotfilesDoctor $DotfilesDir $HomeDirectory

@@ -80,7 +80,23 @@ main() {
     link "$DOTFILES_DIR/config/atuin/config.toml" "$HOME/.config/atuin/config.toml" || return 1
     link "$DOTFILES_DIR/config/atuin/themes/catppuccin-macchiato-blue.toml" "$HOME/.config/atuin/themes/catppuccin-macchiato-blue.toml" || return 1
     link "$DOTFILES_DIR/config/mise/config.toml" "$HOME/.config/mise/config.toml" || return 1
-    link "$DOTFILES_DIR/config/zsh-abbr/user-abbreviations" "$HOME/.config/zsh-abbr/user-abbreviations" || return 1
+    # zsh-abbr rewrites its file with mv, which would replace a file symlink;
+    # through a directory link the rewrite lands in the repository.
+    link "$DOTFILES_DIR/config/zsh-abbr" "$HOME/.config/zsh-abbr" || return 1
+    ensure_gitconfig "$HOME/.gitconfig" || return 1
+}
+
+# Git writes `git config --global` to ~/.config/git/config, the managed file,
+# whenever ~/.gitconfig is missing. An empty one keeps identity and credential
+# helpers out of the repository.
+ensure_gitconfig() {
+    local gitconfig="$1"
+    if [ -e "$gitconfig" ] || [ -L "$gitconfig" ]; then
+        echo "  present: $gitconfig"
+        return 0
+    fi
+    printf '# Identity and credential helpers belong here; this file is not managed by the dotfiles repository.\n# Shared settings live in ~/.config/git/config.\n' > "$gitconfig" || return 1
+    echo "  created: $gitconfig"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

@@ -551,11 +551,17 @@ exit 0
             New-Item -ItemType Directory -Path (Split-Path -Parent $file.Destination) -Force | Out-Null
             Copy-Item -LiteralPath $file.Source -Destination $file.Destination
         }
+        $latteFlavor = Join-Path $fixture.Directory '.config/yazi/flavors/catppuccin-latte.yazi/flavor.toml'
+        foreach ($flavorFile in @((Join-Path $fixture.Directory '.config/yazi/flavors/catppuccin-macchiato.yazi/flavor.toml'), $latteFlavor)) {
+            New-Item -ItemType Directory -Path (Split-Path -Parent $flavorFile) -Force | Out-Null
+            [IO.File]::WriteAllText($flavorFile, '# flavor')
+        }
         Invoke-DotfilesDoctor $repository $fixture.Directory
         foreach ($name in @('carapace', 'atuin', 'mise', 'delta', 'lazygit', 'lazydocker', 'yazi', 'rg', 'fd', 'dust', 'duf', 'procs', 'sd', 'xh', 'hyperfine', 'glow', 'tldr', 'gum', 'direnv')) {
             Assert-True ($report -contains "  [ok] $name") "The doctor must check the $name command"
         }
         Assert-True ($report -contains '  [ok] Node.js via mise') 'A runtime mise can locate passes'
+        Assert-True (($report -contains '  [ok] yazi flavor catppuccin-macchiato') -and ($report -contains '  [ok] yazi flavor catppuccin-latte')) 'Installed yazi flavors pass'
         foreach ($file in $files) {
             [IO.File]::WriteAllText($file.Destination, 'stale configuration')
             Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } 'check\(s\) need attention'
@@ -573,6 +579,12 @@ exit 0
         Assert-True ($report -contains '  [missing] Node.js via mise (rerun: scripts\install_runtimes.ps1)') 'A missing runtime names the stage that installs it'
         $runtimeExitCode = 0
         Invoke-DotfilesDoctor $repository $fixture.Directory
+        Remove-Item -LiteralPath $latteFlavor
+        $report.Clear()
+        Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } '1 check\(s\) need attention'
+        Assert-True ($report -contains '  [missing] yazi flavor catppuccin-latte (rerun: scripts\install_runtimes.ps1)') 'A missing yazi flavor names the stage that installs it'
+        [IO.File]::WriteAllText($latteFlavor, '# flavor')
+        Invoke-DotfilesDoctor $repository $fixture.Directory
         # Without mise the runtime is missing too, and nothing is executed to find out.
         function Get-DotfilesCommandPath { param($Name) if ($Name -ne 'mise') { 'mock-command' } }
         function Invoke-DotfilesNativeCommand { throw 'Unexpected native command' }
@@ -581,22 +593,100 @@ exit 0
         Assert-True (($report -contains '  [missing] mise') -and ($report -contains '  [missing] Node.js via mise (rerun: scripts\install_runtimes.ps1)')) 'Both mise and its runtime are reported'
     }
 
-    Invoke-Test 'Runtime installation runs mise against the linked configuration and can be retried' {
-        $runtimeState = @{ ExitCode = 1; Calls = [Collections.Generic.List[string]]::new() }
-        function Get-DotfilesCommandPath { param($Name) if ($Name -eq 'mise') { 'mock-mise' } }
+    Invoke-Test 'Runtime installation runs mise, then installs the missing yazi flavors, and can be retried' {
+        $fixture = New-Fixture
+        $yaziConfig = Join-Path $fixture.Directory '.config/yazi'
+        $flavorsDirectory = Join-Path $yaziConfig 'flavors'
+        $runtimeState = @{ MiseExitCode = 1; YaExitCode = 0; YaInstalls = $true; Calls = [Collections.Generic.List[string]]::new(); ConfigHomes = [Collections.Generic.List[string]]::new() }
+        function Get-DotfilesCommandPath { param($Name) if ($Name -in @('mise', 'ya')) { "mock-$Name" } }
         function Invoke-DotfilesNativeCommand {
             param($Command, $Arguments, [switch]$Quiet)
-            Assert-True ($Command -eq 'mock-mise' -and -not $Quiet) 'Runtimes are installed by the discovered mise with visible output'
-            $runtimeState.Calls.Add(($Arguments -join ' '))
-            $runtimeState.ExitCode
+            Assert-True (-not $Quiet) 'Installation output stays visible'
+            $runtimeState.Calls.Add("$Command $($Arguments -join ' ')")
+            if ($Command -eq 'mock-mise') { return $runtimeState.MiseExitCode }
+            Assert-True ($Command -eq 'mock-ya' -and $Arguments[0] -eq 'pkg') "Unexpected native command: $Command $Arguments"
+            $runtimeState.ConfigHomes.Add([string]$env:YAZI_CONFIG_HOME)
+            if ($runtimeState.YaExitCode -eq 0 -and $runtimeState.YaInstalls) {
+                # ya pkg install installs what package.toml declares; ya pkg add installs the named flavor.
+                if ($Arguments[1] -eq 'install') {
+                    $flavors = @([regex]::Matches([IO.File]::ReadAllText((Join-Path $yaziConfig 'package.toml')), 'flavors:([a-z-]+)') | ForEach-Object { $_.Groups[1].Value })
+                } else { $flavors = @(($Arguments[2] -split ':')[1]) }
+                foreach ($flavor in $flavors) {
+                    $flavorFile = Join-Path $flavorsDirectory "$flavor.yazi/flavor.toml"
+                    New-Item -ItemType Directory -Path (Split-Path -Parent $flavorFile) -Force | Out-Null
+                    [IO.File]::WriteAllText($flavorFile, '# flavor')
+                }
+            }
+            return $runtimeState.YaExitCode
         }
-        Assert-Throws { Invoke-DotfilesRuntimeInstall } 'mise install failed \(exit code 1\)\. Rerun install.ps1 to retry'
-        $runtimeState.ExitCode = 0
-        Invoke-DotfilesRuntimeInstall
-        Assert-True ($runtimeState.Calls.Count -eq 2 -and @($runtimeState.Calls | Where-Object { $_ -ne 'install --yes' }).Count -eq 0) 'Every attempt runs mise install --yes'
-        function Get-DotfilesCommandPath { param($Name) $null }
-        Assert-Throws { Invoke-DotfilesRuntimeInstall } 'mise is unavailable.*Reopen PowerShell and rerun install.ps1'
-        Assert-True ($runtimeState.Calls.Count -eq 2) 'Nothing runs without a discoverable mise'
+        $savedConfigHome = $env:YAZI_CONFIG_HOME
+        $env:YAZI_CONFIG_HOME = 'previous value'
+        try {
+            Assert-Throws { Invoke-DotfilesRuntimeInstall $fixture.Directory } 'mise install failed \(exit code 1\)\. Rerun install.ps1 to retry'
+            Assert-True (($runtimeState.Calls -join "`n") -eq 'mock-mise install --yes') 'A mise failure stops before the flavors'
+            $runtimeState.MiseExitCode = 0
+            $runtimeState.YaExitCode = 2
+            Assert-Throws { Invoke-DotfilesRuntimeInstall $fixture.Directory } 'ya pkg add yazi-rs/flavors:catppuccin-macchiato failed \(exit code 2\)\. Rerun install.ps1 to retry'
+            $runtimeState.YaExitCode = 0
+            $runtimeState.YaInstalls = $false
+            Assert-Throws { Invoke-DotfilesRuntimeInstall $fixture.Directory } 'yazi flavor catppuccin-macchiato was not installed'
+            Assert-True ($env:YAZI_CONFIG_HOME -eq 'previous value') 'YAZI_CONFIG_HOME is restored after a failure'
+            $runtimeState.YaInstalls = $true
+            $runtimeState.Calls.Clear()
+            Invoke-DotfilesRuntimeInstall $fixture.Directory
+            Assert-True (($runtimeState.Calls -join "`n") -eq "mock-mise install --yes`nmock-ya pkg add yazi-rs/flavors:catppuccin-macchiato`nmock-ya pkg add yazi-rs/flavors:catppuccin-latte") "The retry adds every missing flavor: $($runtimeState.Calls -join ' | ')"
+            Assert-True (@($runtimeState.ConfigHomes | Where-Object { $_ -ne $yaziConfig }).Count -eq 0) 'ya must see the yazi configuration under the home directory'
+            Assert-True ($env:YAZI_CONFIG_HOME -eq 'previous value') 'YAZI_CONFIG_HOME is restored after success'
+            $runtimeState.Calls.Clear()
+            Invoke-DotfilesRuntimeInstall $fixture.Directory
+            Assert-True (($runtimeState.Calls -join "`n") -eq 'mock-mise install --yes') 'Installed flavors are skipped'
+            # A flavor that package.toml already declares is installed from it; the other is still added.
+            Remove-Item -LiteralPath $flavorsDirectory -Recurse -Force
+            [IO.File]::WriteAllText((Join-Path $yaziConfig 'package.toml'), "[[flavor.deps]]`nuse = `"yazi-rs/flavors:catppuccin-macchiato`"`n")
+            $runtimeState.Calls.Clear()
+            Invoke-DotfilesRuntimeInstall $fixture.Directory
+            Assert-True (($runtimeState.Calls -join "`n") -eq "mock-mise install --yes`nmock-ya pkg install`nmock-ya pkg add yazi-rs/flavors:catppuccin-latte") "Declared flavors come from package.toml: $($runtimeState.Calls -join ' | ')"
+            # ya is needed only while a flavor is missing.
+            function Get-DotfilesCommandPath { param($Name) if ($Name -eq 'mise') { 'mock-mise' } }
+            Invoke-DotfilesRuntimeInstall $fixture.Directory
+            Remove-Item -LiteralPath $flavorsDirectory -Recurse -Force
+            Assert-Throws { Invoke-DotfilesRuntimeInstall $fixture.Directory } 'ya is unavailable.*Reopen PowerShell and rerun install.ps1'
+            function Get-DotfilesCommandPath { param($Name) $null }
+            $runtimeState.Calls.Clear()
+            Assert-Throws { Invoke-DotfilesRuntimeInstall $fixture.Directory } 'mise is unavailable.*Reopen PowerShell and rerun install.ps1'
+            Assert-True ($runtimeState.Calls.Count -eq 0) 'Nothing runs without a discoverable mise'
+        } finally { $env:YAZI_CONFIG_HOME = $savedConfigHome }
+    }
+
+    Invoke-Test 'Linking seeds an unmanaged .gitconfig once and never rewrites it' {
+        $fixture = New-Fixture
+        function Get-DotfilesManagedFiles { param($DotfilesDir, $HomeDirectory) [pscustomobject]@{ Source = $fixture.Source; Destination = $fixture.Destination } }
+        $gitConfig = Join-Path $fixture.Directory '.gitconfig'
+        Invoke-DotfilesLink $repository $fixture.Directory
+        Assert-True (Test-DotfilesManagedFile $fixture.Source $fixture.Destination) 'Managed files are still set up'
+        $seed = [IO.File]::ReadAllText($gitConfig)
+        $seedLines = @($seed -split '\r?\n')
+        Assert-True (($seedLines -ccontains '# Identity and credential helpers belong here; this file is not managed by the dotfiles repository.') -and
+            ($seedLines -ccontains '# Shared settings live in ~/.config/git/config.')) 'A missing .gitconfig is created with the two comment lines'
+        Assert-True (@($seedLines | Where-Object { $_ -notmatch '^(#|$)' }).Count -eq 0) 'The seed holds comments only'
+        Invoke-DotfilesLink $repository $fixture.Directory
+        Assert-True ([IO.File]::ReadAllText($gitConfig) -eq $seed) 'Reruns leave the seed alone'
+        $identity = "[user]`n`tname = Example`n"
+        [IO.File]::WriteAllText($gitConfig, $identity)
+        Invoke-DotfilesLink $repository $fixture.Directory
+        Assert-True ([IO.File]::ReadAllText($gitConfig) -eq $identity) 'An existing .gitconfig is never touched'
+        Assert-True (@(Get-ChildItem -LiteralPath $fixture.Directory -Filter '*.bak.*' -Force).Count -eq 0) 'No backup is made of .gitconfig'
+        if ($canCreateSymlinks) {
+            Remove-Item -LiteralPath $gitConfig -Force
+            # Windows PowerShell refuses a link to a missing target: create it, link, then remove it.
+            $missingTarget = Join-Path $fixture.Directory 'missing-gitconfig'
+            [IO.File]::WriteAllText($missingTarget, 'temporary target')
+            New-Item -ItemType SymbolicLink -Path $gitConfig -Target $missingTarget | Out-Null
+            Remove-Item -LiteralPath $missingTarget
+            Invoke-DotfilesLink $repository $fixture.Directory
+            $link = Get-DotfilesPathItem $gitConfig
+            Assert-True ($link.LinkType -eq 'SymbolicLink' -and ([string]$link.Target) -match 'missing-gitconfig$') 'A dangling .gitconfig link is left for the user to fix'
+        }
     }
 
     Invoke-Test 'Setup verifies before its completion message and propagates verification failures' {
@@ -604,7 +694,7 @@ exit 0
         function Invoke-DotfilesPackageInstall { param($DotfilesDir) $events.Add('packages') }
         function Invoke-DotfilesModuleInstall { $events.Add('modules') }
         function Invoke-DotfilesLink { param($DotfilesDir, $HomeDirectory) $events.Add('links') }
-        function Invoke-DotfilesRuntimeInstall { $events.Add('runtimes') }
+        function Invoke-DotfilesRuntimeInstall { param($HomeDirectory) Assert-True ($HomeDirectory -eq $testRoot) 'The runtimes stage receives the home directory'; $events.Add('runtimes') }
         function Invoke-DotfilesDoctor { param($DotfilesDir, $HomeDirectory) $events.Add('verified') }
         function Write-Host { param($Object) if ([string]$Object -match '^Done\.') { $events.Add('done') } }
         Invoke-DotfilesInstall $repository $testRoot

@@ -182,7 +182,8 @@ doctor_main() {
     check_link "$DOTFILES_DIR/config/atuin/config.toml" "$HOME/.config/atuin/config.toml"
     check_link "$DOTFILES_DIR/config/atuin/themes/catppuccin-macchiato-blue.toml" "$HOME/.config/atuin/themes/catppuccin-macchiato-blue.toml"
     check_link "$DOTFILES_DIR/config/mise/config.toml" "$HOME/.config/mise/config.toml"
-    check_link "$DOTFILES_DIR/config/zsh-abbr/user-abbreviations" "$HOME/.config/zsh-abbr/user-abbreviations"
+    check_link "$DOTFILES_DIR/config/zsh-abbr" "$HOME/.config/zsh-abbr"
+    check_readable "~/.gitconfig for identity (rerun: bash scripts/link_dotfiles.sh)" "$HOME/.gitconfig"
     echo "Checking plugins..."
     check_plugins
 

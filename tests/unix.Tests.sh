@@ -48,6 +48,18 @@ test_link_fresh_and_repeat() {
     assert_equal 0 "$(find "$test_dir" -name '*.bak.*' | wc -l | tr -d ' ')"
 }
 
+test_gitconfig_guard_creates_once() {
+    source "$TEST_REPO_DIR/scripts/link_dotfiles.sh"
+    ensure_gitconfig "$test_dir/.gitconfig"
+    assert_contains "$(cat "$test_dir/.gitconfig")" 'not managed by the dotfiles repository'
+    printf '[user]\n\tname = Someone\n' > "$test_dir/.gitconfig"
+    ensure_gitconfig "$test_dir/.gitconfig"
+    assert_equal $'[user]\n\tname = Someone' "$(cat "$test_dir/.gitconfig")"
+    ln -s "$test_dir/elsewhere" "$test_dir/linked-gitconfig"
+    ensure_gitconfig "$test_dir/linked-gitconfig"
+    assert_equal "$test_dir/elsewhere" "$(readlink "$test_dir/linked-gitconfig")"
+}
+
 test_link_backups_and_collisions() {
     source "$TEST_REPO_DIR/scripts/link_dotfiles.sh"
     printf 'managed\n' > "$test_dir/source"
@@ -838,8 +850,8 @@ MOCK
         "$zsh_binary" -df -c "$tool_probe"
     assert_equal 1 "$(wc -l < "$test_dir/atuin-args" | tr -d ' ')"
     assert_equal 1 "$(wc -l < "$test_dir/carapace-args" | tr -d ' ')"
-    # An upgraded binary invalidates its cache.
-    touch "$test_dir/bin/atuin"
+    # An upgraded binary (new size, path or mtime) invalidates its cache.
+    printf '# upgraded build\n' >> "$test_dir/bin/atuin"
     DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
         XDG_DATA_HOME="$test_dir/data" XDG_CACHE_HOME="$test_dir/cache" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/bin:/usr/bin:/bin" \
         "$zsh_binary" -df -c "$tool_probe"
@@ -856,7 +868,18 @@ MOCK
             source "$DOTFILES_TEST_PROFILE" || exit 1
             [[ -z "$DOTFILES_TEST_DIRENV" ]] || exit 1
         '
-    [ ! -e "$test_dir/cache/dotfiles/direnv.zsh" ] && [ ! -e "$test_dir/cache/dotfiles/direnv.zsh.new" ]
+    [ ! -e "$test_dir/cache/dotfiles/direnv.zsh" ]
+    assert_equal 0 "$(find "$test_dir/cache/dotfiles" -name 'direnv.zsh.*' | wc -l | tr -d ' ')"
+    # vivid 0.8 (Debian 12) has no Catppuccin theme: the ANSI default must survive.
+    printf '#!/bin/sh\necho "Error: theme not found" >&2\nexit 1\n' > "$test_dir/bin/vivid"
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" XDG_CACHE_HOME="$test_dir/cache" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/bin:/usr/bin:/bin" \
+        "$zsh_binary" -df -c '
+            autoload() { :; }
+            compinit() { :; }
+            source "$DOTFILES_TEST_PROFILE" 2>/dev/null || exit 1
+            [[ "$LS_COLORS" == di=1\;34:* ]] || { print "LS_COLORS: $LS_COLORS"; exit 1; }
+        '
     # Without the tools the profile still loads, with the ANSI color default and no fd alias.
     DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
         XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" PATH=/usr/bin:/bin \
@@ -878,6 +901,7 @@ run_tests() {
     local tests=(
         syntax_every_file
         link_fresh_and_repeat
+        gitconfig_guard_creates_once
         link_backups_and_collisions
         link_broken_wrong_and_relocated
         link_failed_replacement

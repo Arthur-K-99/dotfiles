@@ -1,5 +1,6 @@
-# zsh-abbr (https://zsh-abbr.olets.dev) user abbreviations, linked to
-# ~/.config/zsh-abbr/user-abbreviations. zsh-abbr rewrites this file whenever
+# zsh-abbr (https://zsh-abbr.olets.dev) user abbreviations. The config/zsh-abbr
+# directory is linked to ~/.config/zsh-abbr, so this file is reached through
+# it. zsh-abbr rewrites this file (with mv, hence the directory link) whenever
 # `abbr add` or `abbr erase` runs: alphabetised, one `abbr name=expansion`
 # line each with the expansion quoted the way zsh's (q) flag does (git\ add),
 # and without comments. The lines below already use that form so the first
