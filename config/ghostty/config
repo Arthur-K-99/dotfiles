@@ -1,0 +1,65 @@
+# Ghostty is the outermost layer of the terminal. Every tool that draws with
+# ANSI colors (completion menus, syntax highlighting, eza's default output)
+# inherits this palette, so one theme here keeps them in step with the rest of
+# the Catppuccin setup. Reload with cmd+shift+, and list every option with
+# `ghostty +show-config --default --docs`.
+#
+# Machine-local overrides, shaders and extra themes go in a `local` file
+# beside this one (~/.config/ghostty/local), loaded last by the config-file
+# line at the bottom and ignored when absent. On macOS Ghostty also loads
+# ~/Library/Application Support/com.mitchellh.ghostty/config after this file.
+
+# Appearance. The theme follows the OS light/dark setting. Both flavors ship
+# inside Ghostty, so nothing is downloaded and the names must match the files
+# in `ghostty +list-themes`.
+theme = light:Catppuccin Latte,dark:Catppuccin Macchiato
+background-opacity = 0.95
+background-blur = true
+unfocused-split-opacity = 0.85
+window-padding-x = 8
+window-padding-y = 6
+window-padding-balance = true
+macos-titlebar-style = tabs
+
+# Font. "CaskaydiaCove Nerd Font Mono" is the family name of the Nerd Fonts v3
+# build that the Homebrew cask installs; pickers may show it as
+# "CaskaydiaCove NFM".
+font-family = CaskaydiaCove Nerd Font Mono
+font-size = 14
+font-thicken = true
+
+# Cursor and mouse
+cursor-style = bar
+cursor-style-blink = false
+mouse-hide-while-typing = true
+copy-on-select = clipboard
+
+# Terminal identity and shell integration. Ghostty injects its zsh integration
+# itself (shell-integration = detect), which gives prompt jumping, the cursor
+# shape and the working directory in new tabs. TERM stays at the default
+# xterm-ghostty so local programs get Ghostty's full terminfo. The ssh features
+# replace the old blanket `term = xterm-256color`: ssh-terminfo installs
+# Ghostty's entry on remote hosts that allow it, and ssh-env sends
+# TERM=xterm-256color to the ones that do not. sudo keeps TERMINFO for root.
+# Inside tmux none of this applies, because .tmux.conf forces tmux-256color.
+shell-integration-features = cursor,sudo,title,ssh-env,ssh-terminfo,path
+
+# Keyboard. The left Option key acts as Alt so fzf's Alt-C and zsh's Alt-w
+# work; the right Option key keeps typing macOS special characters.
+macos-option-as-alt = left
+# Shift+Enter inserts a newline in programs that take it as an input
+# terminator otherwise (Claude Code, several REPLs).
+keybind = shift+enter=text:\n
+# Quick terminal: a drop-down window reachable from any app. macOS asks for
+# the Accessibility permission the first time the hotkey is used.
+keybind = global:cmd+grave_accent=toggle_quick_terminal
+quick-terminal-position = top
+
+# Behaviour
+window-save-state = always
+auto-update = check
+
+# Machine-local overrides. The leading ? makes a missing file a no-op; the
+# path is relative to this file, so it resolves beside the symlink target's
+# link location in ~/.config/ghostty/.
+config-file = ?local

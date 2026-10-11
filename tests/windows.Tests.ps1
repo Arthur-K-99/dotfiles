@@ -299,6 +299,188 @@ try {
         Assert-True ($fontState.Installed -and $fontState.Attempts -eq 2) 'Retry should finish and subsequent runs should skip the installed font'
     }
 
+    Invoke-Test 'PowerShell modules are checked and installed through PowerShell 7 without profiles' {
+        $moduleState = @{ Installed = @{}; InstallExitCode = 0; InstallRegisters = $true; CheckExitCode = $null; Commands = [Collections.Generic.List[string]]::new() }
+        function Get-DotfilesCommandPath { param($Name) if ($Name -eq 'pwsh.exe') { 'mock-pwsh' } }
+        function Invoke-DotfilesNativeCommand {
+            param($Command, $Arguments, [switch]$Quiet)
+            Assert-True ($Command -eq 'mock-pwsh' -and ($Arguments -contains '-NoProfile') -and ($Arguments -contains '-NonInteractive')) 'Modules must be managed by pwsh without profiles'
+            $script = [string]$Arguments[-1]
+            $moduleState.Commands.Add($script)
+            if ($script -match "^Install-Module -Name '([^']+)' -Scope CurrentUser") {
+                if ($moduleState.InstallExitCode -eq 0 -and $moduleState.InstallRegisters) { $moduleState.Installed[$Matches[1]] = $true }
+                return $moduleState.InstallExitCode
+            }
+            Assert-True ($script -match "Get-Module -ListAvailable -Name '([^']+)'") "Unexpected pwsh command: $script"
+            if ($null -ne $moduleState.CheckExitCode) { return $moduleState.CheckExitCode }
+            if ($moduleState.Installed.ContainsKey($Matches[1])) { return 0 }
+            return 3
+        }
+        $expected = @(Get-DotfilesPowerShellModules)
+        Assert-True (($expected -contains 'PSFzf') -and ($expected -contains 'CompletionPredictor') -and ($expected -contains 'Terminal-Icons') -and ($expected -contains 'posh-git')) 'Phase 2 modules must be declared'
+        $moduleState.Installed['posh-git'] = $true
+        Invoke-DotfilesModuleInstall
+        $installs = @($moduleState.Commands | Where-Object { $_ -match '^Install-Module' })
+        Assert-True ($installs.Count -eq ($expected.Count - 1)) 'Only missing modules are installed'
+        Assert-True (@($installs | Where-Object { $_ -match 'posh-git' }).Count -eq 0) 'Installed modules are skipped'
+        $moduleState.Commands.Clear()
+        Invoke-DotfilesModuleInstall
+        Assert-True (@($moduleState.Commands | Where-Object { $_ -match '^Install-Module' }).Count -eq 0) 'Reruns must not reinstall'
+        $moduleState.Installed.Clear()
+        $moduleState.InstallExitCode = 1
+        Assert-Throws { Invoke-DotfilesModuleInstall } 'Install-Module failed for Terminal-Icons \(exit code 1\).*Rerun install.ps1'
+        Assert-True ($moduleState.Installed.Count -eq 0) 'A failed installation registers nothing'
+        $moduleState.InstallExitCode = 0
+        $moduleState.InstallRegisters = $false
+        Assert-Throws { Invoke-DotfilesModuleInstall } 'Terminal-Icons was not found after installation'
+        $moduleState.InstallRegisters = $true
+        Invoke-DotfilesModuleInstall
+        Assert-True ($moduleState.Installed.Count -eq $expected.Count) 'The retry installs every module'
+        $moduleState.CheckExitCode = 5
+        Assert-Throws { Invoke-DotfilesModuleInstall } 'could not check the Terminal-Icons module \(exit code 5\)'
+    }
+
+    Invoke-Test 'Module installation requires a discoverable PowerShell 7' {
+        function Get-DotfilesCommandPath { param($Name) $null }
+        function Invoke-DotfilesNativeCommand { throw 'Unexpected native command' }
+        Assert-Throws { Invoke-DotfilesModuleInstall } 'pwsh is unavailable.*Reopen PowerShell'
+    }
+
+    Invoke-Test 'A redirected LOCALAPPDATA is honoured only for the real profile directory' {
+        $saved = @{ USERPROFILE = $env:USERPROFILE; LOCALAPPDATA = $env:LOCALAPPDATA }
+        $realHome = Join-Path $testRoot 'real-home'
+        $otherHome = Join-Path $testRoot 'other-home'
+        try {
+            [Environment]::SetEnvironmentVariable('USERPROFILE', $realHome)
+            [Environment]::SetEnvironmentVariable('LOCALAPPDATA', (Join-Path $testRoot 'redirected-local'))
+            Assert-True ((Get-DotfilesLocalAppData $realHome) -eq $env:LOCALAPPDATA) 'The real home must use the redirected LOCALAPPDATA'
+            Assert-True ((Get-DotfilesLocalAppData ($realHome + [IO.Path]::DirectorySeparatorChar)) -eq $env:LOCALAPPDATA) 'A trailing separator must not matter'
+            Assert-True ((Get-DotfilesLocalAppData $otherHome) -eq (Join-Path $otherHome 'AppData/Local')) 'Other home directories derive the default'
+            [Environment]::SetEnvironmentVariable('LOCALAPPDATA', $null)
+            Assert-True ((Get-DotfilesLocalAppData $realHome) -eq (Join-Path $realHome 'AppData/Local')) 'Without LOCALAPPDATA the default applies'
+        } finally {
+            [Environment]::SetEnvironmentVariable('USERPROFILE', $saved.USERPROFILE)
+            [Environment]::SetEnvironmentVariable('LOCALAPPDATA', $saved.LOCALAPPDATA)
+        }
+    }
+
+    Invoke-Test 'Managed files include the Windows Terminal fragment and the eza theme' {
+        function Get-DotfilesProfilePaths {
+            [ordered]@{ PowerShell = Join-Path $testRoot 'modern/profile.ps1'; WindowsPowerShell = Join-Path $testRoot 'legacy/profile.ps1' }
+        }
+        $files = @(Get-DotfilesManagedFiles $repository $testRoot)
+        foreach ($file in $files) { Assert-True (Test-Path -LiteralPath $file.Source -PathType Leaf) "Managed source must exist: $($file.Source)" }
+        $destinations = @($files | ForEach-Object { $_.Destination })
+        Assert-True ($destinations -contains (Join-Path $testRoot 'AppData/Local/Microsoft/Windows Terminal/Fragments/dotfiles/fragment.json')) 'The fragment must land in the Fragments folder under the home directory'
+        Assert-True ($destinations -contains (Join-Path $testRoot '.config/eza/theme.yml')) 'The eza theme must be managed'
+        Assert-True (@($destinations | Select-Object -Unique).Count -eq $destinations.Count) 'Destinations must be unique'
+    }
+
+    Invoke-Test 'The Windows Terminal fragment carries the Macchiato scheme to the stock profiles' {
+        $fragment = Get-Content -Raw -LiteralPath (Join-Path $repository 'config/windows-terminal/fragment.json') | ConvertFrom-Json
+        $schemes = @($fragment.schemes | Where-Object { $_.name -eq 'Catppuccin Macchiato' })
+        Assert-True ($schemes.Count -eq 1) 'Exactly one Catppuccin Macchiato scheme'
+        foreach ($key in @('background', 'foreground', 'cursorColor', 'selectionBackground', 'black', 'red', 'green', 'yellow', 'blue', 'purple', 'cyan', 'white',
+                'brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightPurple', 'brightCyan', 'brightWhite')) {
+            Assert-True ([string]$schemes[0].$key -match '^#[0-9A-F]{6}$') "$key must be an uppercase hex color"
+        }
+        Assert-True ($schemes[0].background -eq '#24273A' -and $schemes[0].foreground -eq '#CAD3F5') 'Scheme must be Macchiato base and text'
+        $profiles = @($fragment.profiles)
+        $updates = @($profiles | ForEach-Object { $_.updates })
+        # PowerShell 7, Windows PowerShell and Command Prompt: the stock profiles a fragment may modify.
+        foreach ($guid in @('{574e775e-4f2a-5b96-ac1e-a2962a402336}', '{61c54bbd-c2c6-5271-96e7-009a87ff44bf}', '{0caa0dad-35be-5f56-a8ff-afceeeaa6101}')) {
+            Assert-True ($updates -contains $guid) "Fragment must update profile $guid"
+        }
+        foreach ($profile in $profiles) {
+            Assert-True ($profile.colorScheme -eq 'Catppuccin Macchiato') 'Every profile update must select the scheme'
+            Assert-True ([string]$profile.font.face -match 'CaskaydiaCove Nerd Font Mono') 'Every profile update must select the Nerd Font'
+        }
+    }
+
+    Invoke-Test 'The shared profile is ASCII, portable, and loads with no tools and with PSReadLine' {
+        $profilePath = Join-Path $repository 'config/powershell/profile.ps1'
+        $source = [IO.File]::ReadAllText($profilePath)
+        Assert-True (-not ($source -match '[^\x00-\x7F]')) 'The profile must stay ASCII for Windows PowerShell'
+        Assert-True (-not ($source -match '\$env:USERPROFILE|\$env:HOME\b')) 'The profile must locate files through $HOME only'
+        $fixture = New-Fixture
+        $portable = Join-Path $fixture.Directory 'portable-profile.ps1'
+        [IO.File]::WriteAllText($portable, ($source -replace '\$HOME\b', '$$env:DOTFILES_TEST_HOME'))
+        # Stub tools make the alias branches run: on Windows, ls and cat are built-in read-only aliases.
+        $stubBin = Join-Path $fixture.Directory 'bin'
+        New-Item -ItemType Directory -Path $stubBin | Out-Null
+        foreach ($tool in @('eza', 'bat', 'fzf')) {
+            if ($env:OS -eq 'Windows_NT') { [IO.File]::WriteAllText((Join-Path $stubBin "$tool.cmd"), "@echo off`r`nexit 0`r`n") }
+            else {
+                $stub = Join-Path $stubBin $tool
+                [IO.File]::WriteAllText($stub, "#!/bin/sh`nexit 0`n")
+                & chmod +x $stub
+            }
+        }
+        $probe = @'
+$ErrorActionPreference = 'Stop'
+$WarningPreference = 'SilentlyContinue'
+$env:PATH = $env:DOTFILES_TEST_BIN
+if ($env:DOTFILES_TEST_READLINE -eq 'yes') {
+    try { Import-Module PSReadLine } catch { Write-Output 'SKIP-READLINE'; exit 0 }
+}
+. $env:DOTFILES_TEST_PROFILE
+if ((Get-Alias ls).Definition -ne 'eza') { throw "ls resolves to $((Get-Alias ls).Definition), not eza" }
+if ((Get-Alias cat).Definition -ne 'bat') { throw "cat resolves to $((Get-Alias cat).Definition), not bat" }
+foreach ($name in @('la', 'll', 'tree')) {
+    if (-not (Get-Command $name -CommandType Function -ErrorAction SilentlyContinue)) { throw "$name function is missing" }
+}
+if ($env:EZA_CONFIG_DIR -ne (Join-Path $env:DOTFILES_TEST_HOME '.config\eza')) { throw "EZA_CONFIG_DIR is $env:EZA_CONFIG_DIR" }
+if ($env:DOTFILES_TEST_EXPECTED_FZF) {
+    if ($env:FZF_DEFAULT_OPTS -ne $env:DOTFILES_TEST_EXPECTED_FZF) { throw "The local profile did not override FZF_DEFAULT_OPTS: $env:FZF_DEFAULT_OPTS" }
+} elseif ($env:FZF_DEFAULT_OPTS -notmatch 'bg\+:#363a4f') {
+    throw "FZF_DEFAULT_OPTS lacks the Macchiato palette: $env:FZF_DEFAULT_OPTS"
+}
+if ($env:DOTFILES_TEST_READLINE -eq 'yes') {
+    if ((Get-PSReadLineOption).BellStyle -ne 'None') { throw 'PSReadLine options were not applied' }
+    # PSReadLine 2.0 (Windows PowerShell) has no -Key parameter; filter the full list instead.
+    if (-not (Get-PSReadLineKeyHandler | Where-Object { $_.Key -eq 'Tab' -and $_.Function -eq 'MenuComplete' })) { throw 'Tab is not bound to MenuComplete' }
+}
+exit 0
+'@
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe))
+        $shell = (Get-Process -Id $PID).Path
+        # Windows PowerShell turns redirected native stderr into terminating errors under
+        # Stop, which would hide the child's diagnostics; relax it around the call only.
+        function Invoke-ProfileProbe {
+            $savedPreference = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                $lines = @(& $shell -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded 2>&1 | ForEach-Object { [string]$_ })
+                $code = $LASTEXITCODE
+            } finally { $ErrorActionPreference = $savedPreference }
+            return [pscustomobject]@{ Lines = $lines; ExitCode = $code }
+        }
+        $env:DOTFILES_TEST_HOME = $fixture.Directory
+        $env:DOTFILES_TEST_PROFILE = $portable
+        $env:DOTFILES_TEST_BIN = $stubBin
+        $env:DOTFILES_TEST_EXPECTED_FZF = ''
+        try {
+            foreach ($readLine in @('no', 'yes')) {
+                $env:DOTFILES_TEST_READLINE = $readLine
+                $probeResult = Invoke-ProfileProbe
+                $output = $probeResult.Lines
+                Assert-True ($probeResult.ExitCode -eq 0) "Profile failed (PSReadLine: $readLine): $($output -join "`n")"
+                if ($output -contains 'SKIP-READLINE') { Write-Host 'SKIP: PSReadLine cannot be imported in this non-interactive host; the bare profile load passed.' }
+                elseif ($readLine -eq 'no') { Assert-True (-not ($output -join "`n" -match '\S')) "Profile wrote unexpected output: $($output -join "`n")" }
+            }
+            # The local profile runs last so it can override anything above it.
+            [IO.File]::WriteAllText((Join-Path $fixture.Directory '.powershell.local.ps1'), '$env:FZF_DEFAULT_OPTS = "local override"')
+            $env:DOTFILES_TEST_READLINE = 'no'
+            $env:DOTFILES_TEST_EXPECTED_FZF = 'local override'
+            $probeResult = Invoke-ProfileProbe
+            Assert-True ($probeResult.ExitCode -eq 0) "Local override failed: $($probeResult.Lines -join "`n")"
+        } finally {
+            foreach ($name in @('DOTFILES_TEST_HOME', 'DOTFILES_TEST_PROFILE', 'DOTFILES_TEST_BIN', 'DOTFILES_TEST_READLINE', 'DOTFILES_TEST_EXPECTED_FZF')) {
+                [Environment]::SetEnvironmentVariable($name, $null)
+            }
+        }
+    }
+
     Invoke-Test 'Doctor validates both editions, copied contents and fonts' {
         $fixture = New-Fixture
         function Get-DotfilesProfilePaths {
@@ -306,7 +488,9 @@ try {
         }
         function Get-DotfilesCommandPath { param($Name) 'mock-command' }
         function Test-DotfilesNerdFont { $fontPresent }
+        function Test-DotfilesPowerShellModule { param($Name) $modulePresent }
         $fontPresent = $true
+        $modulePresent = $true
         $files = @(Get-DotfilesManagedFiles $repository $fixture.Directory)
         foreach ($file in $files) {
             New-Item -ItemType Directory -Path (Split-Path -Parent $file.Destination) -Force | Out-Null
@@ -320,16 +504,20 @@ try {
         }
         $fontPresent = $false
         Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } 'check\(s\) need attention'
+        $fontPresent = $true
+        $modulePresent = $false
+        Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } 'check\(s\) need attention'
     }
 
     Invoke-Test 'Setup verifies before its completion message and propagates verification failures' {
         $events = [Collections.Generic.List[string]]::new()
         function Invoke-DotfilesPackageInstall { param($DotfilesDir) $events.Add('packages') }
+        function Invoke-DotfilesModuleInstall { $events.Add('modules') }
         function Invoke-DotfilesLink { param($DotfilesDir, $HomeDirectory) $events.Add('links') }
         function Invoke-DotfilesDoctor { param($DotfilesDir, $HomeDirectory) $events.Add('verified') }
         function Write-Host { param($Object) if ([string]$Object -match '^Done\.') { $events.Add('done') } }
         Invoke-DotfilesInstall $repository $testRoot
-        Assert-True (($events -join ',') -eq 'packages,links,verified,done') 'Completion must follow successful verification'
+        Assert-True (($events -join ',') -eq 'packages,modules,links,verified,done') 'Completion must follow successful verification'
         $events.Clear()
         function Invoke-DotfilesDoctor { param($DotfilesDir, $HomeDirectory) throw 'simulated verification failure' }
         Assert-Throws { Invoke-DotfilesInstall $repository $testRoot } 'Verifying setup failed: simulated verification failure.*Completed setup remains in place.*rerun:.*install.ps1'
@@ -337,7 +525,7 @@ try {
         $events.Clear()
         function Invoke-DotfilesDoctor { param($DotfilesDir, $HomeDirectory) $events.Add('verified') }
         Invoke-DotfilesInstall $repository $testRoot
-        Assert-True (($events -join ',') -eq 'packages,links,verified,done') 'Retry should complete after verification succeeds'
+        Assert-True (($events -join ',') -eq 'packages,modules,links,verified,done') 'Retry should complete after verification succeeds'
     }
 
     Invoke-Test 'Native exit statuses are returned even with native error promotion enabled' {

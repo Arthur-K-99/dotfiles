@@ -40,18 +40,20 @@ Windows and WSL share one repository but are separate environments:
 | Native Windows | `install.ps1` | PowerShell |
 | WSL Debian/Ubuntu | `install.sh` inside WSL | zsh |
 
-Native Windows installs PowerShell, Windows Terminal, and command-line tools through winget. It manages PowerShell and oh-my-posh configuration. WSL reuses the Linux package list and Unix dotfiles. Installing or enabling WSL itself remains an explicit host action because it can require administrator approval and a restart: run `wsl --install`, restart if requested, then run the Unix bootstrap inside WSL.
+Native Windows installs PowerShell, Windows Terminal, and command-line tools through winget, and PowerShell modules from the PowerShell Gallery. It manages the PowerShell profile, oh-my-posh, and a Windows Terminal settings fragment. WSL reuses the Linux package list and Unix dotfiles. Installing or enabling WSL itself remains an explicit host action because it can require administrator approval and a restart: run `wsl --install`, restart if requested, then run the Unix bootstrap inside WSL.
 
 ## What gets installed
 
 | Tool | macOS / Linux / WSL | Native Windows |
 |---|---:|---:|
 | Git and GitHub CLI | Yes | Yes |
+| Ghostty with Catppuccin, following the OS appearance | macOS; manual on Linux | No |
 | zsh + Zinit | Yes | No |
-| PowerShell + Windows Terminal | No | Yes |
+| PowerShell + Windows Terminal with a Catppuccin fragment | No | Yes |
+| PowerShell modules: Terminal-Icons, PSFzf, posh-git, CompletionPredictor | No | Yes |
 | oh-my-posh | Yes | Yes |
 | tmux + TPM | Yes | No |
-| eza | Yes | No |
+| eza | Yes | Yes |
 | bat, fzf, zoxide, btop | Yes | Yes |
 | Neovim | Yes | Yes |
 | nvm + Node.js LTS + npm | Yes | No |
@@ -59,18 +61,21 @@ Native Windows installs PowerShell, Windows Terminal, and command-line tools thr
 
 ## After install
 
+- **Ghostty:** The configuration is linked to `~/.config/ghostty/config`; reload it with `Cmd+Shift+,`. The theme follows the OS appearance (Latte in light mode, Macchiato in dark), the left Option key acts as Alt for fzf's `Alt+C`, and `` Cmd+` `` opens a drop-down quick terminal from any app after macOS grants the Accessibility permission it asks for. Machine-local settings, shaders and extra themes go in `~/.config/ghostty/local`, which the managed file loads last when it exists; on macOS, `~/Library/Application Support/com.mitchellh.ghostty/config` is loaded after both. On Linux, install Ghostty from [ghostty.org](https://ghostty.org/download); the configuration is already in place.
+- **Windows Terminal:** Restart Windows Terminal after installing, or save `settings.json` once: fragments are read only when settings load. A fragment under `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\dotfiles\` adds the Catppuccin Macchiato scheme and applies it, the Nerd Font, padding and acrylic to the PowerShell 7, Windows PowerShell and Command Prompt profiles without touching `settings.json`. Fragments cannot change global settings or WSL profiles: choose PowerShell as the default profile and the scheme for WSL profiles once in Settings, or set `"defaultProfile": "{574e775e-4f2a-5b96-ac1e-a2962a402336}"` in `settings.json`.
+- **PowerShell keys:** `Tab` opens a completion menu, `Up`/`Down` search history by prefix, `Ctrl+R` searches history and `Ctrl+T` inserts files through fzf, and PowerShell 7 shows predictions from history and tab completion in a list. Windows PowerShell 5.1 gets the colors and the Tab, Up/Down, Ctrl+D and Ctrl+W keys; predictions, the fzf chords, posh-git and Terminal-Icons are PowerShell 7 only, because its PSReadLine is older and the modules are installed for PowerShell 7.
 - **tmux plugins:** Open tmux and press `prefix + I` (Ctrl+A, I) if plugins aren't active.
 - **tmux colors:** tmux identifies itself as `tmux-256color` for italics and forces true color through every host terminal, including Windows Terminal and WSL. Linux gets the terminfo from the `ncurses-term` package. If a remote host you `ssh` into from tmux lacks that terminfo, prefix the command with `TERM=screen-256color`.
 - **Theme:** Every tool uses Catppuccin Macchiato: tmux, the prompt, eza, bat and fzf, including tab-completion menus. bat 0.25+ ships the theme; the bootstrap installs it for older distribution packages.
 - **fzf keys:** `Ctrl+T` inserts files, `Ctrl+R` searches history, `Alt+C` changes directory, and `Tab` completion opens the same fzf window.
 - **Shell:** The Unix configuration is for zsh. If your default shell is Bash or another shell, run `exec zsh` to use it in the current terminal. To change your default shell, run `chsh -s "$(command -v zsh)"` yourself, then sign out and back in; the installer does not change it automatically.
 - **Node.js:** The Unix installer installs the current LTS release as the `nvm` default. Use `nvm install <version>` and `nvm use <version>` to manage other releases. The shell puts the default version on `PATH` immediately and loads `nvm` itself on first use, which keeps startup fast; open a new shell after changing the default with `nvm alias default`.
-- **Font:** Set your terminal font to `CaskaydiaCove NF Mono`. On Linux, download it manually from [nerdfonts.com](https://www.nerdfonts.com/font-downloads) and install to `~/.local/share/fonts/`.
+- **Font:** Ghostty and the Windows Terminal fragment select `CaskaydiaCove Nerd Font Mono` themselves (some pickers list it as `CaskaydiaCove NFM`); choose it by hand in any other terminal. On Linux, download it manually from [nerdfonts.com](https://www.nerdfonts.com/font-downloads) and install to `~/.local/share/fonts/`.
 - **Machine-specific config:** Add anything that shouldn't be in the repo to `~/.zshrc.local` (sourced automatically).
 - **SSH agent:** The shared configuration preserves `SSH_AUTH_SOCK`. To use Bitwarden on a particular machine, add `export SSH_AUTH_SOCK="$HOME/.bitwarden-ssh-agent.sock"` to that machine's `~/.zshrc.local`.
 - **Custom Node-manager location:** An exported `NVM_DIR` is respected by the installer, doctor, and shell. Make it available before installing and before opening zsh if you use a location other than `~/.nvm`.
 - **Windows machine-specific config:** Put private or machine-only PowerShell settings in `~/.powershell.local.ps1`.
-- **Verify:** Run `scripts/doctor.sh` on Unix/WSL or `scripts\doctor.ps1` in PowerShell. Both installers also run verification before reporting success. Windows checks both PowerShell editions' actual profile locations, including redirected Documents folders, and detects stale copied configurations.
+- **Verify:** Run `scripts/doctor.sh` on Unix/WSL or `scripts\doctor.ps1` in PowerShell. Both installers also run verification before reporting success. Windows checks both PowerShell editions' actual profile locations, including redirected Documents folders, detects stale copied configurations, and confirms each PowerShell module is installed for PowerShell 7.
 - **Repository checks:** Run `bash scripts/test.sh` before committing installer or configuration changes. The suite checks syntax and uses temporary destinations and mocked installation commands to exercise reruns and failures without installing packages or changing your configuration. Missing optional validation tools are reported as skipped checks. Run `pwsh -NoProfile -NonInteractive -File tests/windows.Tests.ps1` for the Windows behavioral suite alone. CI runs checks on macOS, Linux, and Windows, including Windows PowerShell 5.1 and PowerShell 7.
 - **Secrets:** Do not store credentials, private keys, access tokens, or work-only settings in this repository. Restore those through a password manager or another private channel.
 
@@ -79,7 +84,7 @@ Native Windows installs PowerShell, Windows Terminal, and command-line tools thr
 ```
 dotfiles/
 ├── home/           # Symlinked to $HOME/
-├── config/         # Symlinked into $HOME/.config/ (bat, eza, oh-my-posh, powershell)
+├── config/         # Tool configuration: bat, eza, ghostty, oh-my-posh, powershell, windows-terminal
 ├── packages/       # Declarative package lists (brew, apt, winget)
 ├── scripts/        # Install, symlink, bootstrap and doctor scripts
 ├── tests/          # Isolated installer regression tests
@@ -90,4 +95,4 @@ dotfiles/
 
 ## Scope
 
-The current baseline covers terminal tools, shell configuration, prompt configuration, and tmux, all in one Catppuccin flavor. GUI applications and operating-system preferences should be added as opt-in profiles rather than silently changing every machine. Good future profiles include `development`, `personal`, and platform-specific OS settings. Planned work, including terminal emulator configuration, new tools and Neovim, is tracked in [docs/roadmap.md](docs/roadmap.md).
+The current baseline covers the terminal emulators, terminal tools, shell configuration, prompt configuration, and tmux, all in one Catppuccin flavor. Other GUI applications and operating-system preferences should be added as opt-in profiles rather than silently changing every machine. Good future profiles include `development`, `personal`, and platform-specific OS settings. Planned work, including new tools and Neovim, is tracked in [docs/roadmap.md](docs/roadmap.md).

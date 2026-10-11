@@ -7,8 +7,8 @@ Work lands in phases. Each phase is one pull request that leaves every platform 
 | Phase | Theme | Status |
 |---|---|---|
 | 1 | Foundations: one flavor, tmux capabilities, fast zsh, fzf, bat | Done ([#1](https://github.com/Arthur-K-99/dotfiles/pull/1)) |
-| 2 | Terminal emulators and PowerShell parity | Next |
-| 3 | New tools: completion engine, history, runtimes, git, TUIs | Planned |
+| 2 | Terminal emulators and PowerShell parity | Done ([#3](https://github.com/Arthur-K-99/dotfiles/pull/3)) |
+| 3 | New tools: completion engine, history, runtimes, git, TUIs | Next |
 | 4 | tmux plugin suite, theme switcher, fastfetch | Planned |
 | 5 | Neovim | Planned |
 
@@ -30,18 +30,18 @@ Every new tool touches the same places. Skipping one means `doctor` lies on the 
 - bat configuration shared across platforms; bootstrap installs the theme for old distribution packages.
 - Prompt: git status, execution time, exit status, transient prompt.
 
-## Phase 2: Emulators and PowerShell parity
+## Phase 2: Emulators and PowerShell parity (done)
 
-The emulator is the outermost layer. Until it is managed, the palette that ANSI-based tools inherit is whatever the emulator defaults to.
+The emulator is the outermost layer; with it managed, every ANSI-based tool inherits Catppuccin on every platform.
 
-- **Ghostty** (macOS and Linux): `config/ghostty/config` with `theme = light:catppuccin-latte,dark:catppuccin-macchiato` so it follows the OS appearance, CaskaydiaCove NF Mono, cursor and padding settings, `shell-integration-features`, split and tab keybinds, `macos-titlebar-style = tabs`, background opacity and blur, a global quick-terminal hotkey, and a cursor shader (the community smear or blaze shaders) as an opt-in. Link to `~/.config/ghostty/config`; on macOS Ghostty reads that path too.
-- **Windows Terminal**: a managed `settings.json` fragment or full file with the Catppuccin Macchiato scheme, the Nerd Font, padding, acrylic, and PowerShell 7 as the default profile. Windows Terminal supports JSON fragments under `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments`, which avoids overwriting user settings; evaluate that before managing the whole file.
-- **PSReadLine**: predictive IntelliSense from history with the list view, Catppuccin colors (the `catppuccin/powershell` module), `Ctrl+R` through PSFzf, and sensible edit-mode bindings. The profile currently has no PSReadLine configuration at all.
-- **PowerShell modules**: `Terminal-Icons`, `PSFzf`, `posh-git`, `CompletionPredictor`, installed by `install.ps1` from PSGallery and verified by `doctor.ps1`.
-- **eza on Windows** (`eza-community.eza` on winget) with the same aliases as zsh.
-- Decision to make: Ghostty on macOS/Linux plus Windows Terminal on Windows, or WezTerm everywhere with one Lua config. Ghostty is the current default on the Mac; WezTerm wins only if one config file for three OSes matters more than Ghostty's speed and native feel.
+- **Ghostty** (macOS and Linux): `config/ghostty/config`, linked to `~/.config/ghostty/config`, installed by the `ghostty` cask on macOS and by hand on Linux. The theme follows the OS appearance (`theme = light:Catppuccin Latte,dark:Catppuccin Macchiato`; Ghostty wants the names as `+list-themes` prints them, not dashed), CaskaydiaCove Nerd Font Mono, bar cursor, padding, opacity and blur, titlebar tabs, left Option as Alt, Shift+Enter as a newline, and the global quick-terminal hotkey. Ghostty's default keybinds already cover splits and tabs. Cursor shaders and other machine-local settings go in an optional `~/.config/ghostty/local` loaded by `config-file = ?local`. `scripts/test.sh` runs `ghostty +validate-config` on the file wherever Ghostty is installed.
+- **Windows Terminal**: a JSON fragment, `config/windows-terminal/fragment.json`, managed into `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\dotfiles\`. Evaluation result: fragments add color schemes and modify the stock profiles (PowerShell 7, Windows PowerShell, Command Prompt) without rewriting `settings.json`, but cannot set global settings such as the default profile or touch WSL profiles, whose GUIDs are derived per distribution. Those two remain a one-time manual setting documented in the README; owning the whole `settings.json` was not worth losing the user's own edits.
+- **PSReadLine**: history predictions in the list view plus CompletionPredictor on PowerShell 7, Catppuccin Macchiato colors written directly as hex (no dependency on the `catppuccin/powershell` module, which is not on the Gallery), zsh-like keys (Tab menu, prefix history search, Ctrl+D, Ctrl+W) and `Ctrl+R`/`Ctrl+T` through PSFzf. Everything degrades by feature detection so the same profile loads in Windows PowerShell 5.1 and in non-interactive shells.
+- **PowerShell modules**: `Terminal-Icons`, `PSFzf`, `posh-git`, `CompletionPredictor`, installed for PowerShell 7 by a new `install.ps1` stage that runs `pwsh -NoProfile`, verified by `doctor.ps1`, with tests for the installed, failed and retried paths.
+- **eza on Windows** (`eza-community.eza`) with the zsh aliases and the shared `theme.yml` through `EZA_CONFIG_DIR`.
+- Decision: Ghostty on macOS/Linux and Windows Terminal on Windows. One WezTerm Lua file for three OSes did not outweigh Ghostty's speed and native feel, and the fragment keeps the Windows side small.
 
-## Phase 3: New tools
+## Phase 3: New tools (next)
 
 Autocomplete and shell quality of life. Everything here exists on all three platforms unless noted.
 
@@ -54,6 +54,7 @@ Autocomplete and shell quality of life. Everything here exists on all three plat
 - **yazi**: terminal file manager with image previews and Catppuccin flavors. Works on Windows.
 - **vivid**: generated Catppuccin `LS_COLORS`, replacing the hand-written ANSI default in `.zshrc`, with `EZA_COLORS` kept consistent.
 - **Modern CLI set**: ripgrep, fd (also the fzf backend through `FZF_DEFAULT_COMMAND`), dust, duf, procs, sd, xh, hyperfine, tokei, glow, tlrc, gum. Debian names fd `fdfind` and bat `batcat`; aliases and the fzf command need both names.
+- **Ghostty on Linux**: an installer in `scripts/bootstrap_tools.sh` once a dependable Debian/Ubuntu package exists (the community `.deb` builds or the snap), so the doctor can check the command on Linux as it does on macOS.
 - **zsh extras**: zsh-abbr for inline-expanding abbreviations, zsh-you-should-use, pay-respects for command correction, direnv.
 - Each tool follows the checklist above; the doctor and tests grow with it.
 
