@@ -11,6 +11,16 @@ check_bash_syntax() {
     done < <(find "$1" -type d -name .git -prune -o -type f -name '*.sh' -print0)
 }
 
+check_config_syntax() {
+    local file
+    while IFS= read -r -d '' file; do
+        case "$file" in
+            *.toml) python3 -I -c 'import sys, tomllib; tomllib.load(open(sys.argv[1], "rb"))' "$file" || return ;;
+            *.json) python3 -I -c 'import sys, json; json.load(open(sys.argv[1]))' "$file" || return ;;
+        esac
+    done < <(find "$1" -type f \( -name '*.toml' -o -name '*.json' \) -print0)
+}
+
 test_main() {
     echo "Checking Bash syntax..."
     check_bash_syntax "$DOTFILES_DIR"
@@ -30,6 +40,13 @@ test_main() {
         pwsh -NoProfile -NonInteractive -File "$DOTFILES_DIR/tests/windows.Tests.ps1"
     else
         echo "SKIP: PowerShell checks (pwsh is not installed; Windows CI runs both editions)."
+    fi
+
+    if command -v python3 >/dev/null 2>&1 && python3 -c 'import tomllib' >/dev/null 2>&1; then
+        echo "Checking TOML and JSON configuration files..."
+        check_config_syntax "$DOTFILES_DIR/config"
+    else
+        echo "SKIP: TOML and JSON configuration check (python3 with tomllib is not installed)."
     fi
 
     if command -v ghostty >/dev/null 2>&1; then

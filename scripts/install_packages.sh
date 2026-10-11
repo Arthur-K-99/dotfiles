@@ -32,9 +32,11 @@ install_macos() {
         /bin/bash -c "$installer" || return
         dotfiles_init_environment || return
     fi
+    # The loops read the package lists from stdin; brew must not inherit that
+    # stream, or an install step that reads input swallows the remaining names.
     echo "Installing Homebrew formulae..."
     while IFS= read -r package; do
-        brew install "$package" || return
+        brew install "$package" </dev/null || return
     done < <(parse_list "$DOTFILES_DIR/packages/brew.txt")
     echo "Installing Homebrew casks..."
     while IFS= read -r package; do
@@ -42,9 +44,9 @@ install_macos() {
             echo "  already installed: $package"
         elif brew list --cask "$package" &>/dev/null; then
             echo "  repairing missing files: $package"
-            brew reinstall --cask "$package" || return
+            brew reinstall --cask "$package" </dev/null || return
         else
-            brew install --cask "$package" || return
+            brew install --cask "$package" </dev/null || return
         fi
     done < <(parse_list "$DOTFILES_DIR/packages/brew-casks.txt")
 }

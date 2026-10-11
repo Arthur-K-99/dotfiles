@@ -11,6 +11,26 @@ fi
 typeset -U path PATH
 path=("$HOME/.local/bin" $path)
 
+# Tools that print an init script cost 20-50 ms each per shell, and the output
+# changes only when the binary does. dotfiles_cached_init <name> <tool> <cmd...>
+# runs the command once, keeps the result in the cache and re-sources it until
+# the tool is upgraded. Nothing happens when the tool is absent.
+dotfiles_cached_init() {
+    local name="$1" tool="$2"
+    local cache="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/$name.zsh"
+    shift 2
+    (( $+commands[$tool] )) || return 1
+    if [[ ! -s "$cache" || "$cache" -ot "${commands[$tool]}" ]]; then
+        mkdir -p "${cache:h}" || return 1
+        if ! "$@" > "$cache.new"; then
+            rm -f "$cache.new"
+            return 1
+        fi
+        mv -f "$cache.new" "$cache" || return 1
+    fi
+    source "$cache"
+}
+
 # fzf. One Catppuccin Macchiato palette and layout for every fzf window,
 # including fzf-tab. Previews belong to specific keybindings rather than to an
 # alias of fzf itself, so pipelines such as `history | fzf` stay clean.
@@ -32,14 +52,28 @@ export FZF_ALT_C_OPTS="\
  --preview 'eza --tree --level=2 --color=always --icons=always {}'\
  --preview-window=right,60%,border-left"
 unset dotfiles_bat
+# fd feeds fzf: it honours .gitignore and skips .git, so Ctrl-T and Alt-C
+# list what matters. Debian installs it as fdfind; the alias restores the name.
+if (( $+commands[fd] )); then
+    dotfiles_fd=fd
+elif (( $+commands[fdfind] )); then
+    dotfiles_fd=fdfind
+    alias fd='fdfind'
+fi
+if [[ -n ${dotfiles_fd:-} ]]; then
+    export FZF_DEFAULT_COMMAND="$dotfiles_fd --type f --hidden --follow --exclude .git"
+    export FZF_CTRL_T_COMMAND="$dotfiles_fd --hidden --follow --exclude .git"
+    export FZF_ALT_C_COMMAND="$dotfiles_fd --type d --hidden --follow --exclude .git"
+fi
+unset dotfiles_fd
 
 # fzf keybindings (Ctrl-T files, Ctrl-R history, Alt-C directories) and
 # completion. This runs before the plugins so fzf-tab wraps fzf's own Tab
-# widget instead of being replaced by it. `fzf --zsh` needs fzf 0.48+; older
-# distribution packages install the scripts as files, and a git installation
-# provides ~/.fzf.zsh.
-if (( $+commands[fzf] )) && fzf --zsh &>/dev/null; then
-    source <(fzf --zsh)
+# widget instead of being replaced by it. `fzf --zsh` needs fzf 0.48+ and is
+# cached like the other init scripts; older distribution packages install the
+# scripts as files, and a git installation provides ~/.fzf.zsh.
+if dotfiles_cached_init fzf fzf fzf --zsh 2>/dev/null; then
+    :
 elif [[ -r /usr/share/doc/fzf/examples/key-bindings.zsh ]]; then
     source /usr/share/doc/fzf/examples/key-bindings.zsh
     [[ -r /usr/share/doc/fzf/examples/completion.zsh ]] && source /usr/share/doc/fzf/examples/completion.zsh
@@ -53,45 +87,28 @@ if [[ -r "$ZINIT_HOME/zinit.zsh" ]]; then
     source "$ZINIT_HOME/zinit.zsh"
 fi
 
-# Plugins
+# Plugins. zsh-abbr expands abbreviations from the tracked file on Space and
+# Enter; you-should-use reminds about aliases after the command has run.
+export ABBR_USER_ABBREVIATIONS_FILE="$XDG_CONFIG_HOME/zsh-abbr/user-abbreviations"
+export YSU_MESSAGE_POSITION="after"
 if (( $+functions[zinit] )); then
     zinit light zsh-users/zsh-syntax-highlighting
     zinit light zsh-users/zsh-completions
     zinit light zsh-users/zsh-autosuggestions
     zinit light Aloxaf/fzf-tab
+    zinit light olets/zsh-abbr
+    zinit light MichaelAquilina/zsh-you-should-use
 fi
 
-# nvm (Node.js and npm). Sourcing nvm.sh activates the default version on every
-# shell start, which costs about 300 ms. Instead, follow nvm's alias files to the
-# default version, put its bin directory on PATH, and load nvm on first use.
-# When the chain cannot be resolved (for example "default -> 24"), nvm loads
-# immediately so behaviour stays correct.
-export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
-dotfiles_nvm_default_bin() {
-    local alias_name="default" target
-    repeat 8; do
-        [[ -f "$NVM_DIR/alias/$alias_name" ]] || break
-        target="$(<"$NVM_DIR/alias/$alias_name")"
-        [[ -n "$target" ]] || return 1
-        alias_name="$target"
-    done
-    [[ -d "$NVM_DIR/versions/node/$alias_name/bin" ]] || return 1
-    REPLY="$NVM_DIR/versions/node/$alias_name/bin"
-}
-if [[ -s "$NVM_DIR/nvm.sh" ]]; then
-    if dotfiles_nvm_default_bin; then
-        path=("$REPLY" $path)
-        nvm() {
-            unfunction nvm
-            source "$NVM_DIR/nvm.sh"
-            [[ -s "$NVM_DIR/bash_completion" ]] && source "$NVM_DIR/bash_completion"
-            nvm "$@"
-        }
-    else
-        source "$NVM_DIR/nvm.sh"
-        [[ -s "$NVM_DIR/bash_completion" ]] && source "$NVM_DIR/bash_completion"
-    fi
-fi
+# mise manages runtimes (Node.js LTS from config/mise/config.toml, more on
+# request) and replaces nvm. The shims directory goes on PATH directly: each
+# shim resolves the version for the current project when it runs, which is
+# what `mise activate --shims` prints, without running mise at startup or the
+# 20 ms hook on every prompt that `mise activate` installs. Project [env]
+# sections are not applied this way; direnv covers that need.
+dotfiles_mise_shims="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/shims"
+[[ -d "$dotfiles_mise_shims" ]] && path=("$dotfiles_mise_shims" $path)
+unset dotfiles_mise_shims
 
 # oh-my-posh
 if (( $+commands[oh-my-posh] )); then
@@ -101,6 +118,9 @@ fi
 # Load completions
 autoload -Uz compinit && compinit
 (( $+functions[zinit] )) && zinit cdreplay -q
+# carapace: one completion engine for over a thousand commands. Its script
+# calls compdef, so it runs after compinit; fzf-tab still draws the menu.
+dotfiles_cached_init carapace carapace carapace _carapace zsh
 
 # Keybindings
 bindkey -e
@@ -111,6 +131,9 @@ bindkey '^[w' kill-region
 autoload -Uz edit-command-line
 zle -N edit-command-line
 bindkey '^x^e' edit-command-line
+# atuin: searchable, synced history on Ctrl-R. It is initialised after fzf,
+# so its Ctrl-R binding wins; fzf keeps Ctrl-T and Alt-C. Up arrow stays zsh's.
+dotfiles_cached_init atuin atuin atuin init zsh --disable-up-arrow
 
 # History
 HISTSIZE=100000
@@ -130,9 +153,16 @@ setopt hist_find_no_dups
 setopt auto_cd
 setopt interactive_comments
 
-# Colors. macOS sets no LS_COLORS, which leaves completion menus uncolored. This
-# default uses the terminal's own palette, so it follows the terminal theme.
-export LS_COLORS="${LS_COLORS:-di=1;34:ln=36:so=35:pi=33:ex=1;32:bd=1;33:cd=1;33:su=1;31:sg=1;31:tw=1;34:ow=1;34}"
+# Colors. vivid generates a Catppuccin LS_COLORS for completion menus, fd and
+# everything else that reads it. eza has its own theme.yml, which LS_COLORS
+# would override, so the wrapper blanks the variable for eza alone. Without
+# vivid, a small default uses the terminal's own palette.
+if (( $+commands[vivid] )); then
+    export LS_COLORS="$(vivid generate catppuccin-macchiato)"
+else
+    export LS_COLORS="${LS_COLORS:-di=1;34:ln=36:so=35:pi=33:ex=1;32:bd=1;33:cd=1;33:su=1;31:sg=1;31:tw=1;34:ow=1;34}"
+fi
+eza() { LS_COLORS= command eza "$@"; }
 
 # Completion styling
 zstyle ':completion:*' matcher-list 'm:{a-z}={A-Za-z}'
@@ -158,7 +188,18 @@ alias vim='nvim'
 alias c='clear'
 
 # Shell integrations
-command -v zoxide &>/dev/null && eval "$(zoxide init --cmd cd zsh)"
+dotfiles_cached_init zoxide zoxide zoxide init --cmd cd zsh
+dotfiles_cached_init direnv direnv direnv hook zsh
+# y opens yazi and changes to the directory it was quit in.
+y() {
+    local tmp cwd
+    tmp="$(mktemp -t "yazi-cwd.XXXXXX")" || return
+    command yazi "$@" --cwd-file="$tmp"
+    if cwd="$(<"$tmp")" && [[ -n "$cwd" && "$cwd" != "$PWD" && -d "$cwd" ]]; then
+        builtin cd -- "$cwd"
+    fi
+    command rm -f -- "$tmp"
+}
 
 # Machine-specific overrides (not tracked in repo)
 if [[ -f "$HOME/.zshrc.local" ]]; then

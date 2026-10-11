@@ -162,6 +162,29 @@ function Get-DotfilesManagedFiles {
         Source = Join-Path $DotfilesDir 'config/eza/theme.yml'
         Destination = Join-Path $HomeDirectory '.config/eza/theme.yml'
     }
+    # Git for Windows reads $HOME/.config/git/config before ~/.gitconfig, so the
+    # shared settings live here and identity stays in ~/.gitconfig, which wins.
+    foreach ($name in @('config', 'ignore', 'catppuccin.gitconfig')) {
+        [pscustomobject]@{
+            Source = Join-Path $DotfilesDir "config/git/$name"
+            Destination = Join-Path $HomeDirectory ".config/git/$name"
+        }
+    }
+    # The profile points LG_CONFIG_FILE, YAZI_CONFIG_HOME and ATUIN_CONFIG_DIR at
+    # these. yazi and atuin write their own files beside them, so the files are
+    # managed one by one rather than their directories.
+    foreach ($relative in @('lazygit/config.yml', 'yazi/yazi.toml', 'yazi/theme.toml',
+            'atuin/config.toml', 'atuin/themes/catppuccin-macchiato-blue.toml')) {
+        [pscustomobject]@{
+            Source = Join-Path $DotfilesDir "config/$relative"
+            Destination = Join-Path $HomeDirectory ".config/$relative"
+        }
+    }
+    # mise reads %USERPROFILE%\.config\mise\config.toml on Windows as well.
+    [pscustomobject]@{
+        Source = Join-Path $DotfilesDir 'config/mise/config.toml'
+        Destination = Join-Path $HomeDirectory '.config/mise/config.toml'
+    }
     # Windows Terminal merges fragments from %LOCALAPPDATA% at startup, so the
     # user's settings.json is never rewritten.
     [pscustomobject]@{
@@ -285,6 +308,16 @@ function Invoke-DotfilesPackageInstall {
     Invoke-DotfilesFontInstall
 }
 
+# mise installs the runtimes declared in config/mise/config.toml, which the link
+# stage has placed at ~/.config/mise/config.toml, so this stage runs after it.
+function Invoke-DotfilesRuntimeInstall {
+    $miseCommand = Get-DotfilesCommandPath 'mise'
+    if (-not $miseCommand) { throw 'mise is unavailable after package installation. Reopen PowerShell and rerun install.ps1 to install the runtimes.' }
+    Write-Host 'Installing runtimes declared in the mise configuration...'
+    $code = Invoke-DotfilesNativeCommand $miseCommand @('install', '--yes')
+    if ($code -ne 0) { throw "mise install failed (exit code $code). Rerun install.ps1 to retry." }
+}
+
 function Invoke-DotfilesLink {
     param([string]$DotfilesDir, [string]$HomeDirectory)
     Write-Host 'Linking native Windows configuration...'
@@ -292,11 +325,17 @@ function Invoke-DotfilesLink {
     foreach ($file in $files) { Set-DotfilesManagedFile $file.Source $file.Destination }
 }
 
+function Get-DotfilesDoctorCommands {
+    @('git', 'pwsh', 'oh-my-posh', 'bat', 'eza', 'fzf', 'zoxide', 'btop', 'nvim', 'gh', 'wt',
+        'carapace', 'atuin', 'mise', 'delta', 'lazygit', 'lazydocker', 'yazi',
+        'rg', 'fd', 'dust', 'duf', 'procs', 'sd', 'xh', 'hyperfine', 'glow', 'tldr', 'gum', 'direnv')
+}
+
 function Invoke-DotfilesDoctor {
     param([string]$DotfilesDir, [string]$HomeDirectory)
     $failures = 0
     Write-Host 'Checking commands...'
-    foreach ($name in @('git', 'pwsh', 'oh-my-posh', 'bat', 'eza', 'fzf', 'zoxide', 'btop', 'nvim', 'gh', 'wt')) {
+    foreach ($name in Get-DotfilesDoctorCommands) {
         if (Get-DotfilesCommandPath $name) { Write-Host "  [ok] $name" }
         else { Write-Host "  [missing] $name"; $failures++ }
     }
@@ -307,6 +346,12 @@ function Invoke-DotfilesDoctor {
             if (Test-DotfilesManagedFile $file.Source $file.Destination) { Write-Host "  [ok] $($file.Destination)" }
             else { Write-Host "  [missing or stale] $($file.Destination)"; $failures++ }
         }
+    } catch { Write-Host "  [failed] $($_.Exception.Message)"; $failures++ }
+    Write-Host 'Checking runtimes...'
+    try {
+        $miseCommand = Get-DotfilesCommandPath 'mise'
+        if ($miseCommand -and (Invoke-DotfilesNativeCommand $miseCommand @('which', 'node') -Quiet) -eq 0) { Write-Host '  [ok] Node.js via mise' }
+        else { Write-Host '  [missing] Node.js via mise (rerun: scripts\install_runtimes.ps1)'; $failures++ }
     } catch { Write-Host "  [failed] $($_.Exception.Message)"; $failures++ }
     Write-Host 'Checking PowerShell modules...'
     try {
@@ -333,6 +378,9 @@ function Invoke-DotfilesInstall {
         $stage = 'Linking dotfiles'
         Write-Host "==> $stage"
         Invoke-DotfilesLink $DotfilesDir $HomeDirectory
+        $stage = 'Installing runtimes'
+        Write-Host "==> $stage"
+        Invoke-DotfilesRuntimeInstall
         $stage = 'Verifying setup'
         Write-Host "==> $stage"
         Invoke-DotfilesDoctor $DotfilesDir $HomeDirectory

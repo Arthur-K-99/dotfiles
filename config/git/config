@@ -1,0 +1,47 @@
+# Git settings shared by every platform. On macOS, Linux and WSL the whole
+# config/git directory is linked to ~/.config/git; on Windows each file is
+# placed in ~/.config/git/, so the bare relative path in [include] resolves in
+# both. Git reads this file before ~/.gitconfig: identity ([user]) and
+# credential helpers stay in ~/.gitconfig, and `git config --global` keeps
+# writing there as long as that file exists. core.excludesFile is unset on
+# purpose so the XDG default, ~/.config/git/ignore, applies.
+[core]
+	pager = delta
+[interactive]
+	diffFilter = delta --color-only
+[delta]
+	navigate = true
+	side-by-side = true
+	line-numbers = true
+	features = catppuccin-macchiato
+[include]
+	# Defines [delta "catppuccin-<flavor>"] for all four flavors.
+	path = catppuccin.gitconfig
+[merge]
+	conflictStyle = zdiff3
+[diff]
+	colorMoved = default
+[rerere]
+	enabled = true
+[push]
+	autoSetupRemote = true
+[init]
+	defaultBranch = main
+[fetch]
+	prune = true
+[pull]
+	rebase = true
+[rebase]
+	autoStash = true
+	autoSquash = true
+[column]
+	ui = auto
+[branch]
+	sort = -committerdate
+[tag]
+	sort = version:refname
+[help]
+	# "prompt" needs git 2.43+; older git only reads this on a mistyped command.
+	autocorrect = prompt
+[commit]
+	verbose = true

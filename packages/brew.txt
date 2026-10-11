@@ -7,5 +7,31 @@ btop
 tmux
 gh
 
+# Shell quality of life
+carapace
+atuin
+mise
+direnv
+vivid
+
+# Git
+git-delta
+lazygit
+lazydocker
+
+# Files, search and the modern CLI set
+yazi
+ripgrep
+fd
+dust
+duf
+procs
+sd
+xh
+hyperfine
+glow
+tlrc
+gum
+
 # Editor
 neovim

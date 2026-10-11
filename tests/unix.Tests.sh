@@ -151,13 +151,10 @@ BREW
     uname() { printf 'Darwin\n'; }
     dotfiles_find_homebrew() { printf '%s/brew\n' "$DOTFILES_TEST_BREW_BIN"; }
     export DOTFILES_TEST_BREW_BIN="$test_dir/apple/bin"
-    export NVM_DIR="$test_dir/custom-nvm"
     PATH=/usr/bin:/bin
     dotfiles_init_environment
     assert_equal "$test_dir/apple/bin/dotfiles-fixture-command" "$(command -v dotfiles-fixture-command)"
     assert_contains ":$PATH:" ":$HOME/.local/bin:"
-    assert_equal "$test_dir/custom-nvm" "$NVM_DIR"
-    assert_equal "$test_dir/custom-nvm" "$(/bin/bash -c 'printf %s "$NVM_DIR"')"
     # Later installer stages can discover both newly installed Homebrew tools and local tools.
     assert_equal "$test_dir/apple/bin/dotfiles-fixture-command" "$(/bin/bash -c 'command -v dotfiles-fixture-command')"
     export DOTFILES_TEST_BREW_BIN="$test_dir/intel/bin"
@@ -219,6 +216,27 @@ test_macos_font_install_and_repair() {
     rm "$test_dir/fail-font"
     install_macos
     [ -f "$test_dir/font-present" ]
+}
+
+test_macos_formulae_survive_stdin_consumers() {
+    source "$TEST_REPO_DIR/scripts/install_packages.sh"
+    parse_list() {
+        case "$1" in
+            */brew.txt) printf 'first\nsecond\nthird\n' ;;
+            *) printf 'ghostty\n' ;;
+        esac
+    }
+    dotfiles_macos_app_installed() { return 1; }
+    # Homebrew's install steps can read stdin, which is the loop's package list.
+    brew() {
+        printf '%s\n' "$*" >> "$test_dir/commands"
+        case "$*" in
+            'list --cask '*) return 1 ;;
+            *) cat >/dev/null ;;
+        esac
+    }
+    install_macos
+    assert_equal $'install first\ninstall second\ninstall third\nlist --cask ghostty\ninstall --cask ghostty' "$(cat "$test_dir/commands")"
 }
 
 test_macos_app_cask_detection() {
@@ -319,6 +337,29 @@ test_eza_index_and_download_failures() {
     : > "$test_dir/retry"
     install_eza
     assert_equal 'apt-get install -y eza' "$(tail -n 1 "$test_dir/commands")"
+    assert_contains "$(cat "$test_dir/commands")" 'tee /etc/apt/sources.list.d/gierens.list'
+    # The shared helper installs only the missing packages of a repository.
+    command() {
+        case "$*" in
+            '-v glow') return 1 ;;
+            '-v gum') return 0 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    : > "$test_dir/commands"
+    install_charm_tools
+    assert_equal 'apt-get install -y glow' "$(tail -n 1 "$test_dir/commands")"
+    assert_contains "$(cat "$test_dir/commands")" 'gpg --dearmor --yes -o /etc/apt/keyrings/charm.gpg'
+    command() {
+        case "$*" in
+            '-v glow'|'-v gum') return 0 ;;
+            '-v oh-my-posh'|'-v zoxide') return 1 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    : > "$test_dir/commands"
+    install_charm_tools
+    assert_equal '' "$(cat "$test_dir/commands")"
     curl() { return 45; }
     # Consume only fixture content: never execute downloaded commands in tests.
     bash() { cat >/dev/null; }
@@ -370,44 +411,220 @@ ZINIT
     assert_equal 1 "$(wc -l < "$test_dir/plugin-runs" | tr -d ' ')"
     : > "$test_dir/retry"
     bootstrap_zinit "$test_dir/zinit"
-    assert_equal 5 "$(wc -l < "$test_dir/plugin-runs" | tr -d ' ')"
-    assert_equal Aloxaf/fzf-tab "$(tail -n 1 "$test_dir/plugin-runs")"
+    assert_equal 7 "$(wc -l < "$test_dir/plugin-runs" | tr -d ' ')"
+    assert_equal MichaelAquilina/zsh-you-should-use "$(tail -n 1 "$test_dir/plugin-runs")"
+    assert_contains "$(cat "$test_dir/plugin-runs")" olets/zsh-abbr
 }
 
-test_nvm_custom_directory_and_retry() {
+test_github_release_install() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
-    mkdir -p "$test_dir/custom-nvm"
-    export NVM_DIR="$test_dir/custom-nvm"
     export DOTFILES_TEST_FIXTURE="$test_dir"
-    cat > "$NVM_DIR/nvm.sh" <<'NVM'
-nvm() {
-    printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/nvm-commands"
-    case "$1" in
-        version)
-            if [ -f "$DOTFILES_TEST_FIXTURE/default" ]; then
-                printf 'v22.0.0\n'
-            else
-                printf 'N/A\n'
-                return 3
-            fi
-            ;;
-        install) [ -f "$DOTFILES_TEST_FIXTURE/retry" ] || return 48 ;;
-        alias) : > "$DOTFILES_TEST_FIXTURE/default" ;;
-        use) [ -f "$DOTFILES_TEST_FIXTURE/default" ] ;;
-    esac
-}
-NVM
-    git() { echo 'Unexpected download with existing nvm manager.' >&2; return 99; }
+    export DOTFILES_LOCAL_BIN="$test_dir/bin"
+    export TMPDIR="$test_dir/tmp"
+    mkdir -p "$TMPDIR" "$test_dir/payload/tool-v1.2.3-x86_64-unknown-linux-musl" "$test_dir/payload2"
+    printf '#!/bin/sh\necho from-release\n' > "$test_dir/payload/tool-v1.2.3-x86_64-unknown-linux-musl/tool"
+    tar -czf "$test_dir/asset.tar.gz" -C "$test_dir/payload" .
+    printf '#!/bin/sh\n' > "$test_dir/payload2/first"
+    printf '#!/bin/sh\n' > "$test_dir/payload2/second"
+    (cd "$test_dir/payload2" && zip -q "$test_dir/asset.zip" first second)
+    uname() { if [ "${1:-}" = -m ]; then cat "$DOTFILES_TEST_FIXTURE/arch"; else command uname "$@"; fi; }
+    printf 'x86_64\n' > "$test_dir/arch"
+    curl() {
+        local output="" url=""
+        printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                -o|-w) output="$2"; shift ;;
+                -*) ;;
+                *) url="$1" ;;
+            esac
+            shift
+        done
+        case "$url" in
+            */releases/latest)
+                [ -f "$DOTFILES_TEST_FIXTURE/resolve" ] || return 22
+                local repo="${url#https://github.com/}"
+                repo="${repo%/releases/latest}"
+                if [ -f "$DOTFILES_TEST_FIXTURE/bad-redirect" ]; then
+                    printf 'https://github.com/%s/releases' "$repo"
+                else
+                    printf 'https://github.com/%s/releases/tag/v1.2.3' "$repo"
+                fi
+                ;;
+            */releases/download/v1.2.3/*)
+                [ -f "$DOTFILES_TEST_FIXTURE/retry" ] || return 56
+                printf '%s\n' "$url" >> "$DOTFILES_TEST_FIXTURE/downloads"
+                case "$url" in
+                    *.tar.gz) cp "$DOTFILES_TEST_FIXTURE/asset.tar.gz" "$output" ;;
+                    *.zip) cp "$DOTFILES_TEST_FIXTURE/asset.zip" "$output" ;;
+                    *) printf '#!/bin/sh\necho bare\n' > "$output" ;;
+                esac
+                ;;
+            *) echo "unexpected URL $url" >&2; return 99 ;;
+        esac
+    }
     local status=0
-    bootstrap_nvm > "$test_dir/output" 2>&1 || status=$?
-    assert_equal 48 "$status"
-    [ ! -f "$test_dir/default" ]
+    install_github_release owner/tool 'tool-{tag}-{arch}-unknown-linux-musl.tar.gz' tool > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 22 "$status"
+    [ ! -f "$test_dir/downloads" ]
+    : > "$test_dir/resolve"
+    : > "$test_dir/bad-redirect"
+    status=0
+    install_github_release owner/tool 'tool-{tag}-{arch}-unknown-linux-musl.tar.gz' tool > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'Could not resolve the latest release of owner/tool'
+    rm "$test_dir/bad-redirect"
+    status=0
+    install_github_release owner/tool 'tool-{tag}-{arch}-unknown-linux-musl.tar.gz' tool > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 56 "$status"
+    [ ! -e "$test_dir/bin/tool" ]
+    assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-release.*' | wc -l | tr -d ' ')"
     : > "$test_dir/retry"
-    bootstrap_nvm
-    assert_contains "$(cat "$test_dir/nvm-commands")" 'alias default lts/*'
-    : > "$test_dir/nvm-commands"
-    bootstrap_nvm
-    assert_equal $'version default\nuse --silent default' "$(cat "$test_dir/nvm-commands")"
+    install_github_release owner/tool 'tool-{tag}-{arch}-unknown-linux-musl.tar.gz' tool
+    assert_equal 'https://github.com/owner/tool/releases/download/v1.2.3/tool-v1.2.3-x86_64-unknown-linux-musl.tar.gz' "$(tail -n 1 "$test_dir/downloads")"
+    assert_equal from-release "$("$test_dir/bin/tool")"
+    assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-release.*' | wc -l | tr -d ' ')"
+    # Several binaries from one zip; {version} drops the v, Go and Debian spellings differ.
+    install_github_release owner/multi 'multi_{version}_linux_{arch_go}_{arch_deb}.zip' first second
+    assert_equal 'https://github.com/owner/multi/releases/download/v1.2.3/multi_1.2.3_linux_x86_64_amd64.zip' "$(tail -n 1 "$test_dir/downloads")"
+    [ -x "$test_dir/bin/first" ] && [ -x "$test_dir/bin/second" ]
+    status=0
+    install_github_release owner/multi 'multi_{version}_linux_{arch_go}_{arch_deb}.zip' absent > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'does not contain absent'
+    # Installed binaries are skipped without any network access.
+    PATH="$test_dir/bin:$PATH"
+    : > "$test_dir/commands"
+    install_github_release owner/tool 'tool-{tag}-{arch}-unknown-linux-musl.tar.gz' tool
+    install_github_release owner/multi 'multi_{version}_linux_{arch_go}_{arch_deb}.zip' first second
+    assert_equal '' "$(cat "$test_dir/commands")"
+    printf 'aarch64\n' > "$test_dir/arch"
+    install_github_release owner/arm 'arm-{arch}-{arch_go}-{arch_deb}' armtool
+    assert_contains "$(tail -n 1 "$test_dir/downloads")" 'arm-aarch64-arm64-arm64'
+    assert_equal bare "$("$test_dir/bin/armtool")"
+    printf 'mips\n' > "$test_dir/arch"
+    status=0
+    install_github_release owner/other 'other-{arch}.tar.gz' othertool > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'Unsupported architecture: mips'
+}
+
+test_mise_bootstrap_and_runtimes() {
+    source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    export DOTFILES_LOCAL_BIN="$test_dir/bin"
+    command() {
+        case "$*" in
+            '-v mise') [ -f "$DOTFILES_TEST_FIXTURE/mise-present" ] ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    curl() {
+        printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        [ -f "$DOTFILES_TEST_FIXTURE/retry" ] || return 45
+        printf 'installer script\n'
+    }
+    # Consume the fixture only: downloaded content is never executed in tests.
+    sh() {
+        local input
+        input="$(cat)"
+        [ -n "$input" ] || return 0
+        printf '%s\n' "$MISE_INSTALL_PATH" > "$DOTFILES_TEST_FIXTURE/install-path"
+        : > "$DOTFILES_TEST_FIXTURE/mise-present"
+    }
+    local status=0
+    bootstrap_mise_binary > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 45 "$status"
+    [ ! -f "$test_dir/mise-present" ]
+    : > "$test_dir/retry"
+    bootstrap_mise_binary
+    assert_equal "$test_dir/bin/mise" "$(cat "$test_dir/install-path")"
+    : > "$test_dir/commands"
+    bootstrap_mise_binary
+    assert_equal '' "$(cat "$test_dir/commands")"
+    # Runtimes: a failed install reports, a retry finishes, a missing node is not success.
+    mise() {
+        printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/mise-commands"
+        case "$1" in
+            install) [ -f "$DOTFILES_TEST_FIXTURE/runtime-retry" ] || return 53; : > "$DOTFILES_TEST_FIXTURE/node-installed" ;;
+            which) [ -f "$DOTFILES_TEST_FIXTURE/node-installed" ] && printf '%s/node\n' "$DOTFILES_TEST_FIXTURE" ;;
+        esac
+    }
+    status=0
+    bootstrap_runtimes > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 53 "$status"
+    : > "$test_dir/runtime-retry"
+    bootstrap_runtimes
+    assert_equal $'install --yes\nwhich node' "$(tail -n 2 "$test_dir/mise-commands")"
+    rm "$test_dir/node-installed"
+    mise() {
+        case "$1" in
+            install) return 0 ;;
+            which) return 1 ;;
+        esac
+    }
+    status=0
+    bootstrap_runtimes > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'does not provide node'
+    rm "$test_dir/mise-present"
+    status=0
+    bootstrap_runtimes > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'mise is not installed'
+}
+
+test_yazi_flavors_install_and_retry() {
+    source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    export XDG_CONFIG_HOME="$test_dir/config"
+    mkdir -p "$XDG_CONFIG_HOME/yazi"
+    command() {
+        case "$*" in
+            '-v ya') [ -f "$DOTFILES_TEST_FIXTURE/ya-present" ] ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    ya() {
+        local flavor
+        printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        [ -f "$DOTFILES_TEST_FIXTURE/retry" ] || return 52
+        case "$1 $2" in
+            'pkg add')
+                flavor="${3#yazi-rs/flavors:}"
+                printf '[[flavor]]\nuse = "%s"\n' "$3" >> "$XDG_CONFIG_HOME/yazi/package.toml"
+                mkdir -p "$XDG_CONFIG_HOME/yazi/flavors/$flavor.yazi"
+                : > "$XDG_CONFIG_HOME/yazi/flavors/$flavor.yazi/flavor.toml"
+                ;;
+            'pkg install')
+                for flavor in $(sed -n 's/^use = "yazi-rs\/flavors:\(.*\)"$/\1/p' "$XDG_CONFIG_HOME/yazi/package.toml"); do
+                    mkdir -p "$XDG_CONFIG_HOME/yazi/flavors/$flavor.yazi"
+                    : > "$XDG_CONFIG_HOME/yazi/flavors/$flavor.yazi/flavor.toml"
+                done
+                ;;
+        esac
+    }
+    local status=0
+    bootstrap_yazi_flavors > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'yazi is not installed'
+    : > "$test_dir/ya-present"
+    status=0
+    bootstrap_yazi_flavors > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 52 "$status"
+    [ ! -d "$XDG_CONFIG_HOME/yazi/flavors" ]
+    : > "$test_dir/retry"
+    bootstrap_yazi_flavors
+    assert_equal $'pkg add yazi-rs/flavors:catppuccin-macchiato\npkg add yazi-rs/flavors:catppuccin-latte' "$(tail -n 2 "$test_dir/commands")"
+    [ -f "$XDG_CONFIG_HOME/yazi/flavors/catppuccin-latte.yazi/flavor.toml" ]
+    : > "$test_dir/commands"
+    bootstrap_yazi_flavors
+    assert_equal '' "$(cat "$test_dir/commands")"
+    # A new machine with package.toml restored uses install rather than add.
+    rm -rf "$XDG_CONFIG_HOME/yazi/flavors"
+    bootstrap_yazi_flavors
+    assert_equal 'pkg install' "$(cat "$test_dir/commands")"
+    [ -f "$XDG_CONFIG_HOME/yazi/flavors/catppuccin-macchiato.yazi/flavor.toml" ]
 }
 
 test_doctor_rejects_stale_configuration() {
@@ -425,26 +642,29 @@ test_doctor_rejects_stale_configuration() {
     rm "$test_dir/source"
     check_link "$test_dir/source" "$test_dir/correct"
     assert_equal 3 "$failures"
-    mkdir "$test_dir/nvm"
-    export NVM_DIR="$test_dir/nvm"
-    cat > "$NVM_DIR/nvm.sh" <<'NVM'
-nvm() { printf 'N/A\n'; return 3; }
-NVM
-    # A system-wide Node.js must not hide a missing nvm default.
+    # A system-wide Node.js must not hide a missing mise-managed one.
     node() { return 0; }
-    npm() { return 0; }
+    mise() { return 1; }
     failures=0
-    check_nvm_default
+    check_mise_node
     assert_equal 1 "$failures"
-    cat > "$NVM_DIR/nvm.sh" <<'NVM'
-nvm() {
-    if [ "$1" = version ]; then printf 'v22.0.0\n'; fi
-    return 0
-}
-NVM
+    mise() {
+        [ "$1 $2" = 'which node' ] || return 1
+        printf '%s/mise/node\n' "$test_dir"
+    }
     failures=0
-    check_nvm_default
+    check_mise_node > "$test_dir/output"
     assert_equal 0 "$failures"
+    assert_contains "$(cat "$test_dir/output")" "$test_dir/mise/node"
+    unset -f mise
+    command() {
+        if [ "$*" = '-v mise' ]; then return 1; fi
+        builtin command "$@"
+    }
+    failures=0
+    check_mise_node > "$test_dir/output"
+    assert_equal 1 "$failures"
+    assert_contains "$(cat "$test_dir/output")" 'mise is not installed'
 }
 
 test_bat_theme_install_and_skip() {
@@ -514,80 +734,140 @@ render_portable_profile() {
     }' "$TEST_REPO_DIR/home/.zshrc" > "$1"
 }
 
-test_zsh_nvm_lazy_load() {
-    local zsh_binary
-    zsh_binary="$(command -v zsh)"
-    mkdir -p "$test_dir/fixture" "$test_dir/nvm/alias/lts" "$test_dir/nvm/versions/node/v24.0.0/bin" \
-        "$test_dir/zdot" "$test_dir/data"
-    printf 'lts/*\n' > "$test_dir/nvm/alias/default"
-    printf 'lts/krypton\n' > "$test_dir/nvm/alias/lts/*"
-    printf 'v24.0.0\n' > "$test_dir/nvm/alias/lts/krypton"
-    cat > "$test_dir/nvm/nvm.sh" <<'NVM'
-export DOTFILES_TEST_NVM_LOADED=yes
-nvm() { printf 'real nvm %s\n' "$*" > "$DOTFILES_TEST_FIXTURE/nvm-call"; }
-NVM
-    render_portable_profile "$test_dir/profile.zsh"
-    export DOTFILES_TEST_FIXTURE="$test_dir"
-    # A resolvable default: Node is on PATH at once and nvm itself loads on first use.
-    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
-        NVM_DIR="$test_dir/nvm" XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" PATH=/usr/bin:/bin \
-        "$zsh_binary" -df -c '
-            autoload() { :; }
-            compinit() { :; }
-            source "$DOTFILES_TEST_PROFILE" || exit 1
-            [[ "$path[1]" == "$NVM_DIR/versions/node/v24.0.0/bin" ]] || { print "unexpected PATH head: $path[1]"; exit 1; }
-            [[ -z "$DOTFILES_TEST_NVM_LOADED" ]] || { print "nvm was loaded eagerly"; exit 1; }
-            [[ "$(whence -w nvm)" == "nvm: function" ]] || { print "nvm wrapper is missing"; exit 1; }
-            nvm ls --no-colors
-            [[ "$DOTFILES_TEST_NVM_LOADED" == yes ]] || { print "nvm did not load on first use"; exit 1; }
-        '
-    assert_equal 'real nvm ls --no-colors' "$(cat "$test_dir/nvm-call")"
-    # An unresolvable default (a partial version) loads nvm immediately instead.
-    printf '24\n' > "$test_dir/nvm/alias/default"
-    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
-        NVM_DIR="$test_dir/nvm" XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" PATH=/usr/bin:/bin \
-        "$zsh_binary" -df -c '
-            autoload() { :; }
-            compinit() { :; }
-            source "$DOTFILES_TEST_PROFILE" || exit 1
-            [[ "$DOTFILES_TEST_NVM_LOADED" == yes ]] || { print "nvm was not loaded for an unresolved alias"; exit 1; }
-            [[ "$path[1]" != "$NVM_DIR/versions/node/v24.0.0/bin" ]] || { print "unresolved alias still changed PATH"; exit 1; }
-        '
-}
-
 test_zsh_portable_overrides() {
     local zsh_binary
     zsh_binary="$(command -v zsh)"
-    mkdir -p "$test_dir/fixture" "$test_dir/nvm" "$test_dir/zdot" "$test_dir/data"
-    printf 'export DOTFILES_TEST_NVM_LOADED=yes\n' > "$test_dir/nvm/nvm.sh"
+    mkdir -p "$test_dir/fixture" "$test_dir/zdot" "$test_dir/data"
     render_portable_profile "$test_dir/profile.zsh"
     DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
-        NVM_DIR="$test_dir/nvm" XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" \
+        XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" \
         SSH_AUTH_SOCK="$test_dir/original-agent" PATH=/usr/bin:/bin \
         "$zsh_binary" -df -c '
             autoload() { :; }
             compinit() { :; }
-            source "$DOTFILES_TEST_PROFILE"
+            source "$DOTFILES_TEST_PROFILE" || exit 1
             [[ "$SSH_AUTH_SOCK" == "${DOTFILES_TEST_HOME:h}/original-agent" ]] || exit 1
-            [[ "$NVM_DIR" == "${DOTFILES_TEST_HOME:h}/nvm" ]] || exit 1
-            [[ "$DOTFILES_TEST_NVM_LOADED" == yes ]] || exit 1
+            [[ "$EZA_CONFIG_DIR" == "$DOTFILES_TEST_HOME/.config/eza" ]] || exit 1
+            [[ "$ABBR_USER_ABBREVIATIONS_FILE" == "$DOTFILES_TEST_HOME/.config/zsh-abbr/user-abbreviations" ]] || exit 1
         '
     cat > "$test_dir/fixture/.zshrc.local" <<'LOCAL'
-[[ "$DOTFILES_TEST_NVM_LOADED" == yes ]] || return 1
 export SSH_AUTH_SOCK="$DOTFILES_TEST_HOME/local-agent"
-export NVM_DIR="$DOTFILES_TEST_HOME/local-nvm"
 export EZA_CONFIG_DIR="$DOTFILES_TEST_HOME/local-eza"
 LOCAL
     DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
-        NVM_DIR="$test_dir/nvm" XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" \
+        XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" \
         SSH_AUTH_SOCK="$test_dir/original-agent" PATH=/usr/bin:/bin \
         "$zsh_binary" -df -c '
             autoload() { :; }
             compinit() { :; }
             source "$DOTFILES_TEST_PROFILE" || exit 1
             [[ "$SSH_AUTH_SOCK" == "$DOTFILES_TEST_HOME/local-agent" ]] || exit 1
-            [[ "$NVM_DIR" == "$DOTFILES_TEST_HOME/local-nvm" ]] || exit 1
             [[ "$EZA_CONFIG_DIR" == "$DOTFILES_TEST_HOME/local-eza" ]] || exit 1
+        '
+}
+
+test_zsh_tool_hooks() {
+    local zsh_binary
+    zsh_binary="$(command -v zsh)"
+    mkdir -p "$test_dir/fixture" "$test_dir/zdot" "$test_dir/data/mise/shims" "$test_dir/bin"
+    render_portable_profile "$test_dir/profile.zsh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    # Each mock records its arguments and prints what the real tool would: a
+    # shell snippet to eval, or an LS_COLORS string. mise itself must never run
+    # at startup; only its shims directory joins PATH.
+    cat > "$test_dir/bin/mise" <<'MOCK'
+#!/bin/sh
+printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/mise-args"
+MOCK
+    cat > "$test_dir/bin/atuin" <<'MOCK'
+#!/bin/sh
+printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/atuin-args"
+echo 'export DOTFILES_TEST_ATUIN=yes'
+MOCK
+    cat > "$test_dir/bin/carapace" <<'MOCK'
+#!/bin/sh
+printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/carapace-args"
+echo 'export DOTFILES_TEST_CARAPACE=yes'
+MOCK
+    cat > "$test_dir/bin/direnv" <<'MOCK'
+#!/bin/sh
+echo 'export DOTFILES_TEST_DIRENV=yes'
+MOCK
+    cat > "$test_dir/bin/vivid" <<'MOCK'
+#!/bin/sh
+printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/vivid-args"
+echo 'di=1;34:*.vivid=35'
+MOCK
+    printf '#!/bin/sh\nexit 0\n' > "$test_dir/bin/fdfind"
+    chmod +x "$test_dir/bin/"*
+    local tool_probe='
+            autoload() { :; }
+            compinit() { :; }
+            source "$DOTFILES_TEST_PROFILE" || exit 1
+            [[ "$path[1]" == "$XDG_DATA_HOME/mise/shims" ]] || { print "mise shims not first on PATH: $path[1]"; exit 1; }
+            [[ "$DOTFILES_TEST_ATUIN" == yes ]] || { print "atuin was not initialised"; exit 1; }
+            [[ "$DOTFILES_TEST_CARAPACE" == yes ]] || { print "carapace was not sourced"; exit 1; }
+            [[ "$DOTFILES_TEST_DIRENV" == yes ]] || { print "direnv hook missing"; exit 1; }
+        '
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" XDG_CACHE_HOME="$test_dir/cache" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/bin:/usr/bin:/bin" \
+        "$zsh_binary" -df -c '
+            autoload() { :; }
+            compinit() { :; }
+            source "$DOTFILES_TEST_PROFILE" || exit 1
+            [[ "$path[1]" == "$XDG_DATA_HOME/mise/shims" ]] || { print "mise shims not first on PATH: $path[1]"; exit 1; }
+            [[ ! -f "$DOTFILES_TEST_FIXTURE/mise-args" ]] || { print "mise ran at startup"; exit 1; }
+            [[ "$DOTFILES_TEST_ATUIN" == yes ]] || { print "atuin was not initialised"; exit 1; }
+            [[ "$DOTFILES_TEST_CARAPACE" == yes ]] || { print "carapace was not sourced"; exit 1; }
+            [[ "$DOTFILES_TEST_DIRENV" == yes ]] || { print "direnv hook missing"; exit 1; }
+            [[ "$LS_COLORS" == "di=1;34:*.vivid=35" ]] || { print "LS_COLORS: $LS_COLORS"; exit 1; }
+            [[ "$aliases[fd]" == fdfind ]] || { print "fd alias: $aliases[fd]"; exit 1; }
+            [[ "$FZF_DEFAULT_COMMAND" == "fdfind --type f"* ]] || { print "FZF_DEFAULT_COMMAND: $FZF_DEFAULT_COMMAND"; exit 1; }
+            [[ "$(whence -w eza)" == "eza: function" ]] || { print "eza wrapper missing"; exit 1; }
+            [[ "$(whence -w y)" == "y: function" ]] || { print "y function missing"; exit 1; }
+            [[ "$YSU_MESSAGE_POSITION" == after ]] || exit 1
+        '
+    [ ! -f "$test_dir/mise-args" ]
+    assert_equal 'init zsh --disable-up-arrow' "$(cat "$test_dir/atuin-args")"
+    assert_equal '_carapace zsh' "$(cat "$test_dir/carapace-args")"
+    assert_equal 'generate catppuccin-macchiato' "$(cat "$test_dir/vivid-args")"
+    [ -s "$test_dir/cache/dotfiles/carapace.zsh" ] && [ -s "$test_dir/cache/dotfiles/atuin.zsh" ] && [ -s "$test_dir/cache/dotfiles/direnv.zsh" ]
+    # The second shell sources the cached scripts and does not run the tools again.
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" XDG_CACHE_HOME="$test_dir/cache" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/bin:/usr/bin:/bin" \
+        "$zsh_binary" -df -c "$tool_probe"
+    assert_equal 1 "$(wc -l < "$test_dir/atuin-args" | tr -d ' ')"
+    assert_equal 1 "$(wc -l < "$test_dir/carapace-args" | tr -d ' ')"
+    # An upgraded binary invalidates its cache.
+    touch "$test_dir/bin/atuin"
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" XDG_CACHE_HOME="$test_dir/cache" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/bin:/usr/bin:/bin" \
+        "$zsh_binary" -df -c "$tool_probe"
+    assert_equal 2 "$(wc -l < "$test_dir/atuin-args" | tr -d ' ')"
+    assert_equal 1 "$(wc -l < "$test_dir/carapace-args" | tr -d ' ')"
+    # A failing generator leaves no cache behind and the shell still loads.
+    printf '#!/bin/sh\nexit 7\n' > "$test_dir/bin/direnv"
+    rm "$test_dir/cache/dotfiles/direnv.zsh"
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" XDG_CACHE_HOME="$test_dir/cache" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/bin:/usr/bin:/bin" \
+        "$zsh_binary" -df -c '
+            autoload() { :; }
+            compinit() { :; }
+            source "$DOTFILES_TEST_PROFILE" || exit 1
+            [[ -z "$DOTFILES_TEST_DIRENV" ]] || exit 1
+        '
+    [ ! -e "$test_dir/cache/dotfiles/direnv.zsh" ] && [ ! -e "$test_dir/cache/dotfiles/direnv.zsh.new" ]
+    # Without the tools the profile still loads, with the ANSI color default and no fd alias.
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" PATH=/usr/bin:/bin \
+        "$zsh_binary" -df -c '
+            autoload() { :; }
+            compinit() { :; }
+            source "$DOTFILES_TEST_PROFILE" || exit 1
+            [[ -z "$DOTFILES_TEST_ATUIN$DOTFILES_TEST_CARAPACE$DOTFILES_TEST_DIRENV" ]] || exit 1
+            [[ "$LS_COLORS" == di=1\;34:* ]] || { print "LS_COLORS: $LS_COLORS"; exit 1; }
+            [[ -z "${aliases[fd]:-}" ]] || exit 1
+            [[ -z "${FZF_DEFAULT_COMMAND:-}" ]] || exit 1
         '
 }
 
@@ -604,18 +884,21 @@ run_tests() {
         environment_discovery
         package_index_failure
         macos_font_install_and_repair
+        macos_formulae_survive_stdin_consumers
         macos_app_cask_detection
         install_stages_and_failure_reporting
         eza_index_and_download_failures
+        github_release_install
+        mise_bootstrap_and_runtimes
+        yazi_flavors_install_and_retry
         tmux_plugin_failure_and_retry
-        nvm_custom_directory_and_retry
         bat_theme_install_and_skip
         doctor_rejects_stale_configuration
     )
     if command -v zsh >/dev/null 2>&1; then
-        tests+=(zinit_plugin_failure_and_retry zsh_nvm_lazy_load zsh_portable_overrides)
+        tests+=(zinit_plugin_failure_and_retry zsh_portable_overrides zsh_tool_hooks)
     else
-        echo "  SKIP zinit_plugin_failure_and_retry, zsh_nvm_lazy_load and zsh_portable_overrides (zsh is not installed)."
+        echo "  SKIP zinit_plugin_failure_and_retry, zsh_portable_overrides and zsh_tool_hooks (zsh is not installed)."
     fi
     for test_name in "${tests[@]}"; do
         # A separate shell keeps errexit active inside each case and isolates mocks.

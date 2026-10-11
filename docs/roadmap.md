@@ -8,8 +8,8 @@ Work lands in phases. Each phase is one pull request that leaves every platform 
 |---|---|---|
 | 1 | Foundations: one flavor, tmux capabilities, fast zsh, fzf, bat | Done ([#1](https://github.com/Arthur-K-99/dotfiles/pull/1)) |
 | 2 | Terminal emulators and PowerShell parity | Done ([#3](https://github.com/Arthur-K-99/dotfiles/pull/3)) |
-| 3 | New tools: completion engine, history, runtimes, git, TUIs | Next |
-| 4 | tmux plugin suite, theme switcher, fastfetch | Planned |
+| 3 | New tools: completion engine, history, runtimes, git, TUIs | Done ([#4](https://github.com/Arthur-K-99/dotfiles/pull/4)) |
+| 4 | tmux plugin suite, theme switcher, fastfetch | Next |
 | 5 | Neovim | Planned |
 
 ## Adding a tool: the checklist
@@ -41,24 +41,22 @@ The emulator is the outermost layer; with it managed, every ANSI-based tool inhe
 - **eza on Windows** (`eza-community.eza`) with the zsh aliases and the shared `theme.yml` through `EZA_CONFIG_DIR`.
 - Decision: Ghostty on macOS/Linux and Windows Terminal on Windows. One WezTerm Lua file for three OSes did not outweigh Ghostty's speed and native feel, and the fragment keeps the Windows side small.
 
-## Phase 3: New tools (next)
+## Phase 3: New tools (done)
 
-Autocomplete and shell quality of life. Everything here exists on all three platforms unless noted.
+Autocomplete and shell quality of life on all three platforms, with the exceptions noted.
 
-- **carapace**: one completion engine for over a thousand commands, usable from zsh and PowerShell. This is the single largest autocomplete upgrade and it is the same on every OS.
-- **inshellisense** (Microsoft): IDE-style dropdown completion with descriptions for zsh, bash and pwsh. Evaluate alongside carapace; they solve different halves of the problem.
-- **atuin**: synced, encrypted, searchable shell history with statistics. Replaces plain `Ctrl+R`. First-class on zsh; PowerShell support is community-maintained, so verify before promising parity.
-- **mise**: replaces nvm. Faster, handles Node, Python, Go and more, works on Windows. Removes the lazy-nvm block from `.zshrc` and the nvm bootstrap, doctor and tests.
-- **git**: move the global git config into `config/git/` with delta (or difftastic) as pager, aliases, a global ignore file, `rerere`, `push.autoSetupRemote`, and Catppuccin colors for delta.
-- **lazygit** and **lazydocker**: both are installed on the Mac already but not declared here. Add packages and Catppuccin configs.
-- **yazi**: terminal file manager with image previews and Catppuccin flavors. Works on Windows.
-- **vivid**: generated Catppuccin `LS_COLORS`, replacing the hand-written ANSI default in `.zshrc`, with `EZA_COLORS` kept consistent.
-- **Modern CLI set**: ripgrep, fd (also the fzf backend through `FZF_DEFAULT_COMMAND`), dust, duf, procs, sd, xh, hyperfine, tokei, glow, tlrc, gum. Debian names fd `fdfind` and bat `batcat`; aliases and the fzf command need both names.
-- **Ghostty on Linux**: an installer in `scripts/bootstrap_tools.sh` once a dependable Debian/Ubuntu package exists (the community `.deb` builds or the snap), so the doctor can check the command on Linux as it does on macOS.
-- **zsh extras**: zsh-abbr for inline-expanding abbreviations, zsh-you-should-use, pay-respects for command correction, direnv.
-- Each tool follows the checklist above; the doctor and tests grow with it.
+- **carapace** is the completion engine in zsh and PowerShell. In zsh it is sourced after `compinit` because its script calls `compdef`; fzf-tab keeps drawing the menu. **inshellisense** was evaluated and parked: it is a pty wrapper around the shell with open issues against zsh plugins and tmux, so it would compete with the rest of this setup. carapace can bridge its specs (`CARAPACE_BRIDGES`) if they are ever wanted.
+- **atuin** replaces fzf's `Ctrl+R` in zsh (initialised after fzf so its binding wins; `Up` stays zsh's) and in PowerShell 7, where PSFzf then keeps only `Ctrl+T`. PowerShell support shipped in atuin 18.11.0 and is tier-2 upstream; winget installs a current build. Configuration and the vendored Catppuccin theme live in `config/atuin/`.
+- **mise** replaces nvm: `config/mise/config.toml` pins Node.js LTS, the bootstrap runs `mise install`, and the doctor checks `mise which node` so a system Node cannot hide a missing one. The lazy-nvm block, the nvm bootstrap, `NVM_DIR` and their tests are gone. Windows gained a runtimes stage for the same `mise install`. In zsh the shims directory goes on `PATH` instead of `mise activate`: the activation hook cost about 115 ms per shell and 20 ms per prompt, while shims resolve the project version when a command runs.
+- **git** moved to `config/git/` (XDG `config`, global `ignore`, the vendored `catppuccin/delta` include). Identity and credential helpers stay in `~/.gitconfig`, which git reads afterwards. delta, lazygit and lazydocker are installed everywhere; lazygit reads one path on every OS through `XDG_CONFIG_HOME` on Unix and `LG_CONFIG_FILE` on Windows.
+- **yazi** with the Catppuccin Macchiato and Latte flavors. The flavors are packages that `ya pkg add` clones into `~/.config/yazi/flavors`, so only `yazi.toml` and `theme.toml` are linked; the bootstrap adds the flavors or restores them from `package.toml`. `y` changes directory on exit in both shells.
+- **vivid** generates `LS_COLORS` for completion menus and fd on Unix. eza keeps its own `theme.yml`, which `LS_COLORS` would override, so an `eza` wrapper blanks the variable for that one command. Not installed on Windows, where nothing but eza reads `LS_COLORS`.
+- **Modern CLI set**: ripgrep, fd, dust, duf, procs, sd, xh, hyperfine, glow, tlrc, gum. fd is the fzf backend. **tokei** was dropped: upstream has published no binaries since 12.1.2.
+- **zsh extras**: zsh-abbr with a tracked abbreviation file and zsh-you-should-use; direnv on every platform. **pay-respects** was parked: no Homebrew core formula, no apt or winget package, and the installer wants to edit shell files.
+- **Startup time**: with every tool present an interactive zsh took about 320 ms, against 120 ms after phase 1. The init scripts of fzf, carapace, atuin, zoxide and direnv are now cached under `~/.cache/dotfiles/` and regenerated when the binary changes, and mise runs no hook, which brings a warm start to about 230 ms. What remains is oh-my-posh (about 75 ms across init and the first prompt), Homebrew's `shellenv` (25 ms) and zsh-abbr's initialisation (20 ms).
+- **Linux installs** gained two generic helpers in `scripts/bootstrap_tools.sh`: `install_apt_repository` for signed third-party repositories (eza, charm) and `install_github_release` for static binaries from the latest release, with the per-project architecture spellings handled by template placeholders. Both are tested with mocked network calls.
 
-## Phase 4: tmux, theme switcher, fastfetch
+## Phase 4: tmux, theme switcher, fastfetch (next)
 
 - tmux plugins: tmux-sensible, tmux-yank, vim-tmux-navigator, tmux-resurrect with tmux-continuum, tmux-fzf, tmux-floax for a floating pane, and sessionx or sesh with zoxide for session jumping. Catppuccin status modules for directory, date, CPU and battery.
 - Move the tmux config to `~/.config/tmux/tmux.conf`; TPM already prefers that location.
@@ -91,3 +89,6 @@ Considered and not scheduled, kept so they are not rediscovered.
 - Starship as a prompt: oh-my-posh already serves zsh and PowerShell from one file.
 - zinit turbo mode: plugins cost about 25 ms in total after phase 1, so deferred loading buys little and adds ordering surprises.
 - chezmoi or another dotfiles manager: the custom linker, doctor and tests cover the needs so far.
+- inshellisense: a pty wrapper that fights the zsh plugins and tmux; carapace covers completion and can bridge its specs if needed.
+- pay-respects: no Homebrew core, apt or winget package and an installer that edits shell files. Revisit when one package manager carries it.
+- tokei: upstream has shipped no binaries since 12.1.2, so Linux would need cargo. `cargo install tokei` by hand if wanted.

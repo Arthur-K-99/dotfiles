@@ -364,7 +364,7 @@ try {
         }
     }
 
-    Invoke-Test 'Managed files include the Windows Terminal fragment and the eza theme' {
+    Invoke-Test 'Managed files include the Windows Terminal fragment, the eza theme and the phase 3 tool configuration' {
         function Get-DotfilesProfilePaths {
             [ordered]@{ PowerShell = Join-Path $testRoot 'modern/profile.ps1'; WindowsPowerShell = Join-Path $testRoot 'legacy/profile.ps1' }
         }
@@ -373,7 +373,29 @@ try {
         $destinations = @($files | ForEach-Object { $_.Destination })
         Assert-True ($destinations -contains (Join-Path $testRoot 'AppData/Local/Microsoft/Windows Terminal/Fragments/dotfiles/fragment.json')) 'The fragment must land in the Fragments folder under the home directory'
         Assert-True ($destinations -contains (Join-Path $testRoot '.config/eza/theme.yml')) 'The eza theme must be managed'
+        # Git for Windows, lazygit, yazi, atuin and mise all read these from ~/.config.
+        foreach ($relative in @('git/config', 'git/ignore', 'git/catppuccin.gitconfig', 'lazygit/config.yml', 'yazi/yazi.toml', 'yazi/theme.toml',
+                'atuin/config.toml', 'atuin/themes/catppuccin-macchiato-blue.toml', 'mise/config.toml')) {
+            $expected = Join-Path $testRoot ".config/$relative"
+            $match = @($files | Where-Object { $_.Destination -eq $expected })
+            Assert-True ($match.Count -eq 1) "$relative must be managed under .config"
+            Assert-True ($match[0].Source -eq (Join-Path $repository "config/$relative")) "$relative must come from config/$relative"
+        }
         Assert-True (@($destinations | Select-Object -Unique).Count -eq $destinations.Count) 'Destinations must be unique'
+    }
+
+    Invoke-Test 'The winget list declares every phase 3 tool exactly once' {
+        $packages = @(Get-Content -LiteralPath (Join-Path $repository 'packages/winget.txt') |
+            ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -notmatch '^#' })
+        # winget --exact compares IDs case-sensitively, so the spelling must match the manifests.
+        foreach ($id in @('rsteube.Carapace', 'Atuinsh.Atuin', 'jdx.mise', 'dandavison.delta', 'JesseDuffield.lazygit', 'JesseDuffield.Lazydocker',
+                'sxyazi.yazi', 'BurntSushi.ripgrep.MSVC', 'sharkdp.fd', 'bootandy.dust', 'muesli.duf', 'dalance.procs', 'chmln.sd', 'ducaale.xh',
+                'sharkdp.hyperfine', 'charmbracelet.glow', 'tldr-pages.tlrc', 'charmbracelet.gum', 'direnv.direnv')) {
+            Assert-True ($packages -ccontains $id) "winget.txt must declare $id"
+        }
+        foreach ($package in $packages) { Assert-True ($package -match '^[A-Za-z0-9][A-Za-z0-9.+_-]*$') "Not a bare winget ID: $package" }
+        $lowered = @($packages | ForEach-Object { $_.ToLowerInvariant() })
+        Assert-True (@($lowered | Select-Object -Unique).Count -eq $lowered.Count) 'winget IDs must be unique'
     }
 
     Invoke-Test 'The Windows Terminal fragment carries the Macchiato scheme to the stock profiles' {
@@ -406,13 +428,21 @@ try {
         $portable = Join-Path $fixture.Directory 'portable-profile.ps1'
         [IO.File]::WriteAllText($portable, ($source -replace '\$HOME\b', '$$env:DOTFILES_TEST_HOME'))
         # Stub tools make the alias branches run: on Windows, ls and cat are built-in read-only aliases.
+        # The shell-integration stubs print a PowerShell statement recording their arguments, so the
+        # probe can tell that the profile evaluated each integration with the expected command line.
         $stubBin = Join-Path $fixture.Directory 'bin'
         New-Item -ItemType Directory -Path $stubBin | Out-Null
-        foreach ($tool in @('eza', 'bat', 'fzf')) {
-            if ($env:OS -eq 'Windows_NT') { [IO.File]::WriteAllText((Join-Path $stubBin "$tool.cmd"), "@echo off`r`nexit 0`r`n") }
-            else {
+        $integrations = @('mise', 'carapace', 'atuin', 'direnv', 'yazi')
+        foreach ($tool in @('eza', 'bat', 'fzf') + $integrations) {
+            if ($env:OS -eq 'Windows_NT') {
+                $body = "@echo off`r`n"
+                if ($tool -in $integrations) { $body += "echo `$env:DOTFILES_TEST_CALLS += '$tool %*;'`r`n" }
+                [IO.File]::WriteAllText((Join-Path $stubBin "$tool.cmd"), $body + "exit 0`r`n")
+            } else {
+                $body = "#!/bin/sh`n"
+                if ($tool -in $integrations) { $body += "echo `"\`$env:DOTFILES_TEST_CALLS += '$tool `$*;'`"`n" }
                 $stub = Join-Path $stubBin $tool
-                [IO.File]::WriteAllText($stub, "#!/bin/sh`nexit 0`n")
+                [IO.File]::WriteAllText($stub, $body + "exit 0`n")
                 & chmod +x $stub
             }
         }
@@ -430,6 +460,23 @@ foreach ($name in @('la', 'll', 'tree')) {
     if (-not (Get-Command $name -CommandType Function -ErrorAction SilentlyContinue)) { throw "$name function is missing" }
 }
 if ($env:EZA_CONFIG_DIR -ne (Join-Path $env:DOTFILES_TEST_HOME '.config\eza')) { throw "EZA_CONFIG_DIR is $env:EZA_CONFIG_DIR" }
+foreach ($pair in @(@('ATUIN_CONFIG_DIR', '.config\atuin'), @('LG_CONFIG_FILE', '.config\lazygit\config.yml'), @('YAZI_CONFIG_HOME', '.config\yazi'))) {
+    $expected = Join-Path $env:DOTFILES_TEST_HOME $pair[1]
+    $actual = [Environment]::GetEnvironmentVariable($pair[0])
+    if ($actual -ne $expected) { throw "$($pair[0]) is '$actual', expected '$expected'" }
+}
+if ($env:ProgramFiles) {
+    $fileCommand = Join-Path $env:ProgramFiles 'Git\usr\bin\file.exe'
+    if ((Test-Path -LiteralPath $fileCommand) -and $env:YAZI_FILE_ONE -ne $fileCommand) { throw "YAZI_FILE_ONE is '$env:YAZI_FILE_ONE', expected '$fileCommand'" }
+}
+if (-not (Get-Command y -CommandType Function -ErrorAction SilentlyContinue)) { throw 'y function is missing' }
+$calls = [string]$env:DOTFILES_TEST_CALLS
+$expectedCalls = @('mise activate pwsh;', 'direnv hook pwsh;')
+if (Get-Module PSReadLine) { $expectedCalls += @('carapace _carapace;', 'atuin init powershell --disable-up-arrow;') }
+foreach ($call in $expectedCalls) {
+    if (-not $calls.Contains($call)) { throw "The profile did not evaluate '$call'. Recorded: $calls" }
+}
+if ($calls -match 'yazi') { throw "yazi must not run while the profile loads. Recorded: $calls" }
 if ($env:DOTFILES_TEST_EXPECTED_FZF) {
     if ($env:FZF_DEFAULT_OPTS -ne $env:DOTFILES_TEST_EXPECTED_FZF) { throw "The local profile did not override FZF_DEFAULT_OPTS: $env:FZF_DEFAULT_OPTS" }
 } elseif ($env:FZF_DEFAULT_OPTS -notmatch 'bg\+:#363a4f') {
@@ -481,7 +528,7 @@ exit 0
         }
     }
 
-    Invoke-Test 'Doctor validates both editions, copied contents and fonts' {
+    Invoke-Test 'Doctor validates both editions, copied contents, fonts and runtimes' {
         $fixture = New-Fixture
         function Get-DotfilesProfilePaths {
             [ordered]@{ PowerShell = Join-Path $fixture.Directory 'modern/profile.ps1'; WindowsPowerShell = Join-Path $fixture.Directory 'legacy/profile.ps1' }
@@ -489,14 +536,26 @@ exit 0
         function Get-DotfilesCommandPath { param($Name) 'mock-command' }
         function Test-DotfilesNerdFont { $fontPresent }
         function Test-DotfilesPowerShellModule { param($Name) $modulePresent }
+        $report = [Collections.Generic.List[string]]::new()
+        function Write-Host { param($Object) $report.Add([string]$Object) }
+        function Invoke-DotfilesNativeCommand {
+            param($Command, $Arguments, [switch]$Quiet)
+            Assert-True ($Command -eq 'mock-command' -and ($Arguments -join ' ') -eq 'which node' -and $Quiet) 'The doctor asks mise for node quietly'
+            $runtimeExitCode
+        }
         $fontPresent = $true
         $modulePresent = $true
+        $runtimeExitCode = 0
         $files = @(Get-DotfilesManagedFiles $repository $fixture.Directory)
         foreach ($file in $files) {
             New-Item -ItemType Directory -Path (Split-Path -Parent $file.Destination) -Force | Out-Null
             Copy-Item -LiteralPath $file.Source -Destination $file.Destination
         }
         Invoke-DotfilesDoctor $repository $fixture.Directory
+        foreach ($name in @('carapace', 'atuin', 'mise', 'delta', 'lazygit', 'lazydocker', 'yazi', 'rg', 'fd', 'dust', 'duf', 'procs', 'sd', 'xh', 'hyperfine', 'glow', 'tldr', 'gum', 'direnv')) {
+            Assert-True ($report -contains "  [ok] $name") "The doctor must check the $name command"
+        }
+        Assert-True ($report -contains '  [ok] Node.js via mise') 'A runtime mise can locate passes'
         foreach ($file in $files) {
             [IO.File]::WriteAllText($file.Destination, 'stale configuration')
             Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } 'check\(s\) need attention'
@@ -507,6 +566,37 @@ exit 0
         $fontPresent = $true
         $modulePresent = $false
         Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } 'check\(s\) need attention'
+        $modulePresent = $true
+        $runtimeExitCode = 1
+        $report.Clear()
+        Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } '1 check\(s\) need attention'
+        Assert-True ($report -contains '  [missing] Node.js via mise (rerun: scripts\install_runtimes.ps1)') 'A missing runtime names the stage that installs it'
+        $runtimeExitCode = 0
+        Invoke-DotfilesDoctor $repository $fixture.Directory
+        # Without mise the runtime is missing too, and nothing is executed to find out.
+        function Get-DotfilesCommandPath { param($Name) if ($Name -ne 'mise') { 'mock-command' } }
+        function Invoke-DotfilesNativeCommand { throw 'Unexpected native command' }
+        $report.Clear()
+        Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } '2 check\(s\) need attention'
+        Assert-True (($report -contains '  [missing] mise') -and ($report -contains '  [missing] Node.js via mise (rerun: scripts\install_runtimes.ps1)')) 'Both mise and its runtime are reported'
+    }
+
+    Invoke-Test 'Runtime installation runs mise against the linked configuration and can be retried' {
+        $runtimeState = @{ ExitCode = 1; Calls = [Collections.Generic.List[string]]::new() }
+        function Get-DotfilesCommandPath { param($Name) if ($Name -eq 'mise') { 'mock-mise' } }
+        function Invoke-DotfilesNativeCommand {
+            param($Command, $Arguments, [switch]$Quiet)
+            Assert-True ($Command -eq 'mock-mise' -and -not $Quiet) 'Runtimes are installed by the discovered mise with visible output'
+            $runtimeState.Calls.Add(($Arguments -join ' '))
+            $runtimeState.ExitCode
+        }
+        Assert-Throws { Invoke-DotfilesRuntimeInstall } 'mise install failed \(exit code 1\)\. Rerun install.ps1 to retry'
+        $runtimeState.ExitCode = 0
+        Invoke-DotfilesRuntimeInstall
+        Assert-True ($runtimeState.Calls.Count -eq 2 -and @($runtimeState.Calls | Where-Object { $_ -ne 'install --yes' }).Count -eq 0) 'Every attempt runs mise install --yes'
+        function Get-DotfilesCommandPath { param($Name) $null }
+        Assert-Throws { Invoke-DotfilesRuntimeInstall } 'mise is unavailable.*Reopen PowerShell and rerun install.ps1'
+        Assert-True ($runtimeState.Calls.Count -eq 2) 'Nothing runs without a discoverable mise'
     }
 
     Invoke-Test 'Setup verifies before its completion message and propagates verification failures' {
@@ -514,18 +604,25 @@ exit 0
         function Invoke-DotfilesPackageInstall { param($DotfilesDir) $events.Add('packages') }
         function Invoke-DotfilesModuleInstall { $events.Add('modules') }
         function Invoke-DotfilesLink { param($DotfilesDir, $HomeDirectory) $events.Add('links') }
+        function Invoke-DotfilesRuntimeInstall { $events.Add('runtimes') }
         function Invoke-DotfilesDoctor { param($DotfilesDir, $HomeDirectory) $events.Add('verified') }
         function Write-Host { param($Object) if ([string]$Object -match '^Done\.') { $events.Add('done') } }
         Invoke-DotfilesInstall $repository $testRoot
-        Assert-True (($events -join ',') -eq 'packages,modules,links,verified,done') 'Completion must follow successful verification'
+        # mise reads the linked configuration, so runtimes follow the links and precede verification.
+        Assert-True (($events -join ',') -eq 'packages,modules,links,runtimes,verified,done') 'Completion must follow successful verification'
         $events.Clear()
+        function Invoke-DotfilesRuntimeInstall { throw 'simulated runtime failure' }
+        Assert-Throws { Invoke-DotfilesInstall $repository $testRoot } 'Installing runtimes failed: simulated runtime failure.*Completed setup remains in place.*rerun:.*install.ps1'
+        Assert-True (($events -join ',') -eq 'packages,modules,links') 'A runtime failure stops before verification'
+        $events.Clear()
+        function Invoke-DotfilesRuntimeInstall { $events.Add('runtimes') }
         function Invoke-DotfilesDoctor { param($DotfilesDir, $HomeDirectory) throw 'simulated verification failure' }
         Assert-Throws { Invoke-DotfilesInstall $repository $testRoot } 'Verifying setup failed: simulated verification failure.*Completed setup remains in place.*rerun:.*install.ps1'
         Assert-True (-not $events.Contains('done')) 'Failed verification must suppress completion'
         $events.Clear()
         function Invoke-DotfilesDoctor { param($DotfilesDir, $HomeDirectory) $events.Add('verified') }
         Invoke-DotfilesInstall $repository $testRoot
-        Assert-True (($events -join ',') -eq 'packages,modules,links,verified,done') 'Retry should complete after verification succeeds'
+        Assert-True (($events -join ',') -eq 'packages,modules,links,runtimes,verified,done') 'Retry should complete after verification succeeds'
     }
 
     Invoke-Test 'Native exit statuses are returned even with native error promotion enabled' {

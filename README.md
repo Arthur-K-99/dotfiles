@@ -40,7 +40,7 @@ Windows and WSL share one repository but are separate environments:
 | Native Windows | `install.ps1` | PowerShell |
 | WSL Debian/Ubuntu | `install.sh` inside WSL | zsh |
 
-Native Windows installs PowerShell, Windows Terminal, and command-line tools through winget, and PowerShell modules from the PowerShell Gallery. It manages the PowerShell profile, oh-my-posh, and a Windows Terminal settings fragment. WSL reuses the Linux package list and Unix dotfiles. Installing or enabling WSL itself remains an explicit host action because it can require administrator approval and a restart: run `wsl --install`, restart if requested, then run the Unix bootstrap inside WSL.
+Native Windows installs PowerShell, Windows Terminal, and command-line tools through winget, PowerShell modules from the PowerShell Gallery, and Node.js through mise. It manages the PowerShell profile, oh-my-posh, git, the tool configurations and a Windows Terminal settings fragment. WSL reuses the Linux package list and Unix dotfiles. Installing or enabling WSL itself remains an explicit host action because it can require administrator approval and a restart: run `wsl --install`, restart if requested, then run the Unix bootstrap inside WSL.
 
 ## What gets installed
 
@@ -55,8 +55,14 @@ Native Windows installs PowerShell, Windows Terminal, and command-line tools thr
 | tmux + TPM | Yes | No |
 | eza | Yes | Yes |
 | bat, fzf, zoxide, btop | Yes | Yes |
+| carapace completion, atuin history, direnv | Yes | Yes |
+| mise + Node.js LTS | Yes | Yes |
+| git configuration with delta, lazygit, lazydocker | Yes | Yes |
+| yazi with Catppuccin flavors | Yes | Yes |
+| ripgrep, fd, dust, duf, procs, sd, xh, hyperfine, glow, tlrc, gum | Yes | Yes |
+| vivid (Catppuccin `LS_COLORS`) | Yes | No |
+| zsh-abbr, zsh-you-should-use | Yes | No |
 | Neovim | Yes | Yes |
-| nvm + Node.js LTS + npm | Yes | No |
 | CaskaydiaCove Nerd Font | macOS; manual on Linux | Yes |
 
 ## After install
@@ -69,11 +75,16 @@ Native Windows installs PowerShell, Windows Terminal, and command-line tools thr
 - **Theme:** Every tool uses Catppuccin Macchiato: tmux, the prompt, eza, bat and fzf, including tab-completion menus. bat 0.25+ ships the theme; the bootstrap installs it for older distribution packages.
 - **fzf keys:** `Ctrl+T` inserts files, `Ctrl+R` searches history, `Alt+C` changes directory, and `Tab` completion opens the same fzf window.
 - **Shell:** The Unix configuration is for zsh. If your default shell is Bash or another shell, run `exec zsh` to use it in the current terminal. To change your default shell, run `chsh -s "$(command -v zsh)"` yourself, then sign out and back in; the installer does not change it automatically.
-- **Node.js:** The Unix installer installs the current LTS release as the `nvm` default. Use `nvm install <version>` and `nvm use <version>` to manage other releases. The shell puts the default version on `PATH` immediately and loads `nvm` itself on first use, which keeps startup fast; open a new shell after changing the default with `nvm alias default`.
+- **Runtimes:** mise installs the Node.js LTS pinned in `config/mise/config.toml` and switches versions per project from `.tool-versions`, `.nvmrc` or `.node-version` files. zsh puts mise's shims directory on `PATH` rather than running `mise activate`, which keeps shell startup fast; project `[env]` sections in mise files are therefore not applied (use direnv). PowerShell runs `mise activate`. `mise use -g node@22` changes the global default, `mise use python@3.13` adds a runtime to a project, `mise ls` shows what is installed. An existing nvm installation is left alone and no longer loaded; remove `~/.nvm` when you are sure nothing else needs it.
+- **Completion:** carapace completes over a thousand commands in zsh and PowerShell; `Tab` opens the menu in both shells. Run `carapace --clear-cache` after installing new tools.
+- **History:** atuin owns `Ctrl+R` with fuzzy search over a local SQLite database; `Up` stays plain zsh history. Sync between machines is opt-in: `atuin register` or `atuin login`, then `atuin sync`. PowerShell support needs atuin 18.11 or newer, which winget installs.
+- **Git:** `~/.config/git/config` holds the shared settings (delta as pager, zdiff3 conflicts, rebase on pull, autosquash, sorted branches, a global ignore in `~/.config/git/ignore`). Identity and credential helpers stay in `~/.gitconfig`, which git reads afterwards and which `git config --global` writes to. `lazygit` and `lazydocker` use the same Catppuccin colors.
+- **Abbreviations:** zsh-abbr expands `g`, `gs`, `gc`, `lg` and friends on `Space` or `Enter`; `abbr add name=command` adds one and rewrites the tracked `config/zsh-abbr/user-abbreviations`, so commit the change. you-should-use reminds you of an alias after a command runs.
+- **Files:** `y` opens yazi and changes to the directory you quit in. `fd` and `rg` replace `find` and `grep` (Debian installs fd as `fdfind`; the shell aliases it). `Ctrl+T` and `Alt+C` use fd, so ignored files stay out of the way.
 - **Font:** Ghostty and the Windows Terminal fragment select `CaskaydiaCove Nerd Font Mono` themselves (some pickers list it as `CaskaydiaCove NFM`); choose it by hand in any other terminal. On Linux, download it manually from [nerdfonts.com](https://www.nerdfonts.com/font-downloads) and install to `~/.local/share/fonts/`.
 - **Machine-specific config:** Add anything that shouldn't be in the repo to `~/.zshrc.local` (sourced automatically).
 - **SSH agent:** The shared configuration preserves `SSH_AUTH_SOCK`. To use Bitwarden on a particular machine, add `export SSH_AUTH_SOCK="$HOME/.bitwarden-ssh-agent.sock"` to that machine's `~/.zshrc.local`.
-- **Custom Node-manager location:** An exported `NVM_DIR` is respected by the installer, doctor, and shell. Make it available before installing and before opening zsh if you use a location other than `~/.nvm`.
+- **Tool binaries on Linux:** Tools that Debian and Ubuntu do not package come from signed apt repositories (eza, glow, gum) or from the latest GitHub release into `~/.local/bin` (lazygit, lazydocker, delta, atuin, carapace, yazi, dust, procs, xh, tlrc). Set `DOTFILES_LOCAL_BIN` before installing to use another directory. Rerunning the bootstrap does not upgrade release binaries; delete one from `~/.local/bin` and rerun to refresh it.
 - **Windows machine-specific config:** Put private or machine-only PowerShell settings in `~/.powershell.local.ps1`.
 - **Verify:** Run `scripts/doctor.sh` on Unix/WSL or `scripts\doctor.ps1` in PowerShell. Both installers also run verification before reporting success. Windows checks both PowerShell editions' actual profile locations, including redirected Documents folders, detects stale copied configurations, and confirms each PowerShell module is installed for PowerShell 7.
 - **Repository checks:** Run `bash scripts/test.sh` before committing installer or configuration changes. The suite checks syntax and uses temporary destinations and mocked installation commands to exercise reruns and failures without installing packages or changing your configuration. Missing optional validation tools are reported as skipped checks. Run `pwsh -NoProfile -NonInteractive -File tests/windows.Tests.ps1` for the Windows behavioral suite alone. CI runs checks on macOS, Linux, and Windows, including Windows PowerShell 5.1 and PowerShell 7.
@@ -84,7 +95,8 @@ Native Windows installs PowerShell, Windows Terminal, and command-line tools thr
 ```
 dotfiles/
 ├── home/           # Symlinked to $HOME/
-├── config/         # Tool configuration: bat, eza, ghostty, oh-my-posh, powershell, windows-terminal
+├── config/         # Tool configuration: atuin, bat, eza, ghostty, git, lazygit, mise, oh-my-posh,
+│                   # powershell, windows-terminal, yazi, zsh-abbr
 ├── packages/       # Declarative package lists (brew, apt, winget)
 ├── scripts/        # Install, symlink, bootstrap and doctor scripts
 ├── tests/          # Isolated installer regression tests

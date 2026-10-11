@@ -16,6 +16,21 @@ if (Get-Command zoxide -ErrorAction SilentlyContinue) {
     zoxide init powershell --cmd cd | Out-String | Invoke-Expression
 }
 
+# mise puts the runtimes from ~/.config/mise/config.toml on PATH and refreshes
+# them on directory changes. It runs after oh-my-posh so its prompt hook wraps
+# the prompt instead of being replaced by it; that hook is what refreshes PATH
+# in Windows PowerShell, whose lack of a directory-change event mise would
+# otherwise warn about on every start.
+if (Get-Command mise -ErrorAction SilentlyContinue) {
+    if ($PSVersionTable.PSVersion.Major -lt 7) { $env:MISE_PWSH_CHPWD_WARNING = '0' }
+    (& mise activate pwsh) | Out-String | Invoke-Expression
+}
+
+# direnv loads and unloads .envrc files on directory changes (direnv 2.33+).
+if (Get-Command direnv -ErrorAction SilentlyContinue) {
+    Invoke-Expression "$(direnv hook pwsh)"
+}
+
 if (Get-Command nvim -ErrorAction SilentlyContinue) {
     Set-Alias vim nvim
 }
@@ -39,6 +54,30 @@ if (Get-Command eza -ErrorAction SilentlyContinue) {
     function la { eza -la --icons=always @args }
     function ll { eza -ll --icons=always @args }
     function tree { eza --tree --icons=always @args }
+}
+
+# atuin, lazygit and yazi look for their configuration elsewhere on Windows, so
+# they are pointed at the managed files under ~/.config, as on the Unix shells.
+$env:ATUIN_CONFIG_DIR = Join-Path $HOME ".config\atuin"
+$env:LG_CONFIG_FILE = Join-Path $HOME ".config\lazygit\config.yml"
+$env:YAZI_CONFIG_HOME = Join-Path $HOME ".config\yazi"
+# yazi detects file types with file(1), which Git for Windows ships.
+if ($env:ProgramFiles) {
+    $fileCommand = Join-Path $env:ProgramFiles "Git\usr\bin\file.exe"
+    if (Test-Path -LiteralPath $fileCommand) { $env:YAZI_FILE_ONE = $fileCommand }
+}
+# y opens yazi and leaves the shell in the directory yazi exited from: the
+# PowerShell recipe from the yazi quick-start.
+if (Get-Command yazi -ErrorAction SilentlyContinue) {
+    function y {
+        $tmp = (New-TemporaryFile).FullName
+        yazi @args --cwd-file="$tmp"
+        $cwd = Get-Content -Path $tmp -Encoding UTF8
+        if ($cwd -and $cwd -ne $PWD.Path -and (Test-Path -LiteralPath $cwd -PathType Container)) {
+            Set-Location -LiteralPath (Resolve-Path -LiteralPath $cwd).Path
+        }
+        Remove-Item -Path $tmp
+    }
 }
 
 # fzf: the same Catppuccin Macchiato colors and layout as the Unix shells.
@@ -113,11 +152,30 @@ if (Get-Module PSReadLine) {
     Set-PSReadLineKeyHandler -Key DownArrow -Function HistorySearchForward
     Set-PSReadLineKeyHandler -Key Ctrl+d -Function DeleteCharOrExit
     Set-PSReadLineKeyHandler -Key Ctrl+w -Function BackwardKillWord
-    # PSFzf: Ctrl+T inserts files and Ctrl+R searches history, as in zsh.
+    # carapace completes over a thousand commands through the Tab menu above.
+    if (Get-Command carapace -ErrorAction SilentlyContinue) {
+        carapace _carapace | Out-String | Invoke-Expression
+    }
+    # atuin takes over Ctrl+R with searchable, synced history. Up and Down stay
+    # with PSReadLine so the prediction list and prefix search keep working.
+    # The PowerShell integration needs atuin 18.11+; older builds are skipped.
+    $atuinActive = $false
+    if (Get-Command atuin -ErrorAction SilentlyContinue) {
+        try {
+            $atuinInit = atuin init powershell --disable-up-arrow | Out-String
+            if ($LASTEXITCODE -eq 0) {
+                Invoke-Expression $atuinInit
+                $atuinActive = $true
+            }
+        } catch { }
+    }
+    # PSFzf: Ctrl+T inserts files and, unless atuin has it, Ctrl+R searches history.
     if (Get-Command fzf -ErrorAction SilentlyContinue) {
         Import-Module PSFzf -ErrorAction SilentlyContinue
         if (Get-Module PSFzf) {
-            Set-PsFzfOption -PSReadlineChordProvider 'Ctrl+t' -PSReadlineChordReverseHistory 'Ctrl+r'
+            $fzfOptions = @{ PSReadlineChordProvider = 'Ctrl+t' }
+            if (-not $atuinActive) { $fzfOptions['PSReadlineChordReverseHistory'] = 'Ctrl+r' }
+            Set-PsFzfOption @fzfOptions
         }
     }
 }

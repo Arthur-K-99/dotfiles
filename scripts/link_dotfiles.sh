@@ -69,6 +69,18 @@ main() {
     # The file is linked rather than the directory so machine-local shaders and
     # themes can live beside it.
     link "$DOTFILES_DIR/config/ghostty/config" "$HOME/.config/ghostty/config" || return 1
+    # git reads ~/.config/git/config before ~/.gitconfig, so identity and
+    # credential helpers stay in the latter and win.
+    link "$DOTFILES_DIR/config/git" "$HOME/.config/git" || return 1
+    link "$DOTFILES_DIR/config/lazygit/config.yml" "$HOME/.config/lazygit/config.yml" || return 1
+    # yazi and atuin write their own files beside these, so only the managed
+    # files are linked, not the directories.
+    link "$DOTFILES_DIR/config/yazi/yazi.toml" "$HOME/.config/yazi/yazi.toml" || return 1
+    link "$DOTFILES_DIR/config/yazi/theme.toml" "$HOME/.config/yazi/theme.toml" || return 1
+    link "$DOTFILES_DIR/config/atuin/config.toml" "$HOME/.config/atuin/config.toml" || return 1
+    link "$DOTFILES_DIR/config/atuin/themes/catppuccin-macchiato-blue.toml" "$HOME/.config/atuin/themes/catppuccin-macchiato-blue.toml" || return 1
+    link "$DOTFILES_DIR/config/mise/config.toml" "$HOME/.config/mise/config.toml" || return 1
+    link "$DOTFILES_DIR/config/zsh-abbr/user-abbreviations" "$HOME/.config/zsh-abbr/user-abbreviations" || return 1
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

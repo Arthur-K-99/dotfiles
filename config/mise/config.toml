@@ -1,0 +1,8 @@
+# mise (https://mise.jdx.dev) manages language runtimes and replaces nvm.
+# Linked to ~/.config/mise/config.toml, mise's global config. `mise install`
+# installs everything listed here. To change the default Node, run
+# `mise use -g node@22`: it rewrites this file, so commit the result.
+# "lts" resolves to the newest release of the current Node.js LTS line
+# (https://mise.jdx.dev/lang/node.html).
+[tools]
+node = "lts"

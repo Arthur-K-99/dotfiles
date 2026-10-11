@@ -1,0 +1,12 @@
+# yazi (https://github.com/sxyazi/yazi) terminal file manager, linked to
+# ~/.config/yazi/yazi.toml. Only keys that differ from the defaults are set.
+# Section and key names follow https://yazi-rs.github.io/docs/configuration/yazi
+# for yazi 25.x and later, where [mgr] replaced [manager].
+[mgr]
+show_hidden = false        # toggle at runtime with `.`
+sort_by = "natural"        # human numeric order: 1, 2, 10
+sort_dir_first = true
+linemode = "size"          # file size on the right of each row
+
+[preview]
+image_filter = "lanczos3"  # the slowest and best-looking downscaling filter
