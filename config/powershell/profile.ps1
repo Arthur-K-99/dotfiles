@@ -26,12 +26,13 @@ if (Test-Path -LiteralPath $batConfig) {
     $env:BAT_CONFIG_PATH = $batConfig
 }
 if (Get-Command bat -ErrorAction SilentlyContinue) {
-    Set-Alias cat bat -Option AllScope
+    Set-Alias cat bat -Option AllScope -Force
 }
 
 # eza with the zsh aliases and the shared Catppuccin theme. Functions rather
-# than aliases carry the extra arguments. ls is a built-in alias on Windows,
-# so replacing it needs the same AllScope option and Force.
+# than aliases carry the extra arguments. cat and ls are built-in aliases on
+# Windows (read-only and AllScope in Windows PowerShell), so replacing them
+# needs both the AllScope option and Force.
 if (Get-Command eza -ErrorAction SilentlyContinue) {
     $env:EZA_CONFIG_DIR = Join-Path $HOME ".config\eza"
     Set-Alias ls eza -Option AllScope -Force

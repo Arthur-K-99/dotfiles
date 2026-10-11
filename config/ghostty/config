@@ -4,10 +4,10 @@
 # the Catppuccin setup. Reload with cmd+shift+, and list every option with
 # `ghostty +show-config --default --docs`.
 #
-# Machine-local additions (shaders, extra themes, overrides) live beside this
-# file in ~/.config/ghostty/ or, on macOS, in
-# ~/Library/Application Support/com.mitchellh.ghostty/config, which Ghostty
-# loads after this one.
+# Machine-local overrides, shaders and extra themes go in a `local` file
+# beside this one (~/.config/ghostty/local), loaded last by the config-file
+# line at the bottom and ignored when absent. On macOS Ghostty also loads
+# ~/Library/Application Support/com.mitchellh.ghostty/config after this file.
 
 # Appearance. The theme follows the OS light/dark setting. Both flavors ship
 # inside Ghostty, so nothing is downloaded and the names must match the files
@@ -58,3 +58,8 @@ quick-terminal-position = top
 # Behaviour
 window-save-state = always
 auto-update = check
+
+# Machine-local overrides. The leading ? makes a missing file a no-op; the
+# path is relative to this file, so it resolves beside the symlink target's
+# link location in ~/.config/ghostty/.
+config-file = ?local

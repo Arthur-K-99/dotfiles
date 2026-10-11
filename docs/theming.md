@@ -29,7 +29,7 @@ The Macchiato colors used in this repository. The full palette with every flavor
 | overlay1 | `#8087A2` | eza punctuation |
 | surface2 | `#5B6078` | eza sockets and build files |
 | surface1 | `#494D64` | fzf selected background (reserved for fzf 0.55+) |
-| surface0 | `#363A4F` | fzf current line and border |
+| surface0 | `#363A4F` | fzf current line and border, PSReadLine selection and selected prediction |
 | base | `#24273A` | fzf background |
 
 ## Where each tool gets its colors

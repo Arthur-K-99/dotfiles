@@ -346,6 +346,24 @@ try {
         Assert-Throws { Invoke-DotfilesModuleInstall } 'pwsh is unavailable.*Reopen PowerShell'
     }
 
+    Invoke-Test 'A redirected LOCALAPPDATA is honoured only for the real profile directory' {
+        $saved = @{ USERPROFILE = $env:USERPROFILE; LOCALAPPDATA = $env:LOCALAPPDATA }
+        $realHome = Join-Path $testRoot 'real-home'
+        $otherHome = Join-Path $testRoot 'other-home'
+        try {
+            [Environment]::SetEnvironmentVariable('USERPROFILE', $realHome)
+            [Environment]::SetEnvironmentVariable('LOCALAPPDATA', (Join-Path $testRoot 'redirected-local'))
+            Assert-True ((Get-DotfilesLocalAppData $realHome) -eq $env:LOCALAPPDATA) 'The real home must use the redirected LOCALAPPDATA'
+            Assert-True ((Get-DotfilesLocalAppData ($realHome + [IO.Path]::DirectorySeparatorChar)) -eq $env:LOCALAPPDATA) 'A trailing separator must not matter'
+            Assert-True ((Get-DotfilesLocalAppData $otherHome) -eq (Join-Path $otherHome 'AppData/Local')) 'Other home directories derive the default'
+            [Environment]::SetEnvironmentVariable('LOCALAPPDATA', $null)
+            Assert-True ((Get-DotfilesLocalAppData $realHome) -eq (Join-Path $realHome 'AppData/Local')) 'Without LOCALAPPDATA the default applies'
+        } finally {
+            [Environment]::SetEnvironmentVariable('USERPROFILE', $saved.USERPROFILE)
+            [Environment]::SetEnvironmentVariable('LOCALAPPDATA', $saved.LOCALAPPDATA)
+        }
+    }
+
     Invoke-Test 'Managed files include the Windows Terminal fragment and the eza theme' {
         function Get-DotfilesProfilePaths {
             [ordered]@{ PowerShell = Join-Path $testRoot 'modern/profile.ps1'; WindowsPowerShell = Join-Path $testRoot 'legacy/profile.ps1' }
@@ -387,14 +405,31 @@ try {
         $fixture = New-Fixture
         $portable = Join-Path $fixture.Directory 'portable-profile.ps1'
         [IO.File]::WriteAllText($portable, ($source -replace '\$HOME\b', '$$env:DOTFILES_TEST_HOME'))
+        # Stub tools make the alias branches run: on Windows, ls and cat are built-in read-only aliases.
+        $stubBin = Join-Path $fixture.Directory 'bin'
+        New-Item -ItemType Directory -Path $stubBin | Out-Null
+        foreach ($tool in @('eza', 'bat', 'fzf')) {
+            if ($env:OS -eq 'Windows_NT') { [IO.File]::WriteAllText((Join-Path $stubBin "$tool.cmd"), "@echo off`r`nexit 0`r`n") }
+            else {
+                $stub = Join-Path $stubBin $tool
+                [IO.File]::WriteAllText($stub, "#!/bin/sh`nexit 0`n")
+                & chmod +x $stub
+            }
+        }
         $probe = @'
 $ErrorActionPreference = 'Stop'
 $WarningPreference = 'SilentlyContinue'
-$env:PATH = ''
+$env:PATH = $env:DOTFILES_TEST_BIN
 if ($env:DOTFILES_TEST_READLINE -eq 'yes') {
     try { Import-Module PSReadLine } catch { Write-Output 'SKIP-READLINE'; exit 0 }
 }
 . $env:DOTFILES_TEST_PROFILE
+if ((Get-Alias ls).Definition -ne 'eza') { throw "ls resolves to $((Get-Alias ls).Definition), not eza" }
+if ((Get-Alias cat).Definition -ne 'bat') { throw "cat resolves to $((Get-Alias cat).Definition), not bat" }
+foreach ($name in @('la', 'll', 'tree')) {
+    if (-not (Get-Command $name -CommandType Function -ErrorAction SilentlyContinue)) { throw "$name function is missing" }
+}
+if ($env:EZA_CONFIG_DIR -ne (Join-Path $env:DOTFILES_TEST_HOME '.config\eza')) { throw "EZA_CONFIG_DIR is $env:EZA_CONFIG_DIR" }
 if ($env:DOTFILES_TEST_EXPECTED_FZF) {
     if ($env:FZF_DEFAULT_OPTS -ne $env:DOTFILES_TEST_EXPECTED_FZF) { throw "The local profile did not override FZF_DEFAULT_OPTS: $env:FZF_DEFAULT_OPTS" }
 } elseif ($env:FZF_DEFAULT_OPTS -notmatch 'bg\+:#363a4f') {
@@ -408,14 +443,27 @@ exit 0
 '@
         $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe))
         $shell = (Get-Process -Id $PID).Path
+        # Windows PowerShell turns redirected native stderr into terminating errors under
+        # Stop, which would hide the child's diagnostics; relax it around the call only.
+        function Invoke-ProfileProbe {
+            $savedPreference = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                $lines = @(& $shell -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded 2>&1 | ForEach-Object { [string]$_ })
+                $code = $LASTEXITCODE
+            } finally { $ErrorActionPreference = $savedPreference }
+            return [pscustomobject]@{ Lines = $lines; ExitCode = $code }
+        }
         $env:DOTFILES_TEST_HOME = $fixture.Directory
         $env:DOTFILES_TEST_PROFILE = $portable
+        $env:DOTFILES_TEST_BIN = $stubBin
         $env:DOTFILES_TEST_EXPECTED_FZF = ''
         try {
             foreach ($readLine in @('no', 'yes')) {
                 $env:DOTFILES_TEST_READLINE = $readLine
-                $output = @(& $shell -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded 2>&1)
-                Assert-True ($LASTEXITCODE -eq 0) "Profile failed (PSReadLine: $readLine): $($output -join "`n")"
+                $probeResult = Invoke-ProfileProbe
+                $output = $probeResult.Lines
+                Assert-True ($probeResult.ExitCode -eq 0) "Profile failed (PSReadLine: $readLine): $($output -join "`n")"
                 if ($output -contains 'SKIP-READLINE') { Write-Host 'SKIP: PSReadLine cannot be imported in this non-interactive host; the bare profile load passed.' }
                 elseif ($readLine -eq 'no') { Assert-True (-not ($output -join "`n" -match '\S')) "Profile wrote unexpected output: $($output -join "`n")" }
             }
@@ -423,10 +471,10 @@ exit 0
             [IO.File]::WriteAllText((Join-Path $fixture.Directory '.powershell.local.ps1'), '$env:FZF_DEFAULT_OPTS = "local override"')
             $env:DOTFILES_TEST_READLINE = 'no'
             $env:DOTFILES_TEST_EXPECTED_FZF = 'local override'
-            $output = @(& $shell -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded 2>&1)
-            Assert-True ($LASTEXITCODE -eq 0) "Local override failed: $($output -join "`n")"
+            $probeResult = Invoke-ProfileProbe
+            Assert-True ($probeResult.ExitCode -eq 0) "Local override failed: $($probeResult.Lines -join "`n")"
         } finally {
-            foreach ($name in @('DOTFILES_TEST_HOME', 'DOTFILES_TEST_PROFILE', 'DOTFILES_TEST_READLINE', 'DOTFILES_TEST_EXPECTED_FZF')) {
+            foreach ($name in @('DOTFILES_TEST_HOME', 'DOTFILES_TEST_PROFILE', 'DOTFILES_TEST_BIN', 'DOTFILES_TEST_READLINE', 'DOTFILES_TEST_EXPECTED_FZF')) {
                 [Environment]::SetEnvironmentVariable($name, $null)
             }
         }

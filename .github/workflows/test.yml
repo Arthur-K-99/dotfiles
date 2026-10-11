@@ -32,10 +32,13 @@ jobs:
       fail-fast: false
       matrix:
         shell: [powershell, pwsh]
+    # The matrix context is unavailable in a step's shell key; the job default accepts it.
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Check syntax and isolated installer behavior
-        shell: ${{ matrix.shell }}
         run: '& ./tests/windows.Tests.ps1'

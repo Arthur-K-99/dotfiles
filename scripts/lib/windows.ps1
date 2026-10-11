@@ -163,12 +163,26 @@ function Get-DotfilesManagedFiles {
         Destination = Join-Path $HomeDirectory '.config/eza/theme.yml'
     }
     # Windows Terminal merges fragments from %LOCALAPPDATA% at startup, so the
-    # user's settings.json is never rewritten. The path derives from the home
-    # directory, as every destination does, so the tests stay isolated.
+    # user's settings.json is never rewritten.
     [pscustomobject]@{
         Source = Join-Path $DotfilesDir 'config/windows-terminal/fragment.json'
-        Destination = Join-Path $HomeDirectory 'AppData/Local/Microsoft/Windows Terminal/Fragments/dotfiles/fragment.json'
+        Destination = Join-Path (Get-DotfilesLocalAppData $HomeDirectory) 'Microsoft/Windows Terminal/Fragments/dotfiles/fragment.json'
     }
+}
+
+function Get-DotfilesLocalAppData {
+    param([string]$HomeDirectory)
+    # A redirected %LOCALAPPDATA% is honoured for the real profile directory.
+    # Any other home directory (the tests use temporary ones) derives the
+    # default location so nothing escapes the fixture.
+    if ($env:LOCALAPPDATA -and $env:USERPROFILE) {
+        $comparison = [StringComparison]::Ordinal
+        if ($env:OS -eq 'Windows_NT') { $comparison = [StringComparison]::OrdinalIgnoreCase }
+        $home_ = [IO.Path]::GetFullPath($HomeDirectory).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+        $profile_ = [IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+        if ([string]::Equals($home_, $profile_, $comparison)) { return $env:LOCALAPPDATA }
+    }
+    return Join-Path $HomeDirectory 'AppData/Local'
 }
 
 function Invoke-DotfilesNativeCommand {
