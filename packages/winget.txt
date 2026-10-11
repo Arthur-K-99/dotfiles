@@ -5,6 +5,7 @@ Microsoft.WindowsTerminal
 
 # Shell tools
 JanDeDobbeleer.OhMyPosh
+Fastfetch-cli.Fastfetch
 sharkdp.bat
 eza-community.eza
 junegunn.fzf

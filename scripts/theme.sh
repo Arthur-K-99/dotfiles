@@ -25,6 +25,7 @@ theme_hex_files() {
         config/windows-terminal/fragment.json \
         config/lazygit/config.yml \
         config/powershell/profile.ps1 \
+        config/fastfetch/config.jsonc \
         home/.zshrc \
         docs/theming.md
 }

@@ -218,3 +218,11 @@ y() {
 if [[ -f "$HOME/.zshrc.local" ]]; then
     source "$HOME/.zshrc.local"
 fi
+
+# fastfetch greets interactive shells with the machine summary. tmux opens a
+# shell for every pane, so it stays quiet there, and DOTFILES_FASTFETCH=0 in
+# ~/.zshrc.local turns it off on a machine. The config is the linked
+# ~/.config/fastfetch/config.jsonc, named so Windows reads the same file.
+if [[ -o interactive && -z "${TMUX:-}" && "${DOTFILES_FASTFETCH:-1}" != 0 ]] && (( $+commands[fastfetch] )); then
+    fastfetch --config "$XDG_CONFIG_HOME/fastfetch/config.jsonc"
+fi

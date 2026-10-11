@@ -9,7 +9,7 @@ Work lands in phases. Each phase is one pull request that leaves every platform 
 | 1 | Foundations: one flavor, tmux capabilities, fast zsh, fzf, bat | Done ([#1](https://github.com/Arthur-K-99/dotfiles/pull/1)) |
 | 2 | Terminal emulators and PowerShell parity | Done ([#3](https://github.com/Arthur-K-99/dotfiles/pull/3)) |
 | 3 | New tools: completion engine, history, runtimes, git, TUIs | Done ([#4](https://github.com/Arthur-K-99/dotfiles/pull/4)) |
-| 4 | tmux plugin suite, theme switcher, fastfetch | Next |
+| 4 | tmux plugin suite, theme switcher, fastfetch | In review |
 | 5 | Neovim | Planned |
 
 ## Adding a tool: the checklist
@@ -56,12 +56,13 @@ Autocomplete and shell quality of life on all three platforms, with the exceptio
 - **Startup time**: with every tool present an interactive zsh took about 320 ms, against 120 ms after phase 1. The init scripts of fzf, carapace, atuin, zoxide and direnv are now cached under `~/.cache/dotfiles/` and regenerated when the binary changes, and mise runs no hook, which brings a warm start to about 230 ms. What remains is oh-my-posh (about 75 ms across init and the first prompt), Homebrew's `shellenv` (25 ms) and zsh-abbr's initialisation (20 ms).
 - **Linux installs** gained two generic helpers in `scripts/bootstrap_tools.sh`: `install_apt_repository` for signed third-party repositories (eza, charm) and `install_github_release` for static binaries from the latest release, with the per-project architecture spellings handled by template placeholders. atuin and yazi use their musl builds: the glibc builds need glibc 2.39, newer than Debian 12 and Ubuntu 22.04 provide. Both are tested with mocked network calls.
 
-## Phase 4: tmux, theme switcher, fastfetch (next)
+## Phase 4: tmux, theme switcher, fastfetch (in review)
 
-- tmux plugins: tmux-sensible, tmux-yank, vim-tmux-navigator, tmux-resurrect with tmux-continuum, tmux-fzf, tmux-floax for a floating pane, and sessionx or sesh with zoxide for session jumping. Catppuccin status modules for directory, date, CPU and battery.
-- Move the tmux config to `~/.config/tmux/tmux.conf`; TPM already prefers that location.
-- A `scripts/theme.sh <flavor>` that flips every tool at once. See `docs/theming.md` for the list of places a flavor lives today; the switcher should read one palette file and write the rest, or at least edit every location in one run and leave the repo in a committable state.
-- fastfetch with a Catppuccin-colored configuration on new shells, skipped inside tmux and in non-interactive shells so panes stay fast.
+- **tmux moved** to `config/tmux/tmux.conf`, linked to `~/.config/tmux/tmux.conf`. tmux loads that file *and* `~/.tmux.conf` when both exist, so the linker retires the old link and the doctor reports anything left at the old path. TPM and the plugins live under `~/.config/tmux/plugins/`, the directory TPM itself chooses for an XDG configuration; the bootstrap clones TPM there and installs the plugins through a private server as before.
+- **Plugins**, in the order TPM runs them: tmux-sensible, vim-tmux-navigator (`Ctrl+h/j/k/l` across panes and, in phase 5, Neovim splits), tmux-yank (`xsel` joins the apt list; `clip.exe` serves WSL and `pbcopy` macOS), tmux-fzf (`prefix F`), tmux-floax (`` prefix ` ``, mirroring Ghostty's quick terminal; the default `p` would shadow previous-window), `catppuccin/tmux#v2.3.1` (2.3.1 fixes a regression with tmux 3.7+) with the directory, session, cpu, battery and date_time modules, tmux-cpu and tmux-battery for the last two, then tmux-resurrect and tmux-continuum, which must be last because it hooks `status-right`. The theme runs once before the status modules are set and again from TPM; both run lines are guarded so the configuration loads without plugins, which lets `scripts/test.sh` source it into a private server and a test check the declaration order.
+- **sesh** rather than tmux-sessionx: one static Go binary (Homebrew core, GitHub release on Linux) with zoxide and fzf, `prefix T` to pick or create a session and `prefix L` for the last one; `detach-on-destroy off` so killing a session switches instead of detaching. sessionx would have added bash, bat and a second fzf popup next to tmux-fzf.
+- **`scripts/theme.sh <flavor>`** switches the whole repository. Named settings get the new name; files with hex values get each color replaced by the same-named color from the vendored `config/catppuccin/palette.txt`, in the case each file already uses (a value without letters, such as mocha's surface0, carries no case of its own). `config/catppuccin/flavor` records the result and `--check` verifies it. The bootstrap, the doctor and the tests read the bat theme, the yazi flavors and the fzf background from the configuration files, so a switched repository passes `bash scripts/test.sh` and is ready to commit; a test switches a copy through every flavor and back and expects the original bytes. All four atuin themes are vendored and the themes directory is linked, so only the name changes. Corrected along the way: Catppuccin ships with bat 0.26, not 0.25.
+- **fastfetch** on every platform (Homebrew, winget, a GitHub release on Debian 12 and Ubuntu 24.04, which apt only covers from Debian 13 and Ubuntu 25.04). The config is `config/fastfetch/config.jsonc` with Catppuccin hex values, which fastfetch accepts directly, and a module list that avoids the slow detectors. zsh runs it in interactive shells outside tmux; PowerShell in the console host when the start arguments carry no `-Command`, `-File`, `-EncodedCommand` or `-NonInteractive`. `DOTFILES_FASTFETCH=0` turns it off. There is no official Catppuccin port for fastfetch; two submissions are open upstream.
 
 ## Phase 5: Neovim
 
@@ -78,7 +79,6 @@ Not tied to a phase; pick up when convenient.
 
 - Opt-in profiles (`minimal`, `development`, `personal`) as the README already proposes, so GUI apps and OS preferences never change every machine silently.
 - A Brewfile so `brew bundle check` reports drift, if the current parsed lists become limiting.
-- A tmux configuration load check in `scripts/test.sh` using a private server, tolerant of TPM being absent in CI.
 - Linux font installation in the bootstrap (download to `~/.local/share/fonts` and run `fc-cache`), which is the one remaining manual step on Linux.
 
 ## Ideas parked

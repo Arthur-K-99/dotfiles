@@ -111,6 +111,15 @@ test_link_retires_moved_sources() {
     assert_equal "$test_dir/elsewhere" "$(readlink "$test_dir/foreign")"
     retire_link "$test_dir/old-source" "$test_dir/absent"
     [ ! -e "$test_dir/absent" ]
+    # An emptied real directory goes; one with content or a directory link stays.
+    mkdir "$test_dir/empty" "$test_dir/full"
+    printf 'keep\n' > "$test_dir/full/file"
+    ln -s "$test_dir/full" "$test_dir/dir-link"
+    remove_empty_directory "$test_dir/empty"
+    remove_empty_directory "$test_dir/full"
+    remove_empty_directory "$test_dir/dir-link"
+    remove_empty_directory "$test_dir/no-such-dir"
+    [ ! -e "$test_dir/empty" ] && [ -f "$test_dir/full/file" ] && [ -L "$test_dir/dir-link" ]
     ln -s "$test_dir/old-source" "$test_dir/stuck"
     rm() { return 33; }
     if retire_link "$test_dir/old-source" "$test_dir/stuck"; then
@@ -119,6 +128,52 @@ test_link_retires_moved_sources() {
     fi
     unset -f rm
     assert_equal "$test_dir/old-source" "$(readlink "$test_dir/stuck")"
+}
+
+test_tmux_config_declares_plugins_in_order() {
+    local conf="$TEST_REPO_DIR/config/tmux/tmux.conf"
+    local plugins catppuccin_line status_line tpm_line last_line
+    plugins="$(sed -n "s/^set -g @plugin '\([^']*\)'.*/\1/p" "$conf")"
+    assert_equal tmux-plugins/tpm "$(printf '%s\n' "$plugins" | head -n 1)"
+    # continuum hooks status-right, so it runs last; resurrect must precede it.
+    assert_equal tmux-plugins/tmux-continuum "$(printf '%s\n' "$plugins" | tail -n 1)"
+    assert_equal tmux-plugins/tmux-resurrect "$(printf '%s\n' "$plugins" | tail -n 2 | head -n 1)"
+    for plugin in tmux-plugins/tmux-sensible christoomey/vim-tmux-navigator tmux-plugins/tmux-yank \
+        sainnhe/tmux-fzf omerxx/tmux-floax 'catppuccin/tmux#v' tmux-plugins/tmux-cpu tmux-plugins/tmux-battery; do
+        assert_contains "$plugins" "$plugin"
+    done
+    assert_equal 1 "$(grep -c '^set -g @plugin .catppuccin/tmux#v2' "$conf")"
+    # The theme runs before the status modules are set, and TPM is the last line.
+    catppuccin_line="$(grep -n 'plugins/tmux/catppuccin.tmux' "$conf" | head -n 1 | cut -d: -f1)"
+    status_line="$(grep -n '^set -g status-right ' "$conf" | head -n 1 | cut -d: -f1)"
+    tpm_line="$(grep -n 'plugins/tpm/tpm' "$conf" | tail -n 1 | cut -d: -f1)"
+    last_line="$(grep -c '' "$conf")"
+    [ "$catppuccin_line" -lt "$status_line" ] || return 1
+    [ "$status_line" -lt "$tpm_line" ] || return 1
+    assert_equal "$last_line" "$tpm_line"
+    # cpu and battery expand through -F so their plugins can fill in the numbers.
+    grep -q '^set -agF status-right "#{E:@catppuccin_status_cpu}"$' "$conf"
+    grep -q '^set -agF status-right "#{E:@catppuccin_status_battery}"$' "$conf"
+    grep -q "^set -g @catppuccin_flavor '$(cat "$TEST_REPO_DIR/config/catppuccin/flavor")'$" "$conf"
+    # The plugin files the doctor checks are the ones declared here.
+    for plugin in $(printf '%s\n' "$plugins" | sed -e 's|#.*||' -e 's|.*/||'); do
+        [ "$plugin" = tpm ] && continue
+        grep -q "$plugin/" "$TEST_REPO_DIR/scripts/doctor.sh" || { echo "doctor.sh does not check $plugin" >&2; return 1; }
+    done
+}
+
+test_tmux_config_loads_and_errors_are_reported() {
+    source "$TEST_REPO_DIR/scripts/test.sh"
+    export TMPDIR="$test_dir/tmp"
+    mkdir -p "$TMPDIR"
+    check_tmux_config "$TEST_REPO_DIR/config/tmux/tmux.conf"
+    printf 'set -g base-index 1\nbind\n' > "$test_dir/broken.conf"
+    local status=0
+    check_tmux_config "$test_dir/broken.conf" > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'broken.conf'
+    # Both runs clean up their private server directories.
+    assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-tmux-check.*' | wc -l | tr -d ' ')"
 }
 
 test_theme_switch_round_trip() {
@@ -146,6 +201,8 @@ test_theme_switch_round_trip() {
     grep -q 'bg:#1e1e2e' "$test_dir/repo/config/powershell/profile.ps1"
     grep -q '48;2;49;50;68' "$test_dir/repo/config/powershell/profile.ps1"
     grep -q '"blue": "#89B4FA"' "$test_dir/repo/config/oh-my-posh/config.omp.json"
+    grep -q '"keys": "#89b4fa"' "$test_dir/repo/config/fastfetch/config.jsonc"
+    grep -q 'Catppuccin Mocha hex values' "$test_dir/repo/config/fastfetch/config.jsonc"
     grep -q 'directory: { foreground: "#89B4FA" }' "$test_dir/repo/config/eza/theme.yml"
     grep -q "activeBorderColor:" "$test_dir/repo/config/lazygit/config.yml"
     grep -q "'#89b4fa'" "$test_dir/repo/config/lazygit/config.yml"
@@ -594,8 +651,8 @@ test_github_release_install() {
     assert_equal from-release "$("$test_dir/bin/tool")"
     assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-release.*' | wc -l | tr -d ' ')"
     # Several binaries from one zip; {version} drops the v, Go and Debian spellings differ.
-    install_github_release owner/multi 'multi_{version}_linux_{arch_go}_{arch_deb}.zip' first second
-    assert_equal 'https://github.com/owner/multi/releases/download/v1.2.3/multi_1.2.3_linux_x86_64_amd64.zip' "$(tail -n 1 "$test_dir/downloads")"
+    install_github_release owner/multi 'multi_{version}_linux_{arch_go}_{arch_deb}_{arch_amd64}.zip' first second
+    assert_equal 'https://github.com/owner/multi/releases/download/v1.2.3/multi_1.2.3_linux_x86_64_amd64_amd64.zip' "$(tail -n 1 "$test_dir/downloads")"
     [ -x "$test_dir/bin/first" ] && [ -x "$test_dir/bin/second" ]
     status=0
     install_github_release owner/multi 'multi_{version}_linux_{arch_go}_{arch_deb}.zip' absent > "$test_dir/output" 2>&1 || status=$?
@@ -608,8 +665,8 @@ test_github_release_install() {
     install_github_release owner/multi 'multi_{version}_linux_{arch_go}_{arch_deb}.zip' first second
     assert_equal '' "$(cat "$test_dir/commands")"
     printf 'aarch64\n' > "$test_dir/arch"
-    install_github_release owner/arm 'arm-{arch}-{arch_go}-{arch_deb}' armtool
-    assert_contains "$(tail -n 1 "$test_dir/downloads")" 'arm-aarch64-arm64-arm64'
+    install_github_release owner/arm 'arm-{arch}-{arch_go}-{arch_deb}-{arch_amd64}' armtool
+    assert_contains "$(tail -n 1 "$test_dir/downloads")" 'arm-aarch64-arm64-arm64-aarch64'
     assert_equal bare "$("$test_dir/bin/armtool")"
     printf 'mips\n' > "$test_dir/arch"
     status=0
@@ -923,6 +980,10 @@ MOCK
 printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/vivid-args"
 echo 'di=1;34:*.vivid=35'
 MOCK
+    cat > "$test_dir/bin/fastfetch" <<'MOCK'
+#!/bin/sh
+printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/fastfetch-args"
+MOCK
     printf '#!/bin/sh\nexit 0\n' > "$test_dir/bin/fdfind"
     chmod +x "$test_dir/bin/"*
     local tool_probe='
@@ -1005,6 +1066,24 @@ MOCK
             [[ -z "${aliases[fd]:-}" ]] || exit 1
             [[ -z "${FZF_DEFAULT_COMMAND:-}" ]] || exit 1
         '
+    # fastfetch greets interactive shells only, outside tmux, unless opted out.
+    [ ! -f "$test_dir/fastfetch-args" ]
+    local greeter_probe='
+            autoload() { :; }
+            compinit() { :; }
+            source "$DOTFILES_TEST_PROFILE" || exit 1
+        '
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" XDG_CACHE_HOME="$test_dir/cache" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/bin:/usr/bin:/bin" \
+        "$zsh_binary" -df -i -c "$greeter_probe" < /dev/null
+    assert_equal "--config $test_dir/fixture/.config/fastfetch/config.jsonc" "$(cat "$test_dir/fastfetch-args")"
+    TMUX="$test_dir/socket,1,0" DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" XDG_CACHE_HOME="$test_dir/cache" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/bin:/usr/bin:/bin" \
+        "$zsh_binary" -df -i -c "$greeter_probe" < /dev/null
+    DOTFILES_FASTFETCH=0 DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" XDG_CACHE_HOME="$test_dir/cache" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/bin:/usr/bin:/bin" \
+        "$zsh_binary" -df -i -c "$greeter_probe" < /dev/null
+    assert_equal 1 "$(wc -l < "$test_dir/fastfetch-args" | tr -d ' ')"
 }
 
 run_tests() {
@@ -1031,6 +1110,7 @@ run_tests() {
         mise_bootstrap_and_runtimes
         yazi_flavors_install_and_retry
         tmux_plugin_failure_and_retry
+        tmux_config_declares_plugins_in_order
         bat_theme_install_and_skip
         doctor_rejects_stale_configuration
     )
@@ -1038,6 +1118,11 @@ run_tests() {
         tests+=(zinit_plugin_failure_and_retry zsh_portable_overrides zsh_tool_hooks)
     else
         echo "  SKIP zinit_plugin_failure_and_retry, zsh_portable_overrides and zsh_tool_hooks (zsh is not installed)."
+    fi
+    if command -v tmux >/dev/null 2>&1; then
+        tests+=(tmux_config_loads_and_errors_are_reported)
+    else
+        echo "  SKIP tmux_config_loads_and_errors_are_reported (tmux is not installed)."
     fi
     for test_name in "${tests[@]}"; do
         # A separate shell keeps errexit active inside each case and isolates mocks.

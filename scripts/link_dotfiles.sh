@@ -81,7 +81,13 @@ main() {
     link "$DOTFILES_DIR/config/yazi/yazi.toml" "$HOME/.config/yazi/yazi.toml" || return 1
     link "$DOTFILES_DIR/config/yazi/theme.toml" "$HOME/.config/yazi/theme.toml" || return 1
     link "$DOTFILES_DIR/config/atuin/config.toml" "$HOME/.config/atuin/config.toml" || return 1
-    link "$DOTFILES_DIR/config/atuin/themes/catppuccin-macchiato-blue.toml" "$HOME/.config/atuin/themes/catppuccin-macchiato-blue.toml" || return 1
+    # Every flavor's atuin theme is vendored, so the themes directory is linked
+    # whole; atuin only reads it. Phase 3 linked one file inside a real
+    # directory, which is retired first so no backup of an empty directory is left.
+    retire_link "$DOTFILES_DIR/config/atuin/themes/catppuccin-macchiato-blue.toml" "$HOME/.config/atuin/themes/catppuccin-macchiato-blue.toml" || return 1
+    remove_empty_directory "$HOME/.config/atuin/themes" || return 1
+    link "$DOTFILES_DIR/config/atuin/themes" "$HOME/.config/atuin/themes" || return 1
+    link "$DOTFILES_DIR/config/fastfetch/config.jsonc" "$HOME/.config/fastfetch/config.jsonc" || return 1
     link "$DOTFILES_DIR/config/mise/config.toml" "$HOME/.config/mise/config.toml" || return 1
     # zsh-abbr rewrites its file with mv, which would replace a file symlink;
     # through a directory link the rewrite lands in the repository.
@@ -98,6 +104,16 @@ retire_link() {
     if [ -L "$dst" ] && [ "$(readlink "$dst")" = "$retired_src" ]; then
         rm "$dst" || return 1
         echo "  retired: $dst"
+    fi
+}
+
+# An empty real directory in the way of a directory link is removed; anything
+# with content is left for the linker to back up.
+remove_empty_directory() {
+    local dir="$1"
+    if [ -d "$dir" ] && [ ! -L "$dir" ] && [ -z "$(ls -A "$dir")" ]; then
+        rmdir "$dir" || return 1
+        echo "  removed empty: $dir"
     fi
 }
 

@@ -45,11 +45,13 @@ Two philosophies are in play. Explicit hex values look identical in every termin
 | oh-my-posh | `palette` block in `config/oh-my-posh/config.omp.json` | explicit hex |
 | eza | `config/eza/theme.yml` | explicit hex, every file kind and column |
 | fzf, including fzf-tab | `FZF_DEFAULT_OPTS` in `home/.zshrc` and `config/powershell/profile.ps1` | explicit hex, two copies that must match |
-| bat | `--theme` in `config/bat/config` | named theme shipped with bat 0.25+; older packages get the file from `scripts/bootstrap_tools.sh`, which reads the name from the same line |
+| bat | `--theme` in `config/bat/config` | named theme shipped with bat 0.26+; older packages get the file from `scripts/bootstrap_tools.sh`, which reads the name from the same line |
 | delta (git pager) | `features = catppuccin-macchiato` in `config/git/config`, colors in the vendored `config/git/catppuccin.gitconfig` | explicit hex from `catppuccin/delta`; all four flavors are included |
 | lazygit | `gui.theme` in `config/lazygit/config.yml` | explicit hex from `catppuccin/lazygit` (blue accent) |
 | atuin | `[theme] name` in `config/atuin/config.toml`, colors in `config/atuin/themes/` | explicit hex from `catppuccin/atuin`; all four flavors are vendored and linked, the name selects one |
 | yazi | `[flavor]` in `config/yazi/theme.toml` | named flavors installed as packages by `ya pkg add`; the bootstrap and the doctor read the names from this file |
+| fastfetch | `config/fastfetch/config.jsonc` | explicit hex for keys, title, separator, output and the logo; the `colors` module shows the terminal's own palette |
+| tmux-floax | `@floax-border-color` in `config/tmux/tmux.conf` | ANSI |
 | zsh completion menus, fd | `vivid generate catppuccin-macchiato` in `home/.zshrc` | named vivid theme; a small ANSI default applies without vivid |
 | zsh syntax highlighting, autosuggestions | plugin defaults | ANSI |
 | btop, Neovim | not yet managed | see `docs/roadmap.md` |
@@ -63,7 +65,7 @@ bash scripts/theme.sh mocha
 The flavors are `latte`, `frappe`, `macchiato` and `mocha`. The script reads the current flavor from `config/catppuccin/flavor` and rewrites every location in the table above:
 
 - **Named locations** get the new name: the tmux flavor, the bat theme, the `dark:` half of the Ghostty theme, the delta feature, the atuin theme name, the yazi `dark` flavor, the vivid theme, the Windows Terminal scheme name, and the PSReadLine background sequences. Each must be present, so a missing one fails the run instead of being forgotten.
-- **Hex values** in oh-my-posh, eza, the fzf options of both shells, PSReadLine, the Windows Terminal scheme, lazygit and the palette table above are replaced color by color with the same-named color of the new flavor. Each file keeps its own upper- or lowercase convention.
+- **Hex values** in oh-my-posh, eza, the fzf options of both shells, PSReadLine, the Windows Terminal scheme, lazygit, fastfetch and the palette table above are replaced color by color with the same-named color of the new flavor. Each file keeps its own upper- or lowercase convention.
 - **Labels**: comments and this document's mentions of the flavor follow along. The `light` halves of Ghostty and yazi stay Latte.
 - `bash scripts/theme.sh --check` then verifies that every location agrees; the test suite runs the same check and a round trip through every flavor, so the rewritten repository is ready to commit.
 

@@ -16,8 +16,11 @@ fzf
 btop
 neovim
 gh
-# tmux-256color terminfo used by .tmux.conf
+# tmux-256color terminfo used by the tmux configuration
 ncurses-term
+# tmux-yank copies to the X clipboard with xsel (wl-copy from wl-clipboard on
+# Wayland; clip.exe is found under WSL)
+xsel
 
 # Phase 3 tools that Debian 12 and Ubuntu 24.04 package. fd installs as
 # fdfind and bat as batcat; the shell aliases cover both names.
@@ -31,4 +34,5 @@ direnv
 
 # Not in apt (installed by scripts/bootstrap_tools.sh): eza, zoxide, oh-my-posh,
 # mise, carapace, atuin, delta, lazygit, lazydocker, yazi, dust, procs, xh,
-# tlrc, glow and gum.
+# tlrc, glow, gum, sesh and fastfetch (apt carries fastfetch from Debian 13
+# and Ubuntu 25.04 only).

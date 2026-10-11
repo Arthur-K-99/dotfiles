@@ -120,7 +120,13 @@ check_plugins() {
         fail "TPM installer ($tmux_plugins/tpm/bin/install_plugins)"
     fi
     check_readable "TPM" "$tmux_plugins/tpm/tpm"
-    check_readable "Catppuccin tmux theme" "$tmux_plugins/tmux/catppuccin.tmux"
+    # Each plugin declared in config/tmux/tmux.conf, by the file TPM executes.
+    for plugin in tmux-sensible/sensible.tmux vim-tmux-navigator/vim-tmux-navigator.tmux \
+        tmux-yank/yank.tmux tmux-fzf/main.tmux tmux-floax/floax.tmux tmux/catppuccin.tmux \
+        tmux-cpu/cpu.tmux tmux-battery/battery.tmux tmux-resurrect/resurrect.tmux \
+        tmux-continuum/continuum.tmux; do
+        check_readable "tmux plugin ${plugin%%/*}" "$tmux_plugins/$plugin"
+    done
     local yazi_dir="${XDG_CONFIG_HOME:-$HOME/.config}/yazi"
     local flavor
     for flavor in $(dotfiles_yazi_flavors "$DOTFILES_DIR/config/yazi/theme.toml"); do
@@ -137,6 +143,8 @@ doctor_main() {
     check_command git git
     check_command zsh zsh
     check_command tmux tmux
+    check_command sesh sesh
+    check_command fastfetch fastfetch
     check_command bat bat batcat
     check_command eza eza
     check_command fzf fzf
@@ -196,7 +204,8 @@ doctor_main() {
     check_link "$DOTFILES_DIR/config/yazi/yazi.toml" "$HOME/.config/yazi/yazi.toml"
     check_link "$DOTFILES_DIR/config/yazi/theme.toml" "$HOME/.config/yazi/theme.toml"
     check_link "$DOTFILES_DIR/config/atuin/config.toml" "$HOME/.config/atuin/config.toml"
-    check_link "$DOTFILES_DIR/config/atuin/themes/catppuccin-macchiato-blue.toml" "$HOME/.config/atuin/themes/catppuccin-macchiato-blue.toml"
+    check_link "$DOTFILES_DIR/config/atuin/themes" "$HOME/.config/atuin/themes"
+    check_link "$DOTFILES_DIR/config/fastfetch/config.jsonc" "$HOME/.config/fastfetch/config.jsonc"
     check_link "$DOTFILES_DIR/config/mise/config.toml" "$HOME/.config/mise/config.toml"
     check_link "$DOTFILES_DIR/config/zsh-abbr" "$HOME/.config/zsh-abbr"
     check_readable "~/.gitconfig for identity (rerun: bash scripts/link_dotfiles.sh)" "$HOME/.gitconfig"

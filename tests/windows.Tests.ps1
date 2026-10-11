@@ -364,7 +364,7 @@ try {
         }
     }
 
-    Invoke-Test 'Managed files include the Windows Terminal fragment, the eza theme and the phase 3 tool configuration' {
+    Invoke-Test 'Managed files include the Windows Terminal fragment, the eza theme and every tool configuration' {
         function Get-DotfilesProfilePaths {
             [ordered]@{ PowerShell = Join-Path $testRoot 'modern/profile.ps1'; WindowsPowerShell = Join-Path $testRoot 'legacy/profile.ps1' }
         }
@@ -373,24 +373,30 @@ try {
         $destinations = @($files | ForEach-Object { $_.Destination })
         Assert-True ($destinations -contains (Join-Path $testRoot 'AppData/Local/Microsoft/Windows Terminal/Fragments/dotfiles/fragment.json')) 'The fragment must land in the Fragments folder under the home directory'
         Assert-True ($destinations -contains (Join-Path $testRoot '.config/eza/theme.yml')) 'The eza theme must be managed'
-        # Git for Windows, lazygit, yazi, atuin and mise all read these from ~/.config.
+        # Git for Windows, lazygit, yazi, atuin, mise and fastfetch all read these from ~/.config.
         foreach ($relative in @('git/config', 'git/ignore', 'git/catppuccin.gitconfig', 'lazygit/config.yml', 'yazi/yazi.toml', 'yazi/theme.toml',
-                'atuin/config.toml', 'atuin/themes/catppuccin-macchiato-blue.toml', 'mise/config.toml')) {
+                'atuin/config.toml', 'atuin/themes/catppuccin-latte-blue.toml', 'atuin/themes/catppuccin-frappe-blue.toml',
+                'atuin/themes/catppuccin-macchiato-blue.toml', 'atuin/themes/catppuccin-mocha-blue.toml', 'mise/config.toml',
+                'fastfetch/config.jsonc')) {
             $expected = Join-Path $testRoot ".config/$relative"
             $match = @($files | Where-Object { $_.Destination -eq $expected })
             Assert-True ($match.Count -eq 1) "$relative must be managed under .config"
             Assert-True ($match[0].Source -eq (Join-Path $repository "config/$relative")) "$relative must come from config/$relative"
         }
         Assert-True (@($destinations | Select-Object -Unique).Count -eq $destinations.Count) 'Destinations must be unique'
+        # atuin selects its theme by file name, so the named theme must be among the managed files.
+        $atuinConfig = [IO.File]::ReadAllText((Join-Path $repository 'config/atuin/config.toml'))
+        Assert-True ($atuinConfig -match '(?m)^name = "([^"]+)"') 'atuin config names a theme'
+        Assert-True ($destinations -contains (Join-Path $testRoot ".config/atuin/themes/$($Matches[1]).toml")) "The atuin theme $($Matches[1]) must be managed"
     }
 
-    Invoke-Test 'The winget list declares every phase 3 tool exactly once' {
+    Invoke-Test 'The winget list declares every tool exactly once' {
         $packages = @(Get-Content -LiteralPath (Join-Path $repository 'packages/winget.txt') |
             ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -notmatch '^#' })
         # winget --exact compares IDs case-sensitively, so the spelling must match the manifests.
         foreach ($id in @('rsteube.Carapace', 'Atuinsh.Atuin', 'jdx.mise', 'dandavison.delta', 'JesseDuffield.lazygit', 'JesseDuffield.Lazydocker',
                 'sxyazi.yazi', 'BurntSushi.ripgrep.MSVC', 'sharkdp.fd', 'bootandy.dust', 'muesli.duf', 'dalance.procs', 'chmln.sd', 'ducaale.xh',
-                'sharkdp.hyperfine', 'charmbracelet.glow', 'tldr-pages.tlrc', 'charmbracelet.gum', 'direnv.direnv')) {
+                'sharkdp.hyperfine', 'charmbracelet.glow', 'tldr-pages.tlrc', 'charmbracelet.gum', 'direnv.direnv', 'Fastfetch-cli.Fastfetch')) {
             Assert-True ($packages -ccontains $id) "winget.txt must declare $id"
         }
         foreach ($package in $packages) { Assert-True ($package -match '^[A-Za-z0-9][A-Za-z0-9.+_-]*$') "Not a bare winget ID: $package" }
@@ -440,7 +446,7 @@ try {
         # probe can tell that the profile evaluated each integration with the expected command line.
         $stubBin = Join-Path $fixture.Directory 'bin'
         New-Item -ItemType Directory -Path $stubBin | Out-Null
-        $integrations = @('mise', 'carapace', 'atuin', 'direnv', 'yazi')
+        $integrations = @('mise', 'carapace', 'atuin', 'direnv', 'yazi', 'fastfetch')
         foreach ($tool in @('eza', 'bat', 'fzf') + $integrations) {
             if ($env:OS -eq 'Windows_NT') {
                 $body = "@echo off`r`n"
@@ -485,6 +491,20 @@ foreach ($call in $expectedCalls) {
     if (-not $calls.Contains($call)) { throw "The profile did not evaluate '$call'. Recorded: $calls" }
 }
 if ($calls -match 'yazi') { throw "yazi must not run while the profile loads. Recorded: $calls" }
+# This probe runs with -NonInteractive and -EncodedCommand, so the greeter stays quiet; the decision itself is checked directly.
+if ($calls -match 'fastfetch') { throw "fastfetch must not run in a non-interactive shell. Recorded: $calls" }
+if (-not (Test-DotfilesGreeting -Arguments @() -HostName 'ConsoleHost')) { throw 'A plain console start must greet' }
+if (-not (Test-DotfilesGreeting -Arguments @('-NoLogo', '-ExecutionPolicy', 'Bypass') -HostName 'ConsoleHost')) { throw 'NoLogo and ExecutionPolicy must still greet' }
+foreach ($quiet in @(@('-NonInteractive'), @('-noni'), @('-Command', 'ls'), @('-c', 'ls'), @('-File', 'x.ps1'), @('-f', 'x.ps1'), @('-EncodedCommand', 'AA=='), @('-e', 'AA=='))) {
+    if (Test-DotfilesGreeting -Arguments $quiet -HostName 'ConsoleHost') { throw "Start arguments $quiet must not greet" }
+}
+if (Test-DotfilesGreeting -Arguments @() -HostName 'Visual Studio Code Host') { throw 'Other hosts must not greet' }
+$env:DOTFILES_FASTFETCH = '0'
+if (Test-DotfilesGreeting -Arguments @() -HostName 'ConsoleHost') { throw 'DOTFILES_FASTFETCH=0 must not greet' }
+$env:DOTFILES_FASTFETCH = $null
+$env:TMUX = 'socket,1,0'
+if (Test-DotfilesGreeting -Arguments @() -HostName 'ConsoleHost') { throw 'tmux panes must not greet' }
+$env:TMUX = $null
 if ($env:DOTFILES_TEST_EXPECTED_FZF) {
     if ($env:FZF_DEFAULT_OPTS -ne $env:DOTFILES_TEST_EXPECTED_FZF) { throw "The local profile did not override FZF_DEFAULT_OPTS: $env:FZF_DEFAULT_OPTS" }
 } elseif (-not $env:FZF_DEFAULT_OPTS.Contains("bg+:$env:DOTFILES_TEST_EXPECTED_BG")) {

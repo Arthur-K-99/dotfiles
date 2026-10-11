@@ -171,10 +171,13 @@ function Get-DotfilesManagedFiles {
         }
     }
     # The profile points LG_CONFIG_FILE, YAZI_CONFIG_HOME and ATUIN_CONFIG_DIR at
-    # these. yazi and atuin write their own files beside them, so the files are
-    # managed one by one rather than their directories.
-    foreach ($relative in @('lazygit/config.yml', 'yazi/yazi.toml', 'yazi/theme.toml',
-            'atuin/config.toml', 'atuin/themes/catppuccin-macchiato-blue.toml')) {
+    # these, and runs fastfetch with --config. yazi and atuin write their own
+    # files beside them, so the files are managed one by one rather than their
+    # directories. Every flavor's atuin theme is vendored; config.toml names one.
+    foreach ($relative in @('lazygit/config.yml', 'yazi/yazi.toml', 'yazi/theme.toml', 'atuin/config.toml',
+            'atuin/themes/catppuccin-latte-blue.toml', 'atuin/themes/catppuccin-frappe-blue.toml',
+            'atuin/themes/catppuccin-macchiato-blue.toml', 'atuin/themes/catppuccin-mocha-blue.toml',
+            'fastfetch/config.jsonc')) {
         [pscustomobject]@{
             Source = Join-Path $DotfilesDir "config/$relative"
             Destination = Join-Path $HomeDirectory ".config/$relative"
@@ -389,7 +392,7 @@ function Invoke-DotfilesLink {
 }
 
 function Get-DotfilesDoctorCommands {
-    @('git', 'pwsh', 'oh-my-posh', 'bat', 'eza', 'fzf', 'zoxide', 'btop', 'nvim', 'gh', 'wt',
+    @('git', 'pwsh', 'oh-my-posh', 'bat', 'eza', 'fzf', 'zoxide', 'btop', 'nvim', 'gh', 'wt', 'fastfetch',
         'carapace', 'atuin', 'mise', 'delta', 'lazygit', 'lazydocker', 'yazi',
         'rg', 'fd', 'dust', 'duf', 'procs', 'sd', 'xh', 'hyperfine', 'glow', 'tldr', 'gum', 'direnv')
 }
