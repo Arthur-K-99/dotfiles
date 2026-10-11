@@ -152,6 +152,11 @@ function Get-DotfilesManagedFiles {
         Source = Join-Path $DotfilesDir 'config/oh-my-posh/config.omp.json'
         Destination = Join-Path $HomeDirectory '.config/oh-my-posh/config.omp.json'
     }
+    # The profile points BAT_CONFIG_PATH at this copy of the shared bat configuration.
+    [pscustomobject]@{
+        Source = Join-Path $DotfilesDir 'config/bat/config'
+        Destination = Join-Path $HomeDirectory '.config/bat/config'
+    }
 }
 
 function Invoke-DotfilesNativeCommand {

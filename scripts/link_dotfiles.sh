@@ -65,6 +65,7 @@ main() {
     link "$DOTFILES_DIR/home/.tmux.conf" "$HOME/.tmux.conf" || return 1
     link "$DOTFILES_DIR/config/eza" "$HOME/.config/eza" || return 1
     link "$DOTFILES_DIR/config/oh-my-posh/config.omp.json" "$HOME/.config/oh-my-posh/config.omp.json" || return 1
+    link "$DOTFILES_DIR/config/bat/config" "$HOME/.config/bat/config" || return 1
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

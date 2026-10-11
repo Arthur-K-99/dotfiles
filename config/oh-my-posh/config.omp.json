@@ -1,11 +1,14 @@
 {
   "$schema": "https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/main/themes/schema.json",
   "palette": {
-    "os": "#ACB0BE",
+    "os": "#A5ADCB",
     "closer": "p:os",
     "pink": "#F5BDE6",
     "lavender": "#B7BDF8",
-    "blue": "#8AADF4"
+    "blue": "#8AADF4",
+    "peach": "#F5A97F",
+    "red": "#ED8796",
+    "yellow": "#EED49F"
   },
   "blocks": [
     {
@@ -26,7 +29,7 @@
         {
           "foreground": "p:pink",
           "options": {
-            "folder_icon": "..\ue5fe..",
+            "folder_icon": "....",
             "home_icon": "~",
             "style": "agnoster_short"
           },
@@ -36,32 +39,70 @@
         },
         {
           "foreground": "p:lavender",
+          "foreground_templates": [
+            "{{ if or (.Working.Changed) (.Staging.Changed) }}p:peach{{ end }}"
+          ],
           "options": {
-            "branch_icon": "\ue725 ",
-            "cherry_pick_icon": "\ue29b ",
-            "commit_icon": "\uf417 ",
-            "fetch_status": false,
+            "branch_icon": " ",
+            "cherry_pick_icon": " ",
+            "commit_icon": " ",
+            "fetch_status": true,
             "fetch_upstream_icon": false,
-            "merge_icon": "\ue727 ",
-            "no_commits_icon": "\uf0c3 ",
-            "rebase_icon": "\ue728 ",
-            "revert_icon": "\uf0e2 ",
-            "tag_icon": "\uf412 "
+            "merge_icon": " ",
+            "no_commits_icon": " ",
+            "rebase_icon": " ",
+            "revert_icon": " ",
+            "tag_icon": " "
           },
-          "template": "{{ .HEAD }} ",
           "style": "plain",
+          "template": "{{ .HEAD }}{{ if .Staging.Changed }}  {{ .Staging.String }}{{ end }}{{ if .Working.Changed }}  {{ .Working.String }}{{ end }}{{ if gt .Behind 0 }} ⇣{{ .Behind }}{{ end }}{{ if gt .Ahead 0 }} ⇡{{ .Ahead }}{{ end }} ",
           "type": "git"
         },
         {
-          "style": "plain",
           "foreground": "p:closer",
-          "template": "\uf105",
+          "foreground_templates": [
+            "{{ if gt .Code 0 }}p:red{{ end }}"
+          ],
+          "style": "plain",
+          "template": "",
           "type": "text"
         }
       ],
       "type": "prompt"
+    },
+    {
+      "segments": [
+        {
+          "foreground": "p:yellow",
+          "options": {
+            "style": "austin",
+            "threshold": 2000
+          },
+          "style": "plain",
+          "template": " {{ .FormattedMs }}",
+          "type": "executiontime"
+        },
+        {
+          "foreground": "p:red",
+          "style": "plain",
+          "template": "  {{ .Code }}",
+          "type": "status"
+        }
+      ],
+      "type": "rprompt"
     }
   ],
+  "transient_prompt": {
+    "foreground": "p:closer",
+    "foreground_templates": [
+      "{{ if gt .Code 0 }}p:red{{ end }}"
+    ],
+    "template": " "
+  },
+  "upgrade": {
+    "auto": false,
+    "notice": false
+  },
   "final_space": true,
   "version": 4
 }

@@ -119,12 +119,47 @@ bootstrap_zoxide() {
     fi
 }
 
+bootstrap_bat_theme() {
+    local bat_command theme_dir theme_file status
+    local theme_name="Catppuccin Macchiato"
+    local theme_url="https://raw.githubusercontent.com/catppuccin/bat/main/themes/Catppuccin%20Macchiato.tmTheme"
+    if command -v bat &>/dev/null; then
+        bat_command=bat
+    elif command -v batcat &>/dev/null; then
+        bat_command=batcat
+    else
+        echo "bat is not installed; install packages first." >&2
+        return 1
+    fi
+    # bat 0.25+ ships the Catppuccin themes; older distribution packages need the file.
+    if "$bat_command" --list-themes 2>/dev/null | grep -q "$theme_name"; then
+        echo "bat theme already available"
+        return 0
+    fi
+    echo "Installing bat theme ($theme_name)..."
+    theme_dir="$("$bat_command" --config-dir)/themes" || return
+    theme_file="$theme_dir/$theme_name.tmTheme"
+    mkdir -p "$theme_dir" || return
+    curl -fsSL -o "$theme_file.part" "$theme_url" || {
+        status=$?
+        rm -f "$theme_file.part"
+        return "$status"
+    }
+    mv "$theme_file.part" "$theme_file" || return
+    "$bat_command" cache --build >/dev/null || return
+    if ! "$bat_command" --list-themes 2>/dev/null | grep -q "$theme_name"; then
+        echo "bat does not list '$theme_name' after rebuilding its cache." >&2
+        return 1
+    fi
+}
+
 bootstrap_tools_main() {
     dotfiles_init_environment || return
     bootstrap_zinit || return
     bootstrap_tmux || return
     bootstrap_oh_my_posh || return
     bootstrap_nvm || return
+    bootstrap_bat_theme || return
 
     if [ "$(uname)" = "Linux" ]; then
         install_eza || return

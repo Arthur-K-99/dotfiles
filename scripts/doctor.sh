@@ -70,6 +70,27 @@ check_readable() {
     fi
 }
 
+check_terminfo() {
+    if infocmp "$1" >/dev/null 2>&1; then
+        ok "$1 terminfo"
+    else
+        fail "$1 terminfo (Linux: sudo apt-get install ncurses-term)"
+    fi
+}
+
+check_bat_theme() {
+    local bat_command
+    for bat_command in bat batcat; do
+        command -v "$bat_command" >/dev/null 2>&1 || continue
+        if "$bat_command" --list-themes 2>/dev/null | grep -q "Catppuccin Macchiato"; then
+            ok "bat theme (Catppuccin Macchiato)"
+        else
+            fail "bat theme Catppuccin Macchiato (rerun: bash scripts/bootstrap_tools.sh)"
+        fi
+        return
+    done
+}
+
 check_plugins() {
     local zinit_base="${XDG_DATA_HOME:-$HOME/.local/share}/zinit"
     local plugin
@@ -106,6 +127,10 @@ doctor_main() {
     check_command oh-my-posh oh-my-posh
     check_nvm_default
 
+    echo "Checking terminal capabilities..."
+    check_terminfo tmux-256color
+    check_bat_theme
+
     if [ "$(uname)" = "Darwin" ]; then
         echo "Checking font..."
         check_macos_font
@@ -118,6 +143,7 @@ doctor_main() {
     check_link "$DOTFILES_DIR/home/.tmux.conf" "$HOME/.tmux.conf"
     check_link "$DOTFILES_DIR/config/eza" "$HOME/.config/eza"
     check_link "$DOTFILES_DIR/config/oh-my-posh/config.omp.json" "$HOME/.config/oh-my-posh/config.omp.json"
+    check_link "$DOTFILES_DIR/config/bat/config" "$HOME/.config/bat/config"
     echo "Checking plugins..."
     check_plugins
 

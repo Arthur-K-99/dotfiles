@@ -16,5 +16,7 @@ fzf
 btop
 neovim
 gh
+# tmux-256color terminfo used by .tmux.conf
+ncurses-term
 
 # Note: eza, zoxide, oh-my-posh are not in apt — installed by scripts/bootstrap_tools.sh
