@@ -678,7 +678,11 @@ exit 0
         Assert-True (@(Get-ChildItem -LiteralPath $fixture.Directory -Filter '*.bak.*' -Force).Count -eq 0) 'No backup is made of .gitconfig'
         if ($canCreateSymlinks) {
             Remove-Item -LiteralPath $gitConfig -Force
-            New-Item -ItemType SymbolicLink -Path $gitConfig -Target (Join-Path $fixture.Directory 'missing-gitconfig') | Out-Null
+            # Windows PowerShell refuses a link to a missing target: create it, link, then remove it.
+            $missingTarget = Join-Path $fixture.Directory 'missing-gitconfig'
+            [IO.File]::WriteAllText($missingTarget, 'temporary target')
+            New-Item -ItemType SymbolicLink -Path $gitConfig -Target $missingTarget | Out-Null
+            Remove-Item -LiteralPath $missingTarget
             Invoke-DotfilesLink $repository $fixture.Directory
             $link = Get-DotfilesPathItem $gitConfig
             Assert-True ($link.LinkType -eq 'SymbolicLink' -and ([string]$link.Target) -match 'missing-gitconfig$') 'A dangling .gitconfig link is left for the user to fix'
