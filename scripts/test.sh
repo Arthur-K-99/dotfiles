@@ -32,6 +32,13 @@ test_main() {
         echo "SKIP: PowerShell checks (pwsh is not installed; Windows CI runs both editions)."
     fi
 
+    if command -v ghostty >/dev/null 2>&1; then
+        echo "Checking Ghostty configuration..."
+        ghostty +validate-config --config-file="$DOTFILES_DIR/config/ghostty/config"
+    else
+        echo "SKIP: Ghostty configuration check (ghostty is not installed)."
+    fi
+
     if command -v oh-my-posh >/dev/null 2>&1; then
         echo "Checking oh-my-posh configuration..."
         oh-my-posh config export --config "$DOTFILES_DIR/config/oh-my-posh/config.omp.json" --format json >/dev/null

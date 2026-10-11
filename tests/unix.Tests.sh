@@ -221,6 +221,45 @@ test_macos_font_install_and_repair() {
     [ -f "$test_dir/font-present" ]
 }
 
+test_macos_app_cask_detection() {
+    source "$TEST_REPO_DIR/scripts/install_packages.sh"
+    parse_list() {
+        case "$1" in
+            */brew-casks.txt) printf 'ghostty\n' ;;
+            *) : ;;
+        esac
+    }
+    dotfiles_macos_app_installed() {
+        assert_equal Ghostty "$1" || exit 1
+        [ -f "$test_dir/app-present" ]
+    }
+    brew() {
+        printf '%s\n' "$*" >> "$test_dir/commands"
+        case "$*" in
+            'list --cask '*) [ -f "$test_dir/registered" ] ;;
+            'install --cask '*|'reinstall --cask '*)
+                : > "$test_dir/registered"
+                : > "$test_dir/app-present"
+                ;;
+        esac
+    }
+    # An app installed by hand satisfies the cask without calling brew.
+    : > "$test_dir/app-present"
+    install_macos
+    [ ! -f "$test_dir/commands" ]
+    rm "$test_dir/app-present"
+    install_macos
+    assert_equal 1 "$(grep -c 'install --cask ghostty' "$test_dir/commands")"
+    [ -f "$test_dir/app-present" ]
+    : > "$test_dir/commands"
+    install_macos
+    assert_equal '' "$(cat "$test_dir/commands")"
+    # A registered cask whose app was removed is repaired, not reinstalled.
+    rm "$test_dir/app-present"
+    install_macos
+    assert_equal 'reinstall --cask ghostty' "$(tail -n 1 "$test_dir/commands")"
+}
+
 test_install_stages_and_failure_reporting() {
     source "$TEST_REPO_DIR/install.sh"
     dotfiles_init_environment() { return 0; }
@@ -565,6 +604,7 @@ run_tests() {
         environment_discovery
         package_index_failure
         macos_font_install_and_repair
+        macos_app_cask_detection
         install_stages_and_failure_reporting
         eza_index_and_download_failures
         tmux_plugin_failure_and_retry

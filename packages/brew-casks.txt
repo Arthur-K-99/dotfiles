@@ -1,2 +1,5 @@
 # Fonts
 font-caskaydia-cove-nerd-font
+
+# Terminal emulator
+ghostty

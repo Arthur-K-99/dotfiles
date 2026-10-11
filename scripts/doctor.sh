@@ -40,6 +40,14 @@ check_macos_font() {
     fi
 }
 
+check_macos_app() {
+    if dotfiles_macos_app_installed "$1"; then
+        ok "$1.app"
+    else
+        fail "$1.app (rerun: bash scripts/install_packages.sh)"
+    fi
+}
+
 check_nvm_default() {
     local default_version
     if [ ! -s "$NVM_DIR/nvm.sh" ]; then
@@ -132,10 +140,12 @@ doctor_main() {
     check_bat_theme
 
     if [ "$(uname)" = "Darwin" ]; then
-        echo "Checking font..."
+        echo "Checking font and terminal emulator..."
         check_macos_font
+        check_macos_app Ghostty
     else
         echo "Nerd Font installation is manual on Linux; select it in your terminal after installation."
+        echo "Ghostty has no Debian package; its configuration is linked for when it is installed."
     fi
 
     echo "Checking managed links..."
@@ -144,6 +154,7 @@ doctor_main() {
     check_link "$DOTFILES_DIR/config/eza" "$HOME/.config/eza"
     check_link "$DOTFILES_DIR/config/oh-my-posh/config.omp.json" "$HOME/.config/oh-my-posh/config.omp.json"
     check_link "$DOTFILES_DIR/config/bat/config" "$HOME/.config/bat/config"
+    check_link "$DOTFILES_DIR/config/ghostty/config" "$HOME/.config/ghostty/config"
     echo "Checking plugins..."
     check_plugins
 

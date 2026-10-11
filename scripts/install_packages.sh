@@ -15,6 +15,9 @@ macos_cask_is_satisfied() {
             compgen -G "$HOME/Library/Fonts/CaskaydiaCove*NerdFont*.ttf" >/dev/null || \
                 compgen -G "$HOME/Library/Fonts/CaskaydiaCove*NerdFont*.otf" >/dev/null
             ;;
+        ghostty)
+            dotfiles_macos_app_installed Ghostty
+            ;;
         *)
             brew list --cask "$package" &>/dev/null
             ;;

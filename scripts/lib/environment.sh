@@ -19,6 +19,12 @@ dotfiles_find_homebrew() {
     return 1
 }
 
+# GUI apps may be installed without Homebrew; the cask then fails with "already
+# an App at /Applications". Installers and the doctor share this detection.
+dotfiles_macos_app_installed() {
+    [ -d "/Applications/$1.app" ] || [ -d "$HOME/Applications/$1.app" ]
+}
+
 dotfiles_init_environment() {
     local brew_path brew_environment
     export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"

@@ -66,6 +66,9 @@ main() {
     link "$DOTFILES_DIR/config/eza" "$HOME/.config/eza" || return 1
     link "$DOTFILES_DIR/config/oh-my-posh/config.omp.json" "$HOME/.config/oh-my-posh/config.omp.json" || return 1
     link "$DOTFILES_DIR/config/bat/config" "$HOME/.config/bat/config" || return 1
+    # The file is linked rather than the directory so machine-local shaders and
+    # themes can live beside it.
+    link "$DOTFILES_DIR/config/ghostty/config" "$HOME/.config/ghostty/config" || return 1
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

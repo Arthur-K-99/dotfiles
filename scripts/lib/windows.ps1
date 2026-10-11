@@ -157,6 +157,18 @@ function Get-DotfilesManagedFiles {
         Source = Join-Path $DotfilesDir 'config/bat/config'
         Destination = Join-Path $HomeDirectory '.config/bat/config'
     }
+    # The profile points EZA_CONFIG_DIR at this directory.
+    [pscustomobject]@{
+        Source = Join-Path $DotfilesDir 'config/eza/theme.yml'
+        Destination = Join-Path $HomeDirectory '.config/eza/theme.yml'
+    }
+    # Windows Terminal merges fragments from %LOCALAPPDATA% at startup, so the
+    # user's settings.json is never rewritten. The path derives from the home
+    # directory, as every destination does, so the tests stay isolated.
+    [pscustomobject]@{
+        Source = Join-Path $DotfilesDir 'config/windows-terminal/fragment.json'
+        Destination = Join-Path $HomeDirectory 'AppData/Local/Microsoft/Windows Terminal/Fragments/dotfiles/fragment.json'
+    }
 }
 
 function Invoke-DotfilesNativeCommand {
@@ -198,6 +210,47 @@ function Invoke-DotfilesFontInstall {
     if (-not (Test-DotfilesNerdFont)) { throw 'CaskaydiaCove Nerd Font was not found after installation. Rerun install.ps1 to retry.' }
 }
 
+# Modules are installed for PowerShell 7, the shell Windows Terminal opens by
+# default. Windows PowerShell has a separate module path, so the profile imports
+# each module only when it is available.
+function Get-DotfilesPowerShellModules {
+    @('Terminal-Icons', 'PSFzf', 'posh-git', 'CompletionPredictor')
+}
+
+function Get-DotfilesPowerShell7 {
+    $shellPath = Get-DotfilesCommandPath 'pwsh.exe'
+    if (-not $shellPath) { throw 'pwsh is unavailable after package installation. Reopen PowerShell and rerun install.ps1 to install the PowerShell modules.' }
+    return $shellPath
+}
+
+function Test-DotfilesPowerShellModule {
+    param([string]$Name)
+    $shellPath = Get-DotfilesPowerShell7
+    $check = "if (Get-Module -ListAvailable -Name '$Name') { exit 0 } else { exit 3 }"
+    $code = Invoke-DotfilesNativeCommand $shellPath @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', $check) -Quiet
+    if ($code -eq 0) { return $true }
+    if ($code -eq 3) { return $false }
+    throw "pwsh could not check the $Name module (exit code $code). Rerun install.ps1 after correcting the error."
+}
+
+function Install-DotfilesPowerShellModule {
+    param([string]$Name)
+    $shellPath = Get-DotfilesPowerShell7
+    $install = "Install-Module -Name '$Name' -Scope CurrentUser -Repository PSGallery -Force -AllowClobber -ErrorAction Stop"
+    $code = Invoke-DotfilesNativeCommand $shellPath @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', $install)
+    if ($code -ne 0) { throw "Install-Module failed for $Name (exit code $code). Rerun install.ps1 to retry." }
+}
+
+function Invoke-DotfilesModuleInstall {
+    Write-Host 'Installing PowerShell modules from the PowerShell Gallery...'
+    foreach ($name in Get-DotfilesPowerShellModules) {
+        if (Test-DotfilesPowerShellModule $name) { Write-Host "  already installed: $name"; continue }
+        Write-Host "  installing: $name"
+        Install-DotfilesPowerShellModule $name
+        if (-not (Test-DotfilesPowerShellModule $name)) { throw "$name was not found after installation. Rerun install.ps1 to retry." }
+    }
+}
+
 function Invoke-DotfilesPackageInstall {
     param([string]$DotfilesDir)
     $wingetCommand = Get-DotfilesCommandPath 'winget'
@@ -229,7 +282,7 @@ function Invoke-DotfilesDoctor {
     param([string]$DotfilesDir, [string]$HomeDirectory)
     $failures = 0
     Write-Host 'Checking commands...'
-    foreach ($name in @('git', 'pwsh', 'oh-my-posh', 'bat', 'fzf', 'zoxide', 'btop', 'nvim', 'gh', 'wt')) {
+    foreach ($name in @('git', 'pwsh', 'oh-my-posh', 'bat', 'eza', 'fzf', 'zoxide', 'btop', 'nvim', 'gh', 'wt')) {
         if (Get-DotfilesCommandPath $name) { Write-Host "  [ok] $name" }
         else { Write-Host "  [missing] $name"; $failures++ }
     }
@@ -239,6 +292,13 @@ function Invoke-DotfilesDoctor {
         foreach ($file in $files) {
             if (Test-DotfilesManagedFile $file.Source $file.Destination) { Write-Host "  [ok] $($file.Destination)" }
             else { Write-Host "  [missing or stale] $($file.Destination)"; $failures++ }
+        }
+    } catch { Write-Host "  [failed] $($_.Exception.Message)"; $failures++ }
+    Write-Host 'Checking PowerShell modules...'
+    try {
+        foreach ($name in Get-DotfilesPowerShellModules) {
+            if (Test-DotfilesPowerShellModule $name) { Write-Host "  [ok] $name" }
+            else { Write-Host "  [missing] $name"; $failures++ }
         }
     } catch { Write-Host "  [failed] $($_.Exception.Message)"; $failures++ }
     if (Test-DotfilesNerdFont) { Write-Host '  [ok] CaskaydiaCove Nerd Font' }
@@ -253,6 +313,9 @@ function Invoke-DotfilesInstall {
     try {
         Write-Host "==> $stage"
         Invoke-DotfilesPackageInstall $DotfilesDir
+        $stage = 'Installing PowerShell modules'
+        Write-Host "==> $stage"
+        Invoke-DotfilesModuleInstall
         $stage = 'Linking dotfiles'
         Write-Host "==> $stage"
         Invoke-DotfilesLink $DotfilesDir $HomeDirectory
@@ -264,5 +327,5 @@ function Invoke-DotfilesInstall {
         throw "$stage failed: $($_.Exception.Message) Completed setup remains in place. Fix the reported issue, then rerun: & '$($entrypoint.Replace("'", "''"))'"
     }
     Write-Host ''
-    Write-Host "Done. Open a new terminal and set its font to 'CaskaydiaCove NF Mono'."
+    Write-Host "Done. Restart Windows Terminal: the Catppuccin fragment sets the font and colors for the PowerShell and Command Prompt profiles."
 }
