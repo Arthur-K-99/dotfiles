@@ -235,8 +235,32 @@ bootstrap_mise_binary() {
     curl -fsSL https://mise.run | MISE_INSTALL_PATH="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}/mise" sh
 }
 
+# Debian and Ubuntu install fd as fdfind. The zsh alias covers the shell, but
+# tmux's run-shell (the sesh picker's ctrl-f) and scripts never see it, so a
+# link named fd goes into the local bin directory when nothing provides fd.
+install_fd_link() {
+    local bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}" fdfind_path
+    if command -v fd &>/dev/null; then
+        echo "fd already available"
+        return 0
+    fi
+    if ! fdfind_path="$(command -v fdfind)"; then
+        echo "fd-find is not installed; install packages first." >&2
+        return 1
+    fi
+    if [ -e "$bin_dir/fd" ] && [ ! -L "$bin_dir/fd" ]; then
+        echo "$bin_dir/fd exists and is not a link; remove it to let the bootstrap link fdfind there." >&2
+        return 1
+    fi
+    echo "Linking fdfind as $bin_dir/fd..."
+    mkdir -p "$bin_dir" || return
+    ln -sf "$fdfind_path" "$bin_dir/fd" || return
+    [ -x "$bin_dir/fd" ] || return 1
+}
+
 install_linux_tools() {
     install_eza || return
+    install_fd_link || return
     install_charm_tools || return
     bootstrap_zoxide || return
     bootstrap_mise_binary || return

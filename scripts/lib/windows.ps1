@@ -318,7 +318,8 @@ function Get-DotfilesYaziFlavors {
     param([string]$HomeDirectory)
     $themeFile = Join-Path $HomeDirectory '.config/yazi/theme.toml'
     if (-not (Test-Path -LiteralPath $themeFile -PathType Leaf)) { throw "The yazi theme file is missing at $themeFile. Rerun install.ps1 so the link stage provides it." }
-    $flavors = @([regex]::Matches([IO.File]::ReadAllText($themeFile), '(?m)^(?:dark|light) = "([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
+    # Latte serves both halves after `scripts/theme.sh latte`, so names are unique.
+    $flavors = @([regex]::Matches([IO.File]::ReadAllText($themeFile), '(?m)^(?:dark|light) = "([^"]+)"[ \t\r]*$') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
     if ($flavors.Count -eq 0) { throw "No flavor is named in $themeFile." }
     return $flavors
 }

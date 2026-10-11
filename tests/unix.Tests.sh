@@ -182,71 +182,74 @@ test_theme_switch_round_trip() {
     (cd "$TEST_REPO_DIR" && tar -cf - config home docs) | tar -xf - -C "$test_dir/repo"
     cp -R "$test_dir/repo" "$test_dir/original"
     DOTFILES_DIR="$test_dir/repo"
-    assert_equal macchiato "$(theme_current)"
+    local repo="$test_dir/repo"
+    local start to other title base blue surface0 file
+    # The repository may record any flavor: the test starts from it, visits
+    # every other one and expects the original bytes back at the end.
+    start="$(theme_current)"
     theme_main --check > "$test_dir/output"
-    theme_main mocha > "$test_dir/output"
-    assert_equal mocha "$(cat "$test_dir/repo/config/catppuccin/flavor")"
-    grep -q "@catppuccin_flavor 'mocha'" "$test_dir/repo/config/tmux/tmux.conf"
-    grep -q -- '--theme="Catppuccin Mocha"' "$test_dir/repo/config/bat/config"
-    grep -q 'theme = light:Catppuccin Latte,dark:Catppuccin Mocha' "$test_dir/repo/config/ghostty/config"
-    grep -q 'features = catppuccin-mocha' "$test_dir/repo/config/git/config"
-    grep -q 'name = "catppuccin-mocha-blue"' "$test_dir/repo/config/atuin/config.toml"
-    grep -q 'dark = "catppuccin-mocha"' "$test_dir/repo/config/yazi/theme.toml"
-    grep -q 'light = "catppuccin-latte"' "$test_dir/repo/config/yazi/theme.toml"
-    grep -q 'vivid generate catppuccin-mocha' "$test_dir/repo/home/.zshrc"
-    grep -q '"name": "Catppuccin Mocha"' "$test_dir/repo/config/windows-terminal/fragment.json"
-    grep -q '"background": "#1E1E2E"' "$test_dir/repo/config/windows-terminal/fragment.json"
-    grep -q '"colorScheme": "Catppuccin Mocha"' "$test_dir/repo/config/windows-terminal/fragment.json"
-    grep -q 'bg:#1e1e2e' "$test_dir/repo/home/.zshrc"
-    grep -q 'bg:#1e1e2e' "$test_dir/repo/config/powershell/profile.ps1"
-    grep -q '48;2;49;50;68' "$test_dir/repo/config/powershell/profile.ps1"
-    grep -q '"blue": "#89B4FA"' "$test_dir/repo/config/oh-my-posh/config.omp.json"
-    grep -q '"keys": "#89b4fa"' "$test_dir/repo/config/fastfetch/config.jsonc"
-    grep -q 'Catppuccin Mocha hex values' "$test_dir/repo/config/fastfetch/config.jsonc"
-    grep -q 'directory: { foreground: "#89B4FA" }' "$test_dir/repo/config/eza/theme.yml"
-    grep -q "activeBorderColor:" "$test_dir/repo/config/lazygit/config.yml"
-    grep -q "'#89b4fa'" "$test_dir/repo/config/lazygit/config.yml"
-    grep -q 'themes-mergable/mocha/blue.yml' "$test_dir/repo/config/lazygit/config.yml"
-    grep -q 'Catppuccin \*\*Mocha\*\*' "$test_dir/repo/docs/theming.md"
-    grep -q '`#89B4FA`' "$test_dir/repo/docs/theming.md"
-    # No Macchiato value survives anywhere the switcher manages, in either case.
-    local file
-    for file in $(theme_hex_files); do
-        if grep -i -q -E '#(24273a|cad3f5|8aadf4|363a4f)' "$test_dir/repo/$file"; then
-            echo "$file still carries Macchiato colors." >&2
-            return 1
-        fi
+    for to in $THEME_FLAVORS; do
+        [ "$to" = "$start" ] && continue
+        theme_main "$to" > "$test_dir/output"
+        title="$(theme_title "$to")"
+        base="$(theme_color "$to" base)"
+        blue="$(theme_color "$to" blue)"
+        surface0="$(theme_color "$to" surface0)"
+        assert_equal "$to" "$(cat "$repo/config/catppuccin/flavor")"
+        grep -q "^set -g @catppuccin_flavor '$to'$" "$repo/config/tmux/tmux.conf"
+        grep -q -- "^--theme=\"Catppuccin $title\"$" "$repo/config/bat/config"
+        grep -q "^theme = light:Catppuccin Latte,dark:Catppuccin $title$" "$repo/config/ghostty/config"
+        grep -q "features = catppuccin-$to$" "$repo/config/git/config"
+        grep -q "^name = \"catppuccin-$to-blue\"$" "$repo/config/atuin/config.toml"
+        grep -q "^dark = \"catppuccin-$to\"$" "$repo/config/yazi/theme.toml"
+        grep -q '^light = "catppuccin-latte"$' "$repo/config/yazi/theme.toml"
+        grep -q "vivid generate catppuccin-$to " "$repo/home/.zshrc"
+        grep -q "\"name\": \"Catppuccin $title\"" "$repo/config/windows-terminal/fragment.json"
+        grep -q "\"background\": \"$(theme_upper "$base")\"" "$repo/config/windows-terminal/fragment.json"
+        grep -q "\"colorScheme\": \"Catppuccin $title\"" "$repo/config/windows-terminal/fragment.json"
+        grep -q "bg:$base" "$repo/home/.zshrc"
+        grep -q "bg:$base" "$repo/config/powershell/profile.ps1"
+        grep -q "48;2;$(theme_rgb "$surface0")" "$repo/config/powershell/profile.ps1"
+        grep -q "\"blue\": \"$(theme_upper "$blue")\"" "$repo/config/oh-my-posh/config.omp.json"
+        grep -q "directory: { foreground: \"$(theme_upper "$blue")\" }" "$repo/config/eza/theme.yml"
+        grep -q "'$blue'" "$repo/config/lazygit/config.yml"
+        grep -q "themes-mergable/$to/blue.yml" "$repo/config/lazygit/config.yml"
+        grep -q "\"keys\": \"$blue\"" "$repo/config/fastfetch/config.jsonc"
+        grep -q "Catppuccin $title hex values" "$repo/config/fastfetch/config.jsonc"
+        grep -q "Catppuccin \*\*$title\*\*" "$repo/docs/theming.md"
+        grep -q "\`$(theme_upper "$blue")\`" "$repo/docs/theming.md"
+        # No value of the starting flavor survives anywhere the switcher manages.
+        for file in $(theme_hex_files); do
+            if grep -i -q -E "#($(theme_hex_pattern "$start"))" "$repo/$file"; then
+                echo "$file still carries $start colors after switching to $to." >&2
+                return 1
+            fi
+        done
+        theme_main --check > "$test_dir/output"
+        assert_contains "$(cat "$test_dir/output")" "agrees on $to"
     done
-    theme_main --check > "$test_dir/output"
-    assert_contains "$(cat "$test_dir/output")" 'agrees on mocha'
-    # Latte is also the light-mode flavor: Ghostty and yazi keep it there.
-    theme_main latte > "$test_dir/output"
-    grep -q 'theme = light:Catppuccin Latte,dark:Catppuccin Latte' "$test_dir/repo/config/ghostty/config"
-    grep -q 'light = "catppuccin-latte"' "$test_dir/repo/config/yazi/theme.toml"
-    grep -q 'dark = "catppuccin-latte"' "$test_dir/repo/config/yazi/theme.toml"
-    grep -q '"background": "#EFF1F5"' "$test_dir/repo/config/windows-terminal/fragment.json"
-    theme_main mocha > "$test_dir/output"
-    grep -q 'theme = light:Catppuccin Latte,dark:Catppuccin Mocha' "$test_dir/repo/config/ghostty/config"
-    grep -q 'light = "catppuccin-latte"' "$test_dir/repo/config/yazi/theme.toml"
     # Switching back restores every byte.
-    theme_main macchiato > "$test_dir/output"
-    diff -r "$test_dir/original" "$test_dir/repo"
+    theme_main "$start" > "$test_dir/output"
+    diff -r "$test_dir/original" "$repo"
     # Unknown flavors are refused and an inconsistent tree fails the check.
     local status=0
     theme_main mint > "$test_dir/output" 2>&1 || status=$?
     assert_equal 2 "$status"
-    diff -r "$test_dir/original" "$test_dir/repo"
-    printf 'mocha\n' > "$test_dir/repo/config/catppuccin/flavor"
+    diff -r "$test_dir/original" "$repo"
+    other=mocha
+    [ "$start" != mocha ] || other=macchiato
+    printf '%s\n' "$other" > "$repo/config/catppuccin/flavor"
     status=0
     theme_main --check > "$test_dir/output" 2>&1 || status=$?
     assert_equal 1 "$status"
     assert_contains "$(cat "$test_dir/output")" "does not contain"
-    printf 'macchiato\n' > "$test_dir/repo/config/catppuccin/flavor"
-    sed -e 's/#8AADF4/#89B4FA/' "$test_dir/original/config/eza/theme.yml" > "$test_dir/repo/config/eza/theme.yml"
+    printf '%s\n' "$start" > "$repo/config/catppuccin/flavor"
+    sed -e "s/$(theme_upper "$(theme_color "$start" blue | cut -c2-)")/$(theme_upper "$(theme_color "$other" blue | cut -c2-)")/" \
+        "$test_dir/original/config/eza/theme.yml" > "$repo/config/eza/theme.yml"
     status=0
     theme_main --check > "$test_dir/output" 2>&1 || status=$?
     assert_equal 1 "$status"
-    assert_contains "$(cat "$test_dir/output")" 'still carries a mocha color'
+    assert_contains "$(cat "$test_dir/output")" "still carries a $other color"
 }
 
 test_link_failed_replacement() {
@@ -675,6 +678,40 @@ test_github_release_install() {
     assert_contains "$(cat "$test_dir/output")" 'Unsupported architecture: mips'
 }
 
+test_fd_link_for_debian() {
+    source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    export DOTFILES_LOCAL_BIN="$test_dir/bin"
+    printf '#!/bin/sh\necho fdfind\n' > "$test_dir/fdfind"
+    chmod +x "$test_dir/fdfind"
+    command() {
+        case "$*" in
+            '-v fd') [ -f "$DOTFILES_TEST_FIXTURE/fd-present" ] ;;
+            '-v fdfind') [ -f "$DOTFILES_TEST_FIXTURE/fdfind-present" ] && printf '%s/fdfind\n' "$DOTFILES_TEST_FIXTURE" ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    local status=0
+    install_fd_link > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'fd-find is not installed'
+    : > "$test_dir/fdfind-present"
+    install_fd_link
+    assert_equal "$test_dir/fdfind" "$(readlink "$test_dir/bin/fd")"
+    assert_equal fdfind "$("$test_dir/bin/fd")"
+    install_fd_link
+    # A real file in the way is reported rather than replaced, and a present fd needs nothing.
+    rm "$test_dir/bin/fd"
+    printf 'user script\n' > "$test_dir/bin/fd"
+    status=0
+    install_fd_link > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_equal 'user script' "$(cat "$test_dir/bin/fd")"
+    : > "$test_dir/fd-present"
+    install_fd_link
+    assert_equal 'user script' "$(cat "$test_dir/bin/fd")"
+}
+
 test_mise_bootstrap_and_runtimes() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
     export DOTFILES_TEST_FIXTURE="$test_dir"
@@ -781,12 +818,18 @@ test_yazi_flavors_install_and_retry() {
     [ ! -d "$XDG_CONFIG_HOME/yazi/flavors" ]
     : > "$test_dir/retry"
     bootstrap_yazi_flavors
-    # The flavors come from config/yazi/theme.toml: the dark one, then the light one.
-    local dark light
-    read -r dark light <<<"$(dotfiles_yazi_flavors "$TEST_REPO_DIR/config/yazi/theme.toml" | tr '\n' ' ')"
+    # The flavors come from config/yazi/theme.toml: the dark one, then the
+    # light one, which is Latte; a Latte tree names it once.
+    local flavors dark light expected flavor
+    flavors="$(dotfiles_yazi_flavors "$TEST_REPO_DIR/config/yazi/theme.toml")"
+    dark="$(printf '%s\n' "$flavors" | head -n 1)"
+    light="$(printf '%s\n' "$flavors" | tail -n 1)"
     assert_equal catppuccin-latte "$light"
-    assert_equal "pkg add yazi-rs/flavors:$dark
-pkg add yazi-rs/flavors:$light" "$(tail -n 2 "$test_dir/commands")"
+    assert_equal "$(printf '%s\n' "$flavors" | sort -u | wc -l | tr -d ' ')" "$(printf '%s\n' "$flavors" | wc -l | tr -d ' ')"
+    expected=""
+    for flavor in $flavors; do expected="${expected:+$expected
+}pkg add yazi-rs/flavors:$flavor"; done
+    assert_equal "$expected" "$(tail -n "$(printf '%s\n' "$flavors" | wc -l | tr -d ' ')" "$test_dir/commands")"
     [ -f "$XDG_CONFIG_HOME/yazi/flavors/$light.yazi/flavor.toml" ]
     : > "$test_dir/commands"
     bootstrap_yazi_flavors
@@ -815,7 +858,8 @@ test_doctor_rejects_stale_configuration() {
     assert_equal 3 "$failures"
     # A file at a retired location is reported whatever it is; its absence passes.
     failures=0
-    check_absent "legacy file" "$test_dir/wrong"
+    check_absent "legacy file" "$test_dir/wrong" > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" '[stale] legacy file'
     check_absent "legacy file" "$test_dir/broken"
     check_absent "legacy file" "$test_dir/absent"
     assert_equal 2 "$failures"
@@ -1107,6 +1151,7 @@ run_tests() {
         install_stages_and_failure_reporting
         eza_index_and_download_failures
         github_release_install
+        fd_link_for_debian
         mise_bootstrap_and_runtimes
         yazi_flavors_install_and_retry
         tmux_plugin_failure_and_retry

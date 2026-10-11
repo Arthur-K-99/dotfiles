@@ -7,6 +7,7 @@ failures=0
 
 ok() { printf '  [ok] %s\n' "$1"; }
 fail() { printf '  [missing] %s\n' "$1"; failures=$((failures + 1)); }
+stale() { printf '  [stale] %s\n' "$1"; failures=$((failures + 1)); }
 
 check_command() {
     local label="$1"
@@ -74,7 +75,7 @@ check_readable() {
 # managed one.
 check_absent() {
     if [ -e "$2" ] || [ -L "$2" ]; then
-        fail "$1"
+        stale "$1"
     else
         ok "no $2"
     fi
@@ -125,7 +126,10 @@ check_plugins() {
         tmux-yank/yank.tmux tmux-fzf/main.tmux tmux-floax/floax.tmux tmux/catppuccin.tmux \
         tmux-cpu/cpu.tmux tmux-battery/battery.tmux tmux-resurrect/resurrect.tmux \
         tmux-continuum/continuum.tmux; do
-        check_readable "tmux plugin ${plugin%%/*}" "$tmux_plugins/$plugin"
+        case "$plugin" in
+            tmux/*) check_readable "Catppuccin tmux theme" "$tmux_plugins/$plugin" ;;
+            *) check_readable "tmux plugin ${plugin%%/*}" "$tmux_plugins/$plugin" ;;
+        esac
     done
     local yazi_dir="${XDG_CONFIG_HOME:-$HOME/.config}/yazi"
     local flavor

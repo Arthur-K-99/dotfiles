@@ -587,10 +587,11 @@ exit 0
             New-Item -ItemType Directory -Path (Split-Path -Parent $file.Destination) -Force | Out-Null
             Copy-Item -LiteralPath $file.Source -Destination $file.Destination
         }
+        # theme.toml names a dark flavor and Latte for light mode; a Latte tree names it once.
         $yaziFlavors = @(Get-DotfilesYaziFlavors $fixture.Directory)
-        Assert-True ($yaziFlavors.Count -eq 2 -and $yaziFlavors[1] -eq 'catppuccin-latte') 'theme.toml names a dark flavor and Latte'
-        $latteFlavor = Get-DotfilesYaziFlavorFile $fixture.Directory $yaziFlavors[1]
-        foreach ($flavorFile in @((Get-DotfilesYaziFlavorFile $fixture.Directory $yaziFlavors[0]), $latteFlavor)) {
+        Assert-True ($yaziFlavors.Count -in @(1, 2) -and $yaziFlavors[-1] -eq 'catppuccin-latte') "theme.toml names the flavors once each: $yaziFlavors"
+        $latteFlavor = Get-DotfilesYaziFlavorFile $fixture.Directory $yaziFlavors[-1]
+        foreach ($flavorFile in @($yaziFlavors | ForEach-Object { Get-DotfilesYaziFlavorFile $fixture.Directory $_ })) {
             New-Item -ItemType Directory -Path (Split-Path -Parent $flavorFile) -Force | Out-Null
             [IO.File]::WriteAllText($flavorFile, '# flavor')
         }
@@ -599,7 +600,7 @@ exit 0
             Assert-True ($report -contains "  [ok] $name") "The doctor must check the $name command"
         }
         Assert-True ($report -contains '  [ok] Node.js via mise') 'A runtime mise can locate passes'
-        Assert-True (($report -contains "  [ok] yazi flavor $($yaziFlavors[0])") -and ($report -contains "  [ok] yazi flavor $($yaziFlavors[1])")) 'Installed yazi flavors pass'
+        foreach ($flavor in $yaziFlavors) { Assert-True ($report -contains "  [ok] yazi flavor $flavor") "Installed yazi flavor $flavor passes" }
         foreach ($file in $files) {
             [IO.File]::WriteAllText($file.Destination, 'stale configuration')
             Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } 'check\(s\) need attention'
@@ -638,8 +639,12 @@ exit 0
         # The link stage has put theme.toml in place by the time runtimes install.
         New-Item -ItemType Directory -Path $yaziConfig -Force | Out-Null
         Copy-Item -LiteralPath (Join-Path $repository 'config/yazi/theme.toml') -Destination (Join-Path $yaziConfig 'theme.toml')
-        $darkFlavor, $lightFlavor = Get-DotfilesYaziFlavors $fixture.Directory
-        Assert-True ($lightFlavor -eq 'catppuccin-latte' -and $darkFlavor -match '^catppuccin-[a-z]+$') "theme.toml names the flavors: $darkFlavor, $lightFlavor"
+        $yaziFlavors = @(Get-DotfilesYaziFlavors $fixture.Directory)
+        $darkFlavor = $yaziFlavors[0]
+        Assert-True ($yaziFlavors[-1] -eq 'catppuccin-latte' -and $darkFlavor -match '^catppuccin-[a-z]+$') "theme.toml names the flavors: $yaziFlavors"
+        $expectedAdds = @($yaziFlavors | ForEach-Object { "mock-ya pkg add yazi-rs/flavors:$_" }) -join "`n"
+        # package.toml declares the dark flavor; the remaining ones are still added.
+        $expectedAfterDeclared = @(@('mock-ya pkg install') + @($yaziFlavors | Where-Object { $_ -ne $darkFlavor } | ForEach-Object { "mock-ya pkg add yazi-rs/flavors:$_" })) -join "`n"
         $runtimeState = @{ MiseExitCode = 1; YaExitCode = 0; YaInstalls = $true; Calls = [Collections.Generic.List[string]]::new(); ConfigHomes = [Collections.Generic.List[string]]::new() }
         function Get-DotfilesCommandPath { param($Name) if ($Name -in @('mise', 'ya')) { "mock-$Name" } }
         function Invoke-DotfilesNativeCommand {
@@ -677,7 +682,7 @@ exit 0
             $runtimeState.YaInstalls = $true
             $runtimeState.Calls.Clear()
             Invoke-DotfilesRuntimeInstall $fixture.Directory
-            Assert-True (($runtimeState.Calls -join "`n") -eq "mock-mise install --yes`nmock-ya pkg add yazi-rs/flavors:$darkFlavor`nmock-ya pkg add yazi-rs/flavors:$lightFlavor") "The retry adds every missing flavor: $($runtimeState.Calls -join ' | ')"
+            Assert-True (($runtimeState.Calls -join "`n") -eq "mock-mise install --yes`n$expectedAdds") "The retry adds every missing flavor: $($runtimeState.Calls -join ' | ')"
             Assert-True (@($runtimeState.ConfigHomes | Where-Object { $_ -ne $yaziConfig }).Count -eq 0) 'ya must see the yazi configuration under the home directory'
             Assert-True ($env:YAZI_CONFIG_HOME -eq 'previous value') 'YAZI_CONFIG_HOME is restored after success'
             $runtimeState.Calls.Clear()
@@ -692,7 +697,7 @@ exit 0
             [IO.File]::WriteAllText((Join-Path $yaziConfig 'package.toml'), "[[flavor.deps]]`nuse = `"yazi-rs/flavors:$darkFlavor`"`n")
             $runtimeState.Calls.Clear()
             Invoke-DotfilesRuntimeInstall $fixture.Directory
-            Assert-True (($runtimeState.Calls -join "`n") -eq "mock-mise install --yes`nmock-ya pkg install`nmock-ya pkg add yazi-rs/flavors:$lightFlavor") "Declared flavors come from package.toml: $($runtimeState.Calls -join ' | ')"
+            Assert-True (($runtimeState.Calls -join "`n") -eq "mock-mise install --yes`n$expectedAfterDeclared") "Declared flavors come from package.toml: $($runtimeState.Calls -join ' | ')"
             # ya is needed only while a flavor is missing.
             function Get-DotfilesCommandPath { param($Name) if ($Name -eq 'mise') { 'mock-mise' } }
             Invoke-DotfilesRuntimeInstall $fixture.Directory

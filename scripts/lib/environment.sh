@@ -46,7 +46,8 @@ dotfiles_bat_theme() {
     sed -n 's/^--theme="\(.*\)"$/\1/p' "$1" | head -n 1
 }
 
-# dotfiles_yazi_flavors <theme.toml>: the dark and light flavor packages.
+# dotfiles_yazi_flavors <theme.toml>: the dark and light flavor packages, once
+# each (Latte serves both halves after `scripts/theme.sh latte`).
 dotfiles_yazi_flavors() {
-    sed -E -n 's/^(dark|light) = "([^"]*)"$/\2/p' "$1"
+    sed -E -n 's/^(dark|light) = "([^"]*)"[[:space:]]*$/\2/p' "$1" | awk '!seen[$0]++'
 }

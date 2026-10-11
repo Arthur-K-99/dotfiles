@@ -18,8 +18,9 @@ neovim
 gh
 # tmux-256color terminfo used by the tmux configuration
 ncurses-term
-# tmux-yank copies to the X clipboard with xsel (wl-copy from wl-clipboard on
-# Wayland; clip.exe is found under WSL)
+# tmux-yank copies through wl-copy on Wayland and xsel on X11 (clip.exe is
+# found under WSL)
+wl-clipboard
 xsel
 
 # Phase 3 tools that Debian 12 and Ubuntu 24.04 package. fd installs as
