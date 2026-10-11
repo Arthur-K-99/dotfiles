@@ -1,0 +1,7 @@
+# bat (https://github.com/sharkdp/bat). Linked to ~/.config/bat/config on
+# macOS, Linux and WSL; selected through BAT_CONFIG_PATH on Windows.
+# The theme ships with bat 0.25+; scripts/bootstrap_tools.sh installs it
+# for older distribution packages.
+--theme="Catppuccin Macchiato"
+--style="numbers,changes,header"
+--italic-text=always

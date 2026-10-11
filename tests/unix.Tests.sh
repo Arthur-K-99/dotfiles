@@ -408,11 +408,61 @@ NVM
     assert_equal 0 "$failures"
 }
 
-test_zsh_portable_overrides() {
-    local zsh_binary
-    zsh_binary="$(command -v zsh)"
-    mkdir -p "$test_dir/fixture" "$test_dir/nvm" "$test_dir/zdot" "$test_dir/data"
-    printf 'export DOTFILES_TEST_NVM_LOADED=yes\n' > "$test_dir/nvm/nvm.sh"
+test_bat_theme_install_and_skip() {
+    source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    command() {
+        case "$*" in
+            '-v bat') return 0 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    bat() {
+        case "$*" in
+            '--list-themes')
+                printf 'Dracula\n'
+                if [ -f "$DOTFILES_TEST_FIXTURE/theme-built" ]; then
+                    printf 'Catppuccin Macchiato\n'
+                fi
+                ;;
+            '--config-dir') printf '%s/bat-config\n' "$DOTFILES_TEST_FIXTURE" ;;
+            'cache --build')
+                [ -f "$DOTFILES_TEST_FIXTURE/bat-config/themes/Catppuccin Macchiato.tmTheme" ] || return 50
+                : > "$DOTFILES_TEST_FIXTURE/theme-built"
+                ;;
+        esac
+    }
+    curl() {
+        local output=""
+        printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        [ -f "$DOTFILES_TEST_FIXTURE/retry" ] || return 51
+        while [ "$#" -gt 0 ]; do
+            if [ "$1" = -o ]; then
+                output="$2"
+                shift
+            fi
+            shift
+        done
+        printf '<plist/>\n' > "$output"
+    }
+    : > "$test_dir/theme-built"
+    bootstrap_bat_theme
+    [ ! -f "$test_dir/commands" ]
+    rm "$test_dir/theme-built"
+    local status=0
+    bootstrap_bat_theme > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 51 "$status"
+    assert_equal 0 "$(find "$test_dir/bat-config" -name '*.tmTheme*' | wc -l | tr -d ' ')"
+    : > "$test_dir/retry"
+    bootstrap_bat_theme
+    [ -f "$test_dir/bat-config/themes/Catppuccin Macchiato.tmTheme" ]
+    [ -f "$test_dir/theme-built" ]
+    : > "$test_dir/commands"
+    bootstrap_bat_theme
+    assert_equal '' "$(cat "$test_dir/commands")"
+}
+
+render_portable_profile() {
     # Redirect only filesystem references in a copy of the actual profile. HOME is
     # never reassigned, and the test cannot source the user's local configuration.
     awk '{
@@ -422,7 +472,56 @@ test_zsh_portable_overrides() {
         gsub(/\/opt\/homebrew\/bin\/brew/, "${DOTFILES_TEST_HOME}/brew-arm")
         gsub(/\/usr\/local\/bin\/brew/, "${DOTFILES_TEST_HOME}/brew-intel")
         print
-    }' "$TEST_REPO_DIR/home/.zshrc" > "$test_dir/profile.zsh"
+    }' "$TEST_REPO_DIR/home/.zshrc" > "$1"
+}
+
+test_zsh_nvm_lazy_load() {
+    local zsh_binary
+    zsh_binary="$(command -v zsh)"
+    mkdir -p "$test_dir/fixture" "$test_dir/nvm/alias/lts" "$test_dir/nvm/versions/node/v24.0.0/bin" \
+        "$test_dir/zdot" "$test_dir/data"
+    printf 'lts/*\n' > "$test_dir/nvm/alias/default"
+    printf 'lts/krypton\n' > "$test_dir/nvm/alias/lts/*"
+    printf 'v24.0.0\n' > "$test_dir/nvm/alias/lts/krypton"
+    cat > "$test_dir/nvm/nvm.sh" <<'NVM'
+export DOTFILES_TEST_NVM_LOADED=yes
+nvm() { printf 'real nvm %s\n' "$*" > "$DOTFILES_TEST_FIXTURE/nvm-call"; }
+NVM
+    render_portable_profile "$test_dir/profile.zsh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    # A resolvable default: Node is on PATH at once and nvm itself loads on first use.
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        NVM_DIR="$test_dir/nvm" XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" PATH=/usr/bin:/bin \
+        "$zsh_binary" -df -c '
+            autoload() { :; }
+            compinit() { :; }
+            source "$DOTFILES_TEST_PROFILE" || exit 1
+            [[ "$path[1]" == "$NVM_DIR/versions/node/v24.0.0/bin" ]] || { print "unexpected PATH head: $path[1]"; exit 1; }
+            [[ -z "$DOTFILES_TEST_NVM_LOADED" ]] || { print "nvm was loaded eagerly"; exit 1; }
+            [[ "$(whence -w nvm)" == "nvm: function" ]] || { print "nvm wrapper is missing"; exit 1; }
+            nvm ls --no-colors
+            [[ "$DOTFILES_TEST_NVM_LOADED" == yes ]] || { print "nvm did not load on first use"; exit 1; }
+        '
+    assert_equal 'real nvm ls --no-colors' "$(cat "$test_dir/nvm-call")"
+    # An unresolvable default (a partial version) loads nvm immediately instead.
+    printf '24\n' > "$test_dir/nvm/alias/default"
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        NVM_DIR="$test_dir/nvm" XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" PATH=/usr/bin:/bin \
+        "$zsh_binary" -df -c '
+            autoload() { :; }
+            compinit() { :; }
+            source "$DOTFILES_TEST_PROFILE" || exit 1
+            [[ "$DOTFILES_TEST_NVM_LOADED" == yes ]] || { print "nvm was not loaded for an unresolved alias"; exit 1; }
+            [[ "$path[1]" != "$NVM_DIR/versions/node/v24.0.0/bin" ]] || { print "unresolved alias still changed PATH"; exit 1; }
+        '
+}
+
+test_zsh_portable_overrides() {
+    local zsh_binary
+    zsh_binary="$(command -v zsh)"
+    mkdir -p "$test_dir/fixture" "$test_dir/nvm" "$test_dir/zdot" "$test_dir/data"
+    printf 'export DOTFILES_TEST_NVM_LOADED=yes\n' > "$test_dir/nvm/nvm.sh"
+    render_portable_profile "$test_dir/profile.zsh"
     DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
         NVM_DIR="$test_dir/nvm" XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" \
         SSH_AUTH_SOCK="$test_dir/original-agent" PATH=/usr/bin:/bin \
@@ -470,12 +569,13 @@ run_tests() {
         eza_index_and_download_failures
         tmux_plugin_failure_and_retry
         nvm_custom_directory_and_retry
+        bat_theme_install_and_skip
         doctor_rejects_stale_configuration
     )
     if command -v zsh >/dev/null 2>&1; then
-        tests+=(zinit_plugin_failure_and_retry zsh_portable_overrides)
+        tests+=(zinit_plugin_failure_and_retry zsh_nvm_lazy_load zsh_portable_overrides)
     else
-        echo "  SKIP zinit_plugin_failure_and_retry and zsh_portable_overrides (zsh is not installed)."
+        echo "  SKIP zinit_plugin_failure_and_retry, zsh_nvm_lazy_load and zsh_portable_overrides (zsh is not installed)."
     fi
     for test_name in "${tests[@]}"; do
         # A separate shell keeps errexit active inside each case and isolates mocks.
