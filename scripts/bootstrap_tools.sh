@@ -27,7 +27,9 @@ bootstrap_zinit() {
 }
 
 bootstrap_tmux() (
-    local tpm_dir="${1:-$HOME/.tmux/plugins/tpm}"
+    # TPM installs plugins beside itself. With the configuration at
+    # ~/.config/tmux/tmux.conf, TPM itself defaults to this directory.
+    local tpm_dir="${1:-${XDG_CONFIG_HOME:-$HOME/.config}/tmux/plugins/tpm}"
     local work_dir socket_path
     if [ ! -x "$tpm_dir/bin/install_plugins" ]; then
         echo "Installing TPM..."
@@ -45,7 +47,7 @@ bootstrap_tmux() (
     # TPM prefers an XDG config over ~/.tmux.conf. Point its read-only config
     # lookup at this repository so an unrelated user config cannot change it.
     mkdir -p "$work_dir/config/tmux" || return
-    ln -s "$DOTFILES_DIR/home/.tmux.conf" "$work_dir/config/tmux/tmux.conf" || return
+    ln -s "$DOTFILES_DIR/config/tmux/tmux.conf" "$work_dir/config/tmux/tmux.conf" || return
     tmux -S "$socket_path" -f /dev/null start-server \; \
         set-option -g exit-empty off \; \
         set-environment -g TMUX_PLUGIN_MANAGER_PATH "$(dirname "$tpm_dir")/" || return
@@ -72,9 +74,13 @@ bootstrap_zoxide() {
 }
 
 bootstrap_bat_theme() {
-    local bat_command theme_dir theme_file status
-    local theme_name="Catppuccin Macchiato"
-    local theme_url="https://raw.githubusercontent.com/catppuccin/bat/main/themes/Catppuccin%20Macchiato.tmTheme"
+    local bat_command theme_dir theme_file status theme_name theme_url
+    theme_name="$(dotfiles_bat_theme "$DOTFILES_DIR/config/bat/config")"
+    if [ -z "$theme_name" ]; then
+        echo "config/bat/config names no --theme." >&2
+        return 1
+    fi
+    theme_url="https://raw.githubusercontent.com/catppuccin/bat/main/themes/${theme_name// /%20}.tmTheme"
     if command -v bat &>/dev/null; then
         bat_command=bat
     elif command -v batcat &>/dev/null; then
@@ -83,7 +89,7 @@ bootstrap_bat_theme() {
         echo "bat is not installed; install packages first." >&2
         return 1
     fi
-    # bat 0.25+ ships the Catppuccin themes; older distribution packages need the file.
+    # bat 0.26+ ships the Catppuccin themes; older distribution packages need the file.
     if "$bat_command" --list-themes 2>/dev/null | grep -q "$theme_name"; then
         echo "bat theme already available"
         return 0
@@ -144,12 +150,13 @@ install_charm_tools() {
         "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" glow gum
 }
 
-# Projects spell architectures differently. Prints three words: {arch}
-# (x86_64|aarch64), {arch_go} (x86_64|arm64) and {arch_deb} (amd64|arm64).
+# Projects spell architectures differently. Prints four words: {arch}
+# (x86_64|aarch64), {arch_go} (x86_64|arm64), {arch_deb} (amd64|arm64) and
+# {arch_amd64} (amd64|aarch64).
 dotfiles_arch() {
     case "$(uname -m)" in
-        x86_64|amd64) printf 'x86_64 x86_64 amd64\n' ;;
-        aarch64|arm64) printf 'aarch64 arm64 arm64\n' ;;
+        x86_64|amd64) printf 'x86_64 x86_64 amd64 amd64\n' ;;
+        aarch64|arm64) printf 'aarch64 arm64 arm64 aarch64\n' ;;
         *) echo "Unsupported architecture: $(uname -m)" >&2; return 1 ;;
     esac
 }
@@ -169,11 +176,11 @@ github_latest_tag() {
 # Downloads the latest release asset, extracts it (.tar.gz, .tgz, .tar.xz,
 # .zip, or a bare executable) and installs every named binary found inside.
 # Templates may use {tag}, {version} (the tag without a leading v), {arch},
-# {arch_go} and {arch_deb}. Already-present binaries are skipped.
+# {arch_go}, {arch_deb} and {arch_amd64}. Already-present binaries are skipped.
 install_github_release() (
     local repo="$1" template="$2"
     shift 2
-    local binary tag version arch_words arch arch_go arch_deb asset url work extract found bin_dir
+    local binary tag version arch_words arch arch_go arch_deb arch_amd64 asset url work extract found bin_dir
     local missing=()
     for binary in "$@"; do
         command -v "$binary" &>/dev/null || missing+=("$binary")
@@ -186,12 +193,13 @@ install_github_release() (
     tag="$(github_latest_tag "$repo")" || return
     version="${tag#v}"
     arch_words="$(dotfiles_arch)" || return
-    read -r arch arch_go arch_deb <<<"$arch_words"
+    read -r arch arch_go arch_deb arch_amd64 <<<"$arch_words"
     asset="${template//\{tag\}/$tag}"
     asset="${asset//\{version\}/$version}"
     asset="${asset//\{arch\}/$arch}"
     asset="${asset//\{arch_go\}/$arch_go}"
     asset="${asset//\{arch_deb\}/$arch_deb}"
+    asset="${asset//\{arch_amd64\}/$arch_amd64}"
     url="https://github.com/$repo/releases/download/$tag/$asset"
     work="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-release.XXXXXX")" || return
     trap 'rm -rf "$work"' EXIT
@@ -227,8 +235,32 @@ bootstrap_mise_binary() {
     curl -fsSL https://mise.run | MISE_INSTALL_PATH="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}/mise" sh
 }
 
+# Debian and Ubuntu install fd as fdfind. The zsh alias covers the shell, but
+# tmux's run-shell (the sesh picker's ctrl-f) and scripts never see it, so a
+# link named fd goes into the local bin directory when nothing provides fd.
+install_fd_link() {
+    local bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}" fdfind_path
+    if command -v fd &>/dev/null; then
+        echo "fd already available"
+        return 0
+    fi
+    if ! fdfind_path="$(command -v fdfind)"; then
+        echo "fd-find is not installed; install packages first." >&2
+        return 1
+    fi
+    if [ -e "$bin_dir/fd" ] && [ ! -L "$bin_dir/fd" ]; then
+        echo "$bin_dir/fd exists and is not a link; remove it to let the bootstrap link fdfind there." >&2
+        return 1
+    fi
+    echo "Linking fdfind as $bin_dir/fd..."
+    mkdir -p "$bin_dir" || return
+    ln -sf "$fdfind_path" "$bin_dir/fd" || return
+    [ -x "$bin_dir/fd" ] || return 1
+}
+
 install_linux_tools() {
     install_eza || return
+    install_fd_link || return
     install_charm_tools || return
     bootstrap_zoxide || return
     bootstrap_mise_binary || return
@@ -244,6 +276,10 @@ install_linux_tools() {
     install_github_release dalance/procs 'procs-{tag}-{arch}-linux.zip' procs || return
     install_github_release ducaale/xh 'xh-{tag}-{arch}-unknown-linux-musl.tar.gz' xh || return
     install_github_release tldr-pages/tlrc 'tlrc-{tag}-{arch}-unknown-linux-musl.tar.gz' tldr || return
+    install_github_release joshmedeski/sesh 'sesh_Linux_{arch_go}.tar.gz' sesh || return
+    # The polyfilled build runs on glibc 2.17+, so Debian 12 is covered; the
+    # archive holds usr/bin/fastfetch under a top-level directory.
+    install_github_release fastfetch-cli/fastfetch 'fastfetch-linux-{arch_amd64}-polyfilled.tar.gz' fastfetch || return
 }
 
 # --- Runtimes and themes ------------------------------------------------------
@@ -265,14 +301,20 @@ bootstrap_runtimes() {
 
 # yazi flavors are packages cloned by ya into ~/.config/yazi/flavors. The
 # first add also records them in package.toml; later machines restore from it.
+# The flavor names come from config/yazi/theme.toml, the file yazi reads.
 bootstrap_yazi_flavors() {
     local yazi_dir="${XDG_CONFIG_HOME:-$HOME/.config}/yazi"
-    local flavor
+    local flavor flavors
     if ! command -v ya &>/dev/null; then
         echo "yazi is not installed; install packages first." >&2
         return 1
     fi
-    for flavor in catppuccin-macchiato catppuccin-latte; do
+    flavors="$(dotfiles_yazi_flavors "$DOTFILES_DIR/config/yazi/theme.toml")"
+    if [ -z "$flavors" ]; then
+        echo "config/yazi/theme.toml names no flavors." >&2
+        return 1
+    fi
+    for flavor in $flavors; do
         if [ -f "$yazi_dir/flavors/$flavor.yazi/flavor.toml" ]; then
             echo "yazi flavor $flavor already installed"
             continue

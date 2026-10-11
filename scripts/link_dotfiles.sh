@@ -62,7 +62,10 @@ link() {
 main() {
     echo "Linking dotfiles..."
     link "$DOTFILES_DIR/home/.zshrc" "$HOME/.zshrc" || return 1
-    link "$DOTFILES_DIR/home/.tmux.conf" "$HOME/.tmux.conf" || return 1
+    # tmux reads ~/.tmux.conf as well as the XDG file when both exist, so the
+    # link from before the move is retired rather than left dangling.
+    link "$DOTFILES_DIR/config/tmux/tmux.conf" "$HOME/.config/tmux/tmux.conf" || return 1
+    retire_link "$DOTFILES_DIR/home/.tmux.conf" "$HOME/.tmux.conf" || return 1
     link "$DOTFILES_DIR/config/eza" "$HOME/.config/eza" || return 1
     link "$DOTFILES_DIR/config/oh-my-posh/config.omp.json" "$HOME/.config/oh-my-posh/config.omp.json" || return 1
     link "$DOTFILES_DIR/config/bat/config" "$HOME/.config/bat/config" || return 1
@@ -78,12 +81,40 @@ main() {
     link "$DOTFILES_DIR/config/yazi/yazi.toml" "$HOME/.config/yazi/yazi.toml" || return 1
     link "$DOTFILES_DIR/config/yazi/theme.toml" "$HOME/.config/yazi/theme.toml" || return 1
     link "$DOTFILES_DIR/config/atuin/config.toml" "$HOME/.config/atuin/config.toml" || return 1
-    link "$DOTFILES_DIR/config/atuin/themes/catppuccin-macchiato-blue.toml" "$HOME/.config/atuin/themes/catppuccin-macchiato-blue.toml" || return 1
+    # Every flavor's atuin theme is vendored, so the themes directory is linked
+    # whole; atuin only reads it. Phase 3 linked one file inside a real
+    # directory, which is retired first so no backup of an empty directory is left.
+    retire_link "$DOTFILES_DIR/config/atuin/themes/catppuccin-macchiato-blue.toml" "$HOME/.config/atuin/themes/catppuccin-macchiato-blue.toml" || return 1
+    remove_empty_directory "$HOME/.config/atuin/themes" || return 1
+    link "$DOTFILES_DIR/config/atuin/themes" "$HOME/.config/atuin/themes" || return 1
+    link "$DOTFILES_DIR/config/fastfetch/config.jsonc" "$HOME/.config/fastfetch/config.jsonc" || return 1
     link "$DOTFILES_DIR/config/mise/config.toml" "$HOME/.config/mise/config.toml" || return 1
     # zsh-abbr rewrites its file with mv, which would replace a file symlink;
     # through a directory link the rewrite lands in the repository.
     link "$DOTFILES_DIR/config/zsh-abbr" "$HOME/.config/zsh-abbr" || return 1
     ensure_gitconfig "$HOME/.gitconfig" || return 1
+}
+
+# A destination that still links to a source this repository no longer
+# provides is removed. Regular files and links elsewhere belong to the user
+# and stay; the doctor reports them.
+retire_link() {
+    local retired_src="$1"
+    local dst="$2"
+    if [ -L "$dst" ] && [ "$(readlink "$dst")" = "$retired_src" ]; then
+        rm "$dst" || return 1
+        echo "  retired: $dst"
+    fi
+}
+
+# An empty real directory in the way of a directory link is removed; anything
+# with content is left for the linker to back up.
+remove_empty_directory() {
+    local dir="$1"
+    if [ -d "$dir" ] && [ ! -L "$dir" ] && [ -z "$(ls -A "$dir")" ]; then
+        rmdir "$dir" || return 1
+        echo "  removed empty: $dir"
+    fi
 }
 
 # Git writes `git config --global` to ~/.config/git/config, the managed file,

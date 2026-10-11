@@ -17,8 +17,36 @@ check_config_syntax() {
         case "$file" in
             *.toml) python3 -I -c 'import sys, tomllib; tomllib.load(open(sys.argv[1], "rb"))' "$file" || return ;;
             *.json) python3 -I -c 'import sys, json; json.load(open(sys.argv[1]))' "$file" || return ;;
+            # JSON with comments: the repository keeps comments on their own lines.
+            *.jsonc) python3 -I -c 'import sys, json, re; json.loads(re.sub(r"^\s*//.*$", "", open(sys.argv[1]).read(), flags=re.M))' "$file" || return ;;
         esac
-    done < <(find "$1" -type f \( -name '*.toml' -o -name '*.json' \) -print0)
+    done < <(find "$1" -type f \( -name '*.toml' -o -name '*.json' -o -name '*.jsonc' \) -print0)
+}
+
+# Loads the tmux configuration into a private server with an empty home, so
+# the plugin lines (guarded by file checks) are skipped. source-file reports
+# parse errors to the client; a configuration given with -f would only show
+# them in the first attached window.
+check_tmux_config() {
+    local work status socket
+    work="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-tmux-check.XXXXXX")" || return 1
+    mkdir -p "$work/home"
+    # A named socket stays short: socket paths are limited to about 100 bytes.
+    socket="dotfiles-check-$$-${work##*.}"
+    # The status is captured in a condition so errexit cannot skip the cleanup.
+    if HOME="$work/home" tmux -L "$socket" -f /dev/null start-server \; \
+        set-option -g exit-empty off \; source-file "$1" > "$work/output" 2>&1; then
+        status=0
+    else
+        status=$?
+    fi
+    tmux -L "$socket" kill-server >/dev/null 2>&1 || :
+    if [ "$status" -ne 0 ]; then
+        cat "$work/output" >&2
+        rm -rf "$work"
+        return 1
+    fi
+    rm -rf "$work"
 }
 
 test_main() {
@@ -47,6 +75,13 @@ test_main() {
         check_config_syntax "$DOTFILES_DIR/config"
     else
         echo "SKIP: TOML and JSON configuration check (python3 with tomllib is not installed)."
+    fi
+
+    if command -v tmux >/dev/null 2>&1; then
+        echo "Checking tmux configuration..."
+        check_tmux_config "$DOTFILES_DIR/config/tmux/tmux.conf"
+    else
+        echo "SKIP: tmux configuration check (tmux is not installed)."
     fi
 
     if command -v ghostty >/dev/null 2>&1; then

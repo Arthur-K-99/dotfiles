@@ -185,3 +185,21 @@ $localProfile = Join-Path $HOME ".powershell.local.ps1"
 if (Test-Path -LiteralPath $localProfile) {
     . $localProfile
 }
+
+# fastfetch greets interactive consoles with the machine summary, as zsh does.
+# Shells started with -Command, -File, -EncodedCommand or -NonInteractive
+# stay quiet, as do other hosts and tmux panes, and $env:DOTFILES_FASTFETCH =
+# '0' in the local profile above turns it off on a machine.
+function Test-DotfilesGreeting {
+    param([string[]]$Arguments = @([Environment]::GetCommandLineArgs() | Select-Object -Skip 1), [string]$HostName = $Host.Name)
+    if ($HostName -ne 'ConsoleHost' -or $env:DOTFILES_FASTFETCH -eq '0' -or $env:TMUX) { return $false }
+    foreach ($argument in $Arguments) {
+        # PowerShell accepts any unambiguous prefix of a parameter name, so -c,
+        # -e, -f and -non cover the quiet ones; -ExecutionPolicy is allowed.
+        if ($argument -match '^-(c|e|f|non)' -and $argument -notmatch '^-ex') { return $false }
+    }
+    return $true
+}
+if ((Test-DotfilesGreeting) -and (Get-Command fastfetch -ErrorAction SilentlyContinue)) {
+    fastfetch --config (Join-Path $HOME ".config\fastfetch\config.jsonc")
+}

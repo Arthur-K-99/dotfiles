@@ -5,6 +5,8 @@ fzf
 zoxide
 btop
 tmux
+sesh
+fastfetch
 gh
 
 # Shell quality of life

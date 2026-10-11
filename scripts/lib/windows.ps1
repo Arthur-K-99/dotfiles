@@ -171,10 +171,13 @@ function Get-DotfilesManagedFiles {
         }
     }
     # The profile points LG_CONFIG_FILE, YAZI_CONFIG_HOME and ATUIN_CONFIG_DIR at
-    # these. yazi and atuin write their own files beside them, so the files are
-    # managed one by one rather than their directories.
-    foreach ($relative in @('lazygit/config.yml', 'yazi/yazi.toml', 'yazi/theme.toml',
-            'atuin/config.toml', 'atuin/themes/catppuccin-macchiato-blue.toml')) {
+    # these, and runs fastfetch with --config. yazi and atuin write their own
+    # files beside them, so the files are managed one by one rather than their
+    # directories. Every flavor's atuin theme is vendored; config.toml names one.
+    foreach ($relative in @('lazygit/config.yml', 'yazi/yazi.toml', 'yazi/theme.toml', 'atuin/config.toml',
+            'atuin/themes/catppuccin-latte-blue.toml', 'atuin/themes/catppuccin-frappe-blue.toml',
+            'atuin/themes/catppuccin-macchiato-blue.toml', 'atuin/themes/catppuccin-mocha-blue.toml',
+            'fastfetch/config.jsonc')) {
         [pscustomobject]@{
             Source = Join-Path $DotfilesDir "config/$relative"
             Destination = Join-Path $HomeDirectory ".config/$relative"
@@ -308,10 +311,17 @@ function Invoke-DotfilesPackageInstall {
     Invoke-DotfilesFontInstall
 }
 
-# The linked theme.toml names these flavors. They are packages that ya installs
+# The managed theme.toml names the flavors. They are packages that ya installs
 # into ~/.config/yazi/flavors beside the managed files, so they are not linked.
+# Reading the managed copy keeps the installers in step with scripts/theme.sh.
 function Get-DotfilesYaziFlavors {
-    @('catppuccin-macchiato', 'catppuccin-latte')
+    param([string]$HomeDirectory)
+    $themeFile = Join-Path $HomeDirectory '.config/yazi/theme.toml'
+    if (-not (Test-Path -LiteralPath $themeFile -PathType Leaf)) { throw "The yazi theme file is missing at $themeFile. Rerun install.ps1 so the link stage provides it." }
+    # Latte serves both halves after `scripts/theme.sh latte`, so names are unique.
+    $flavors = @([regex]::Matches([IO.File]::ReadAllText($themeFile), '(?m)^(?:dark|light) = "([^"]+)"[ \t\r]*$') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+    if ($flavors.Count -eq 0) { throw "No flavor is named in $themeFile." }
+    return $flavors
 }
 
 function Get-DotfilesYaziFlavorFile {
@@ -328,7 +338,7 @@ function Install-DotfilesYaziFlavors {
     $savedConfigHome = $env:YAZI_CONFIG_HOME
     $env:YAZI_CONFIG_HOME = $yaziConfig
     try {
-        foreach ($flavor in Get-DotfilesYaziFlavors) {
+        foreach ($flavor in Get-DotfilesYaziFlavors $HomeDirectory) {
             $flavorFile = Get-DotfilesYaziFlavorFile $HomeDirectory $flavor
             if (Test-Path -LiteralPath $flavorFile -PathType Leaf) { Write-Host "  already installed: yazi flavor $flavor"; continue }
             $yaCommand = Get-DotfilesCommandPath 'ya'
@@ -383,7 +393,7 @@ function Invoke-DotfilesLink {
 }
 
 function Get-DotfilesDoctorCommands {
-    @('git', 'pwsh', 'oh-my-posh', 'bat', 'eza', 'fzf', 'zoxide', 'btop', 'nvim', 'gh', 'wt',
+    @('git', 'pwsh', 'oh-my-posh', 'bat', 'eza', 'fzf', 'zoxide', 'btop', 'nvim', 'gh', 'wt', 'fastfetch',
         'carapace', 'atuin', 'mise', 'delta', 'lazygit', 'lazydocker', 'yazi',
         'rg', 'fd', 'dust', 'duf', 'procs', 'sd', 'xh', 'hyperfine', 'glow', 'tldr', 'gum', 'direnv')
 }
@@ -409,7 +419,7 @@ function Invoke-DotfilesDoctor {
         $miseCommand = Get-DotfilesCommandPath 'mise'
         if ($miseCommand -and (Invoke-DotfilesNativeCommand $miseCommand @('which', 'node') -Quiet) -eq 0) { Write-Host '  [ok] Node.js via mise' }
         else { Write-Host '  [missing] Node.js via mise (rerun: scripts\install_runtimes.ps1)'; $failures++ }
-        foreach ($flavor in Get-DotfilesYaziFlavors) {
+        foreach ($flavor in Get-DotfilesYaziFlavors $HomeDirectory) {
             if (Test-Path -LiteralPath (Get-DotfilesYaziFlavorFile $HomeDirectory $flavor) -PathType Leaf) { Write-Host "  [ok] yazi flavor $flavor" }
             else { Write-Host "  [missing] yazi flavor $flavor (rerun: scripts\install_runtimes.ps1)"; $failures++ }
         }
