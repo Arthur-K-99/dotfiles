@@ -437,7 +437,8 @@ if ($env:DOTFILES_TEST_EXPECTED_FZF) {
 }
 if ($env:DOTFILES_TEST_READLINE -eq 'yes') {
     if ((Get-PSReadLineOption).BellStyle -ne 'None') { throw 'PSReadLine options were not applied' }
-    if (-not (Get-PSReadLineKeyHandler -Key Tab | Where-Object { $_.Function -eq 'MenuComplete' })) { throw 'Tab is not bound to MenuComplete' }
+    # PSReadLine 2.0 (Windows PowerShell) has no -Key parameter; filter the full list instead.
+    if (-not (Get-PSReadLineKeyHandler | Where-Object { $_.Key -eq 'Tab' -and $_.Function -eq 'MenuComplete' })) { throw 'Tab is not bound to MenuComplete' }
 }
 exit 0
 '@
