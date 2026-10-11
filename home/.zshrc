@@ -11,6 +11,26 @@ fi
 typeset -U path PATH
 path=("$HOME/.local/bin" $path)
 
+# Tools that print an init script cost 20-50 ms each per shell, and the output
+# changes only when the binary does. dotfiles_cached_init <name> <tool> <cmd...>
+# runs the command once, keeps the result in the cache and re-sources it until
+# the tool is upgraded. Nothing happens when the tool is absent.
+dotfiles_cached_init() {
+    local name="$1" tool="$2"
+    local cache="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/$name.zsh"
+    shift 2
+    (( $+commands[$tool] )) || return 1
+    if [[ ! -s "$cache" || "$cache" -ot "${commands[$tool]}" ]]; then
+        mkdir -p "${cache:h}" || return 1
+        if ! "$@" > "$cache.new"; then
+            rm -f "$cache.new"
+            return 1
+        fi
+        mv -f "$cache.new" "$cache" || return 1
+    fi
+    source "$cache"
+}
+
 # fzf. One Catppuccin Macchiato palette and layout for every fzf window,
 # including fzf-tab. Previews belong to specific keybindings rather than to an
 # alias of fzf itself, so pipelines such as `history | fzf` stay clean.
@@ -49,11 +69,11 @@ unset dotfiles_fd
 
 # fzf keybindings (Ctrl-T files, Ctrl-R history, Alt-C directories) and
 # completion. This runs before the plugins so fzf-tab wraps fzf's own Tab
-# widget instead of being replaced by it. `fzf --zsh` needs fzf 0.48+; older
-# distribution packages install the scripts as files, and a git installation
-# provides ~/.fzf.zsh.
-if (( $+commands[fzf] )) && fzf --zsh &>/dev/null; then
-    source <(fzf --zsh)
+# widget instead of being replaced by it. `fzf --zsh` needs fzf 0.48+ and is
+# cached like the other init scripts; older distribution packages install the
+# scripts as files, and a git installation provides ~/.fzf.zsh.
+if dotfiles_cached_init fzf fzf fzf --zsh 2>/dev/null; then
+    :
 elif [[ -r /usr/share/doc/fzf/examples/key-bindings.zsh ]]; then
     source /usr/share/doc/fzf/examples/key-bindings.zsh
     [[ -r /usr/share/doc/fzf/examples/completion.zsh ]] && source /usr/share/doc/fzf/examples/completion.zsh
@@ -81,9 +101,14 @@ if (( $+functions[zinit] )); then
 fi
 
 # mise manages runtimes (Node.js LTS from config/mise/config.toml, more on
-# request) and replaces nvm. Its hook switches versions when a project
-# declares one and costs a few milliseconds per prompt.
-(( $+commands[mise] )) && eval "$(mise activate zsh)"
+# request) and replaces nvm. The shims directory goes on PATH directly: each
+# shim resolves the version for the current project when it runs, which is
+# what `mise activate --shims` prints, without running mise at startup or the
+# 20 ms hook on every prompt that `mise activate` installs. Project [env]
+# sections are not applied this way; direnv covers that need.
+dotfiles_mise_shims="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/shims"
+[[ -d "$dotfiles_mise_shims" ]] && path=("$dotfiles_mise_shims" $path)
+unset dotfiles_mise_shims
 
 # oh-my-posh
 if (( $+commands[oh-my-posh] )); then
@@ -95,7 +120,7 @@ autoload -Uz compinit && compinit
 (( $+functions[zinit] )) && zinit cdreplay -q
 # carapace: one completion engine for over a thousand commands. Its script
 # calls compdef, so it runs after compinit; fzf-tab still draws the menu.
-(( $+commands[carapace] )) && source <(carapace _carapace zsh)
+dotfiles_cached_init carapace carapace carapace _carapace zsh
 
 # Keybindings
 bindkey -e
@@ -108,7 +133,7 @@ zle -N edit-command-line
 bindkey '^x^e' edit-command-line
 # atuin: searchable, synced history on Ctrl-R. It is initialised after fzf,
 # so its Ctrl-R binding wins; fzf keeps Ctrl-T and Alt-C. Up arrow stays zsh's.
-(( $+commands[atuin] )) && eval "$(atuin init zsh --disable-up-arrow)"
+dotfiles_cached_init atuin atuin atuin init zsh --disable-up-arrow
 
 # History
 HISTSIZE=100000
@@ -163,8 +188,8 @@ alias vim='nvim'
 alias c='clear'
 
 # Shell integrations
-command -v zoxide &>/dev/null && eval "$(zoxide init --cmd cd zsh)"
-command -v direnv &>/dev/null && eval "$(direnv hook zsh)"
+dotfiles_cached_init zoxide zoxide zoxide init --cmd cd zsh
+dotfiles_cached_init direnv direnv direnv hook zsh
 # y opens yazi and changes to the directory it was quit in.
 y() {
     local tmp cwd

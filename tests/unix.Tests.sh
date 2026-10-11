@@ -769,15 +769,15 @@ LOCAL
 test_zsh_tool_hooks() {
     local zsh_binary
     zsh_binary="$(command -v zsh)"
-    mkdir -p "$test_dir/fixture" "$test_dir/zdot" "$test_dir/data" "$test_dir/bin"
+    mkdir -p "$test_dir/fixture" "$test_dir/zdot" "$test_dir/data/mise/shims" "$test_dir/bin"
     render_portable_profile "$test_dir/profile.zsh"
     export DOTFILES_TEST_FIXTURE="$test_dir"
     # Each mock records its arguments and prints what the real tool would: a
-    # shell snippet to eval, or an LS_COLORS string.
+    # shell snippet to eval, or an LS_COLORS string. mise itself must never run
+    # at startup; only its shims directory joins PATH.
     cat > "$test_dir/bin/mise" <<'MOCK'
 #!/bin/sh
 printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/mise-args"
-echo 'export DOTFILES_TEST_MISE=yes'
 MOCK
     cat > "$test_dir/bin/atuin" <<'MOCK'
 #!/bin/sh
@@ -800,13 +800,23 @@ echo 'di=1;34:*.vivid=35'
 MOCK
     printf '#!/bin/sh\nexit 0\n' > "$test_dir/bin/fdfind"
     chmod +x "$test_dir/bin/"*
+    local tool_probe='
+            autoload() { :; }
+            compinit() { :; }
+            source "$DOTFILES_TEST_PROFILE" || exit 1
+            [[ "$path[1]" == "$XDG_DATA_HOME/mise/shims" ]] || { print "mise shims not first on PATH: $path[1]"; exit 1; }
+            [[ "$DOTFILES_TEST_ATUIN" == yes ]] || { print "atuin was not initialised"; exit 1; }
+            [[ "$DOTFILES_TEST_CARAPACE" == yes ]] || { print "carapace was not sourced"; exit 1; }
+            [[ "$DOTFILES_TEST_DIRENV" == yes ]] || { print "direnv hook missing"; exit 1; }
+        '
     DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
-        XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/bin:/usr/bin:/bin" \
+        XDG_DATA_HOME="$test_dir/data" XDG_CACHE_HOME="$test_dir/cache" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/bin:/usr/bin:/bin" \
         "$zsh_binary" -df -c '
             autoload() { :; }
             compinit() { :; }
             source "$DOTFILES_TEST_PROFILE" || exit 1
-            [[ "$DOTFILES_TEST_MISE" == yes ]] || { print "mise was not activated"; exit 1; }
+            [[ "$path[1]" == "$XDG_DATA_HOME/mise/shims" ]] || { print "mise shims not first on PATH: $path[1]"; exit 1; }
+            [[ ! -f "$DOTFILES_TEST_FIXTURE/mise-args" ]] || { print "mise ran at startup"; exit 1; }
             [[ "$DOTFILES_TEST_ATUIN" == yes ]] || { print "atuin was not initialised"; exit 1; }
             [[ "$DOTFILES_TEST_CARAPACE" == yes ]] || { print "carapace was not sourced"; exit 1; }
             [[ "$DOTFILES_TEST_DIRENV" == yes ]] || { print "direnv hook missing"; exit 1; }
@@ -817,10 +827,36 @@ MOCK
             [[ "$(whence -w y)" == "y: function" ]] || { print "y function missing"; exit 1; }
             [[ "$YSU_MESSAGE_POSITION" == after ]] || exit 1
         '
-    assert_equal 'activate zsh' "$(cat "$test_dir/mise-args")"
+    [ ! -f "$test_dir/mise-args" ]
     assert_equal 'init zsh --disable-up-arrow' "$(cat "$test_dir/atuin-args")"
     assert_equal '_carapace zsh' "$(cat "$test_dir/carapace-args")"
     assert_equal 'generate catppuccin-macchiato' "$(cat "$test_dir/vivid-args")"
+    [ -s "$test_dir/cache/dotfiles/carapace.zsh" ] && [ -s "$test_dir/cache/dotfiles/atuin.zsh" ] && [ -s "$test_dir/cache/dotfiles/direnv.zsh" ]
+    # The second shell sources the cached scripts and does not run the tools again.
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" XDG_CACHE_HOME="$test_dir/cache" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/bin:/usr/bin:/bin" \
+        "$zsh_binary" -df -c "$tool_probe"
+    assert_equal 1 "$(wc -l < "$test_dir/atuin-args" | tr -d ' ')"
+    assert_equal 1 "$(wc -l < "$test_dir/carapace-args" | tr -d ' ')"
+    # An upgraded binary invalidates its cache.
+    touch "$test_dir/bin/atuin"
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" XDG_CACHE_HOME="$test_dir/cache" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/bin:/usr/bin:/bin" \
+        "$zsh_binary" -df -c "$tool_probe"
+    assert_equal 2 "$(wc -l < "$test_dir/atuin-args" | tr -d ' ')"
+    assert_equal 1 "$(wc -l < "$test_dir/carapace-args" | tr -d ' ')"
+    # A failing generator leaves no cache behind and the shell still loads.
+    printf '#!/bin/sh\nexit 7\n' > "$test_dir/bin/direnv"
+    rm "$test_dir/cache/dotfiles/direnv.zsh"
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" XDG_CACHE_HOME="$test_dir/cache" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/bin:/usr/bin:/bin" \
+        "$zsh_binary" -df -c '
+            autoload() { :; }
+            compinit() { :; }
+            source "$DOTFILES_TEST_PROFILE" || exit 1
+            [[ -z "$DOTFILES_TEST_DIRENV" ]] || exit 1
+        '
+    [ ! -e "$test_dir/cache/dotfiles/direnv.zsh" ] && [ ! -e "$test_dir/cache/dotfiles/direnv.zsh.new" ]
     # Without the tools the profile still loads, with the ANSI color default and no fd alias.
     DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
         XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" PATH=/usr/bin:/bin \
@@ -828,7 +864,7 @@ MOCK
             autoload() { :; }
             compinit() { :; }
             source "$DOTFILES_TEST_PROFILE" || exit 1
-            [[ -z "$DOTFILES_TEST_MISE$DOTFILES_TEST_ATUIN$DOTFILES_TEST_CARAPACE$DOTFILES_TEST_DIRENV" ]] || exit 1
+            [[ -z "$DOTFILES_TEST_ATUIN$DOTFILES_TEST_CARAPACE$DOTFILES_TEST_DIRENV" ]] || exit 1
             [[ "$LS_COLORS" == di=1\;34:* ]] || { print "LS_COLORS: $LS_COLORS"; exit 1; }
             [[ -z "${aliases[fd]:-}" ]] || exit 1
             [[ -z "${FZF_DEFAULT_COMMAND:-}" ]] || exit 1
