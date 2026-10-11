@@ -38,3 +38,15 @@ dotfiles_init_environment() {
         *) export PATH="$local_bin${PATH:+:$PATH}" ;;
     esac
 }
+
+# Flavor-dependent names come from the configuration files themselves, so
+# scripts/theme.sh can switch flavor without touching the installers.
+# dotfiles_bat_theme <bat config>: the theme bat is told to use.
+dotfiles_bat_theme() {
+    sed -n 's/^--theme="\(.*\)"$/\1/p' "$1" | head -n 1
+}
+
+# dotfiles_yazi_flavors <theme.toml>: the dark and light flavor packages.
+dotfiles_yazi_flavors() {
+    sed -E -n 's/^(dark|light) = "([^"]*)"$/\2/p' "$1"
+}

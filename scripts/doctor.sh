@@ -70,6 +70,16 @@ check_readable() {
     fi
 }
 
+# A leftover file at a retired location would be loaded alongside the
+# managed one.
+check_absent() {
+    if [ -e "$2" ] || [ -L "$2" ]; then
+        fail "$1"
+    else
+        ok "no $2"
+    fi
+}
+
 check_terminfo() {
     if infocmp "$1" >/dev/null 2>&1; then
         ok "$1 terminfo"
@@ -79,13 +89,14 @@ check_terminfo() {
 }
 
 check_bat_theme() {
-    local bat_command
+    local bat_command theme_name
+    theme_name="$(dotfiles_bat_theme "$DOTFILES_DIR/config/bat/config")"
     for bat_command in bat batcat; do
         command -v "$bat_command" >/dev/null 2>&1 || continue
-        if "$bat_command" --list-themes 2>/dev/null | grep -q "Catppuccin Macchiato"; then
-            ok "bat theme (Catppuccin Macchiato)"
+        if [ -n "$theme_name" ] && "$bat_command" --list-themes 2>/dev/null | grep -q -F -- "$theme_name"; then
+            ok "bat theme ($theme_name)"
         else
-            fail "bat theme Catppuccin Macchiato (rerun: bash scripts/bootstrap_tools.sh)"
+            fail "bat theme ${theme_name:-(none named in config/bat/config)} (rerun: bash scripts/bootstrap_tools.sh)"
         fi
         return
     done
@@ -101,16 +112,20 @@ check_plugins() {
     check_readable "fzf-tab" "$zinit_base/plugins/Aloxaf---fzf-tab/fzf-tab.plugin.zsh"
     check_readable "zsh-abbr" "$zinit_base/plugins/olets---zsh-abbr/zsh-abbr.plugin.zsh"
     check_readable "zsh-you-should-use" "$zinit_base/plugins/MichaelAquilina---zsh-you-should-use/you-should-use.plugin.zsh"
-    if [ -x "$HOME/.tmux/plugins/tpm/bin/install_plugins" ]; then
+    # TPM installs plugins beside itself under the XDG tmux directory.
+    local tmux_plugins="${XDG_CONFIG_HOME:-$HOME/.config}/tmux/plugins"
+    if [ -x "$tmux_plugins/tpm/bin/install_plugins" ]; then
         ok "TPM installer"
     else
-        fail "TPM installer ($HOME/.tmux/plugins/tpm/bin/install_plugins)"
+        fail "TPM installer ($tmux_plugins/tpm/bin/install_plugins)"
     fi
-    check_readable "TPM" "$HOME/.tmux/plugins/tpm/tpm"
-    check_readable "Catppuccin tmux theme" "$HOME/.tmux/plugins/tmux/catppuccin.tmux"
+    check_readable "TPM" "$tmux_plugins/tpm/tpm"
+    check_readable "Catppuccin tmux theme" "$tmux_plugins/tmux/catppuccin.tmux"
     local yazi_dir="${XDG_CONFIG_HOME:-$HOME/.config}/yazi"
-    check_readable "yazi flavor catppuccin-macchiato" "$yazi_dir/flavors/catppuccin-macchiato.yazi/flavor.toml"
-    check_readable "yazi flavor catppuccin-latte" "$yazi_dir/flavors/catppuccin-latte.yazi/flavor.toml"
+    local flavor
+    for flavor in $(dotfiles_yazi_flavors "$DOTFILES_DIR/config/yazi/theme.toml"); do
+        check_readable "yazi flavor $flavor" "$yazi_dir/flavors/$flavor.yazi/flavor.toml"
+    done
 }
 
 doctor_main() {
@@ -170,7 +185,8 @@ doctor_main() {
 
     echo "Checking managed links..."
     check_link "$DOTFILES_DIR/home/.zshrc" "$HOME/.zshrc"
-    check_link "$DOTFILES_DIR/home/.tmux.conf" "$HOME/.tmux.conf"
+    check_link "$DOTFILES_DIR/config/tmux/tmux.conf" "$HOME/.config/tmux/tmux.conf"
+    check_absent "~/.tmux.conf (tmux loads it as well as ~/.config/tmux/tmux.conf; move its contents and remove it)" "$HOME/.tmux.conf"
     check_link "$DOTFILES_DIR/config/eza" "$HOME/.config/eza"
     check_link "$DOTFILES_DIR/config/oh-my-posh/config.omp.json" "$HOME/.config/oh-my-posh/config.omp.json"
     check_link "$DOTFILES_DIR/config/bat/config" "$HOME/.config/bat/config"

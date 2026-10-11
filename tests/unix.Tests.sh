@@ -95,6 +95,103 @@ test_link_broken_wrong_and_relocated() {
     assert_equal moved "$(cat "$test_dir/relocated")"
 }
 
+test_link_retires_moved_sources() {
+    source "$TEST_REPO_DIR/scripts/link_dotfiles.sh"
+    printf 'moved\n' > "$test_dir/old-source"
+    ln -s "$test_dir/old-source" "$test_dir/stale"
+    printf 'user content\n' > "$test_dir/user-file"
+    ln -s "$test_dir/elsewhere" "$test_dir/foreign"
+    retire_link "$test_dir/old-source" "$test_dir/stale"
+    [ ! -L "$test_dir/stale" ] && [ ! -e "$test_dir/stale" ]
+    assert_equal moved "$(cat "$test_dir/old-source")"
+    # Only a link to the retired source goes: the user's own files and links stay.
+    retire_link "$test_dir/old-source" "$test_dir/user-file"
+    assert_equal 'user content' "$(cat "$test_dir/user-file")"
+    retire_link "$test_dir/old-source" "$test_dir/foreign"
+    assert_equal "$test_dir/elsewhere" "$(readlink "$test_dir/foreign")"
+    retire_link "$test_dir/old-source" "$test_dir/absent"
+    [ ! -e "$test_dir/absent" ]
+    ln -s "$test_dir/old-source" "$test_dir/stuck"
+    rm() { return 33; }
+    if retire_link "$test_dir/old-source" "$test_dir/stuck"; then
+        echo "A failed removal was reported as success." >&2
+        return 1
+    fi
+    unset -f rm
+    assert_equal "$test_dir/old-source" "$(readlink "$test_dir/stuck")"
+}
+
+test_theme_switch_round_trip() {
+    source "$TEST_REPO_DIR/scripts/theme.sh"
+    mkdir -p "$test_dir/repo"
+    (cd "$TEST_REPO_DIR" && tar -cf - config home docs) | tar -xf - -C "$test_dir/repo"
+    cp -R "$test_dir/repo" "$test_dir/original"
+    DOTFILES_DIR="$test_dir/repo"
+    assert_equal macchiato "$(theme_current)"
+    theme_main --check > "$test_dir/output"
+    theme_main mocha > "$test_dir/output"
+    assert_equal mocha "$(cat "$test_dir/repo/config/catppuccin/flavor")"
+    grep -q "@catppuccin_flavor 'mocha'" "$test_dir/repo/config/tmux/tmux.conf"
+    grep -q -- '--theme="Catppuccin Mocha"' "$test_dir/repo/config/bat/config"
+    grep -q 'theme = light:Catppuccin Latte,dark:Catppuccin Mocha' "$test_dir/repo/config/ghostty/config"
+    grep -q 'features = catppuccin-mocha' "$test_dir/repo/config/git/config"
+    grep -q 'name = "catppuccin-mocha-blue"' "$test_dir/repo/config/atuin/config.toml"
+    grep -q 'dark = "catppuccin-mocha"' "$test_dir/repo/config/yazi/theme.toml"
+    grep -q 'light = "catppuccin-latte"' "$test_dir/repo/config/yazi/theme.toml"
+    grep -q 'vivid generate catppuccin-mocha' "$test_dir/repo/home/.zshrc"
+    grep -q '"name": "Catppuccin Mocha"' "$test_dir/repo/config/windows-terminal/fragment.json"
+    grep -q '"background": "#1E1E2E"' "$test_dir/repo/config/windows-terminal/fragment.json"
+    grep -q '"colorScheme": "Catppuccin Mocha"' "$test_dir/repo/config/windows-terminal/fragment.json"
+    grep -q 'bg:#1e1e2e' "$test_dir/repo/home/.zshrc"
+    grep -q 'bg:#1e1e2e' "$test_dir/repo/config/powershell/profile.ps1"
+    grep -q '48;2;49;50;68' "$test_dir/repo/config/powershell/profile.ps1"
+    grep -q '"blue": "#89B4FA"' "$test_dir/repo/config/oh-my-posh/config.omp.json"
+    grep -q 'directory: { foreground: "#89B4FA" }' "$test_dir/repo/config/eza/theme.yml"
+    grep -q "activeBorderColor:" "$test_dir/repo/config/lazygit/config.yml"
+    grep -q "'#89b4fa'" "$test_dir/repo/config/lazygit/config.yml"
+    grep -q 'themes-mergable/mocha/blue.yml' "$test_dir/repo/config/lazygit/config.yml"
+    grep -q 'Catppuccin \*\*Mocha\*\*' "$test_dir/repo/docs/theming.md"
+    grep -q '`#89B4FA`' "$test_dir/repo/docs/theming.md"
+    # No Macchiato value survives anywhere the switcher manages, in either case.
+    local file
+    for file in $(theme_hex_files); do
+        if grep -i -q -E '#(24273a|cad3f5|8aadf4|363a4f)' "$test_dir/repo/$file"; then
+            echo "$file still carries Macchiato colors." >&2
+            return 1
+        fi
+    done
+    theme_main --check > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" 'agrees on mocha'
+    # Latte is also the light-mode flavor: Ghostty and yazi keep it there.
+    theme_main latte > "$test_dir/output"
+    grep -q 'theme = light:Catppuccin Latte,dark:Catppuccin Latte' "$test_dir/repo/config/ghostty/config"
+    grep -q 'light = "catppuccin-latte"' "$test_dir/repo/config/yazi/theme.toml"
+    grep -q 'dark = "catppuccin-latte"' "$test_dir/repo/config/yazi/theme.toml"
+    grep -q '"background": "#EFF1F5"' "$test_dir/repo/config/windows-terminal/fragment.json"
+    theme_main mocha > "$test_dir/output"
+    grep -q 'theme = light:Catppuccin Latte,dark:Catppuccin Mocha' "$test_dir/repo/config/ghostty/config"
+    grep -q 'light = "catppuccin-latte"' "$test_dir/repo/config/yazi/theme.toml"
+    # Switching back restores every byte.
+    theme_main macchiato > "$test_dir/output"
+    diff -r "$test_dir/original" "$test_dir/repo"
+    # Unknown flavors are refused and an inconsistent tree fails the check.
+    local status=0
+    theme_main mint > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 2 "$status"
+    diff -r "$test_dir/original" "$test_dir/repo"
+    printf 'mocha\n' > "$test_dir/repo/config/catppuccin/flavor"
+    status=0
+    theme_main --check > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" "does not contain"
+    printf 'macchiato\n' > "$test_dir/repo/config/catppuccin/flavor"
+    sed -e 's/#8AADF4/#89B4FA/' "$test_dir/original/config/eza/theme.yml" > "$test_dir/repo/config/eza/theme.yml"
+    status=0
+    theme_main --check > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'still carries a mocha color'
+}
+
 test_link_failed_replacement() {
     source "$TEST_REPO_DIR/scripts/link_dotfiles.sh"
     printf 'managed\n' > "$test_dir/source"
@@ -627,8 +724,13 @@ test_yazi_flavors_install_and_retry() {
     [ ! -d "$XDG_CONFIG_HOME/yazi/flavors" ]
     : > "$test_dir/retry"
     bootstrap_yazi_flavors
-    assert_equal $'pkg add yazi-rs/flavors:catppuccin-macchiato\npkg add yazi-rs/flavors:catppuccin-latte' "$(tail -n 2 "$test_dir/commands")"
-    [ -f "$XDG_CONFIG_HOME/yazi/flavors/catppuccin-latte.yazi/flavor.toml" ]
+    # The flavors come from config/yazi/theme.toml: the dark one, then the light one.
+    local dark light
+    read -r dark light <<<"$(dotfiles_yazi_flavors "$TEST_REPO_DIR/config/yazi/theme.toml" | tr '\n' ' ')"
+    assert_equal catppuccin-latte "$light"
+    assert_equal "pkg add yazi-rs/flavors:$dark
+pkg add yazi-rs/flavors:$light" "$(tail -n 2 "$test_dir/commands")"
+    [ -f "$XDG_CONFIG_HOME/yazi/flavors/$light.yazi/flavor.toml" ]
     : > "$test_dir/commands"
     bootstrap_yazi_flavors
     assert_equal '' "$(cat "$test_dir/commands")"
@@ -636,7 +738,7 @@ test_yazi_flavors_install_and_retry() {
     rm -rf "$XDG_CONFIG_HOME/yazi/flavors"
     bootstrap_yazi_flavors
     assert_equal 'pkg install' "$(cat "$test_dir/commands")"
-    [ -f "$XDG_CONFIG_HOME/yazi/flavors/catppuccin-macchiato.yazi/flavor.toml" ]
+    [ -f "$XDG_CONFIG_HOME/yazi/flavors/$dark.yazi/flavor.toml" ]
 }
 
 test_doctor_rejects_stale_configuration() {
@@ -654,6 +756,12 @@ test_doctor_rejects_stale_configuration() {
     rm "$test_dir/source"
     check_link "$test_dir/source" "$test_dir/correct"
     assert_equal 3 "$failures"
+    # A file at a retired location is reported whatever it is; its absence passes.
+    failures=0
+    check_absent "legacy file" "$test_dir/wrong"
+    check_absent "legacy file" "$test_dir/broken"
+    check_absent "legacy file" "$test_dir/absent"
+    assert_equal 2 "$failures"
     # A system-wide Node.js must not hide a missing mise-managed one.
     node() { return 0; }
     mise() { return 1; }
@@ -682,6 +790,10 @@ test_doctor_rejects_stale_configuration() {
 test_bat_theme_install_and_skip() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
     export DOTFILES_TEST_FIXTURE="$test_dir"
+    # The theme name comes from config/bat/config, so the mock reads it too.
+    DOTFILES_TEST_BAT_THEME="$(dotfiles_bat_theme "$TEST_REPO_DIR/config/bat/config")"
+    export DOTFILES_TEST_BAT_THEME
+    assert_contains "$DOTFILES_TEST_BAT_THEME" 'Catppuccin '
     command() {
         case "$*" in
             '-v bat') return 0 ;;
@@ -693,12 +805,12 @@ test_bat_theme_install_and_skip() {
             '--list-themes')
                 printf 'Dracula\n'
                 if [ -f "$DOTFILES_TEST_FIXTURE/theme-built" ]; then
-                    printf 'Catppuccin Macchiato\n'
+                    printf '%s\n' "$DOTFILES_TEST_BAT_THEME"
                 fi
                 ;;
             '--config-dir') printf '%s/bat-config\n' "$DOTFILES_TEST_FIXTURE" ;;
             'cache --build')
-                [ -f "$DOTFILES_TEST_FIXTURE/bat-config/themes/Catppuccin Macchiato.tmTheme" ] || return 50
+                [ -f "$DOTFILES_TEST_FIXTURE/bat-config/themes/$DOTFILES_TEST_BAT_THEME.tmTheme" ] || return 50
                 : > "$DOTFILES_TEST_FIXTURE/theme-built"
                 ;;
         esac
@@ -726,7 +838,8 @@ test_bat_theme_install_and_skip() {
     assert_equal 0 "$(find "$test_dir/bat-config" -name '*.tmTheme*' | wc -l | tr -d ' ')"
     : > "$test_dir/retry"
     bootstrap_bat_theme
-    [ -f "$test_dir/bat-config/themes/Catppuccin Macchiato.tmTheme" ]
+    [ -f "$test_dir/bat-config/themes/$DOTFILES_TEST_BAT_THEME.tmTheme" ]
+    assert_contains "$(cat "$test_dir/commands")" "themes/${DOTFILES_TEST_BAT_THEME// /%20}.tmTheme"
     [ -f "$test_dir/theme-built" ]
     : > "$test_dir/commands"
     bootstrap_bat_theme
@@ -842,7 +955,7 @@ MOCK
     [ ! -f "$test_dir/mise-args" ]
     assert_equal 'init zsh --disable-up-arrow' "$(cat "$test_dir/atuin-args")"
     assert_equal '_carapace zsh' "$(cat "$test_dir/carapace-args")"
-    assert_equal 'generate catppuccin-macchiato' "$(cat "$test_dir/vivid-args")"
+    assert_equal "generate catppuccin-$(cat "$TEST_REPO_DIR/config/catppuccin/flavor")" "$(cat "$test_dir/vivid-args")"
     [ -s "$test_dir/cache/dotfiles/carapace.zsh" ] && [ -s "$test_dir/cache/dotfiles/atuin.zsh" ] && [ -s "$test_dir/cache/dotfiles/direnv.zsh" ]
     # The second shell sources the cached scripts and does not run the tools again.
     DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
@@ -904,7 +1017,9 @@ run_tests() {
         gitconfig_guard_creates_once
         link_backups_and_collisions
         link_broken_wrong_and_relocated
+        link_retires_moved_sources
         link_failed_replacement
+        theme_switch_round_trip
         environment_discovery
         package_index_failure
         macos_font_install_and_repair

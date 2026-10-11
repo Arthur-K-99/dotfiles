@@ -1,9 +1,9 @@
 # yazi colors, linked to ~/.config/yazi/theme.toml. The flavor packages are
 # not in this repository: scripts/bootstrap_tools.sh installs them with
-# `ya pkg add yazi-rs/flavors:catppuccin-macchiato` (and :catppuccin-latte),
-# and they live unmanaged in ~/.config/yazi/flavors/<name>.yazi/. yazi picks
-# dark or light from the terminal background, so this follows Ghostty's
-# light:Latte,dark:Macchiato theme line.
+# `ya pkg add yazi-rs/flavors:<name>` for both names below, and they live
+# unmanaged in ~/.config/yazi/flavors/<name>.yazi/. yazi picks dark or light
+# from the terminal background, so this follows Ghostty's theme line: the
+# light flavor stays Latte and scripts/theme.sh switches the dark one.
 [flavor]
 dark = "catppuccin-macchiato"
 light = "catppuccin-latte"

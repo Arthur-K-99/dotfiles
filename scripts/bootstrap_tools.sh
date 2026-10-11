@@ -27,7 +27,9 @@ bootstrap_zinit() {
 }
 
 bootstrap_tmux() (
-    local tpm_dir="${1:-$HOME/.tmux/plugins/tpm}"
+    # TPM installs plugins beside itself. With the configuration at
+    # ~/.config/tmux/tmux.conf, TPM itself defaults to this directory.
+    local tpm_dir="${1:-${XDG_CONFIG_HOME:-$HOME/.config}/tmux/plugins/tpm}"
     local work_dir socket_path
     if [ ! -x "$tpm_dir/bin/install_plugins" ]; then
         echo "Installing TPM..."
@@ -45,7 +47,7 @@ bootstrap_tmux() (
     # TPM prefers an XDG config over ~/.tmux.conf. Point its read-only config
     # lookup at this repository so an unrelated user config cannot change it.
     mkdir -p "$work_dir/config/tmux" || return
-    ln -s "$DOTFILES_DIR/home/.tmux.conf" "$work_dir/config/tmux/tmux.conf" || return
+    ln -s "$DOTFILES_DIR/config/tmux/tmux.conf" "$work_dir/config/tmux/tmux.conf" || return
     tmux -S "$socket_path" -f /dev/null start-server \; \
         set-option -g exit-empty off \; \
         set-environment -g TMUX_PLUGIN_MANAGER_PATH "$(dirname "$tpm_dir")/" || return
@@ -72,9 +74,13 @@ bootstrap_zoxide() {
 }
 
 bootstrap_bat_theme() {
-    local bat_command theme_dir theme_file status
-    local theme_name="Catppuccin Macchiato"
-    local theme_url="https://raw.githubusercontent.com/catppuccin/bat/main/themes/Catppuccin%20Macchiato.tmTheme"
+    local bat_command theme_dir theme_file status theme_name theme_url
+    theme_name="$(dotfiles_bat_theme "$DOTFILES_DIR/config/bat/config")"
+    if [ -z "$theme_name" ]; then
+        echo "config/bat/config names no --theme." >&2
+        return 1
+    fi
+    theme_url="https://raw.githubusercontent.com/catppuccin/bat/main/themes/${theme_name// /%20}.tmTheme"
     if command -v bat &>/dev/null; then
         bat_command=bat
     elif command -v batcat &>/dev/null; then
@@ -265,14 +271,20 @@ bootstrap_runtimes() {
 
 # yazi flavors are packages cloned by ya into ~/.config/yazi/flavors. The
 # first add also records them in package.toml; later machines restore from it.
+# The flavor names come from config/yazi/theme.toml, the file yazi reads.
 bootstrap_yazi_flavors() {
     local yazi_dir="${XDG_CONFIG_HOME:-$HOME/.config}/yazi"
-    local flavor
+    local flavor flavors
     if ! command -v ya &>/dev/null; then
         echo "yazi is not installed; install packages first." >&2
         return 1
     fi
-    for flavor in catppuccin-macchiato catppuccin-latte; do
+    flavors="$(dotfiles_yazi_flavors "$DOTFILES_DIR/config/yazi/theme.toml")"
+    if [ -z "$flavors" ]; then
+        echo "config/yazi/theme.toml names no flavors." >&2
+        return 1
+    fi
+    for flavor in $flavors; do
         if [ -f "$yazi_dir/flavors/$flavor.yazi/flavor.toml" ]; then
             echo "yazi flavor $flavor already installed"
             continue

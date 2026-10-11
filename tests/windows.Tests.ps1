@@ -398,15 +398,23 @@ try {
         Assert-True (@($lowered | Select-Object -Unique).Count -eq $lowered.Count) 'winget IDs must be unique'
     }
 
-    Invoke-Test 'The Windows Terminal fragment carries the Macchiato scheme to the stock profiles' {
+    Invoke-Test 'The Windows Terminal fragment carries the current flavor to the stock profiles' {
+        # scripts/theme.sh records the flavor and vendors the palette; the test follows both.
+        $flavorName = (Get-Content -LiteralPath (Join-Path $repository 'config/catppuccin/flavor') -First 1).Trim()
+        $flavorTitle = $flavorName.Substring(0, 1).ToUpperInvariant() + $flavorName.Substring(1)
+        $palette = @{}
+        foreach ($line in Get-Content -LiteralPath (Join-Path $repository 'config/catppuccin/palette.txt')) {
+            if ($line -match "^$flavorName (\S+) (#[0-9a-f]{6})$") { $palette[$Matches[1]] = $Matches[2].ToUpperInvariant() }
+        }
+        Assert-True ($palette.Count -eq 26) "The palette must list every $flavorName color"
         $fragment = Get-Content -Raw -LiteralPath (Join-Path $repository 'config/windows-terminal/fragment.json') | ConvertFrom-Json
-        $schemes = @($fragment.schemes | Where-Object { $_.name -eq 'Catppuccin Macchiato' })
-        Assert-True ($schemes.Count -eq 1) 'Exactly one Catppuccin Macchiato scheme'
+        $schemes = @($fragment.schemes | Where-Object { $_.name -eq "Catppuccin $flavorTitle" })
+        Assert-True ($schemes.Count -eq 1) "Exactly one Catppuccin $flavorTitle scheme"
         foreach ($key in @('background', 'foreground', 'cursorColor', 'selectionBackground', 'black', 'red', 'green', 'yellow', 'blue', 'purple', 'cyan', 'white',
                 'brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightPurple', 'brightCyan', 'brightWhite')) {
             Assert-True ([string]$schemes[0].$key -match '^#[0-9A-F]{6}$') "$key must be an uppercase hex color"
         }
-        Assert-True ($schemes[0].background -eq '#24273A' -and $schemes[0].foreground -eq '#CAD3F5') 'Scheme must be Macchiato base and text'
+        Assert-True ($schemes[0].background -eq $palette['base'] -and $schemes[0].foreground -eq $palette['text']) "Scheme must be $flavorName base and text"
         $profiles = @($fragment.profiles)
         $updates = @($profiles | ForEach-Object { $_.updates })
         # PowerShell 7, Windows PowerShell and Command Prompt: the stock profiles a fragment may modify.
@@ -414,7 +422,7 @@ try {
             Assert-True ($updates -contains $guid) "Fragment must update profile $guid"
         }
         foreach ($profile in $profiles) {
-            Assert-True ($profile.colorScheme -eq 'Catppuccin Macchiato') 'Every profile update must select the scheme'
+            Assert-True ($profile.colorScheme -eq "Catppuccin $flavorTitle") 'Every profile update must select the scheme'
             Assert-True ([string]$profile.font.face -match 'CaskaydiaCove Nerd Font Mono') 'Every profile update must select the Nerd Font'
         }
     }
@@ -479,8 +487,8 @@ foreach ($call in $expectedCalls) {
 if ($calls -match 'yazi') { throw "yazi must not run while the profile loads. Recorded: $calls" }
 if ($env:DOTFILES_TEST_EXPECTED_FZF) {
     if ($env:FZF_DEFAULT_OPTS -ne $env:DOTFILES_TEST_EXPECTED_FZF) { throw "The local profile did not override FZF_DEFAULT_OPTS: $env:FZF_DEFAULT_OPTS" }
-} elseif ($env:FZF_DEFAULT_OPTS -notmatch 'bg\+:#363a4f') {
-    throw "FZF_DEFAULT_OPTS lacks the Macchiato palette: $env:FZF_DEFAULT_OPTS"
+} elseif (-not $env:FZF_DEFAULT_OPTS.Contains("bg+:$env:DOTFILES_TEST_EXPECTED_BG")) {
+    throw "FZF_DEFAULT_OPTS lacks the flavor's surface0 $env:DOTFILES_TEST_EXPECTED_BG: $env:FZF_DEFAULT_OPTS"
 }
 if ($env:DOTFILES_TEST_READLINE -eq 'yes') {
     if ((Get-PSReadLineOption).BellStyle -ne 'None') { throw 'PSReadLine options were not applied' }
@@ -506,6 +514,14 @@ exit 0
         $env:DOTFILES_TEST_PROFILE = $portable
         $env:DOTFILES_TEST_BIN = $stubBin
         $env:DOTFILES_TEST_EXPECTED_FZF = ''
+        # fzf's bg+ is surface0 of the recorded flavor, as scripts/theme.sh writes it.
+        $flavorName = (Get-Content -LiteralPath (Join-Path $repository 'config/catppuccin/flavor') -First 1).Trim()
+        $surface0 = $null
+        foreach ($line in Get-Content -LiteralPath (Join-Path $repository 'config/catppuccin/palette.txt')) {
+            if ($line -match "^$flavorName surface0 (#[0-9a-f]{6})$") { $surface0 = $Matches[1] }
+        }
+        Assert-True ([bool]$surface0) "The palette must list $flavorName surface0"
+        $env:DOTFILES_TEST_EXPECTED_BG = $surface0
         try {
             foreach ($readLine in @('no', 'yes')) {
                 $env:DOTFILES_TEST_READLINE = $readLine
@@ -522,7 +538,7 @@ exit 0
             $probeResult = Invoke-ProfileProbe
             Assert-True ($probeResult.ExitCode -eq 0) "Local override failed: $($probeResult.Lines -join "`n")"
         } finally {
-            foreach ($name in @('DOTFILES_TEST_HOME', 'DOTFILES_TEST_PROFILE', 'DOTFILES_TEST_BIN', 'DOTFILES_TEST_READLINE', 'DOTFILES_TEST_EXPECTED_FZF')) {
+            foreach ($name in @('DOTFILES_TEST_HOME', 'DOTFILES_TEST_PROFILE', 'DOTFILES_TEST_BIN', 'DOTFILES_TEST_READLINE', 'DOTFILES_TEST_EXPECTED_FZF', 'DOTFILES_TEST_EXPECTED_BG')) {
                 [Environment]::SetEnvironmentVariable($name, $null)
             }
         }
@@ -551,8 +567,10 @@ exit 0
             New-Item -ItemType Directory -Path (Split-Path -Parent $file.Destination) -Force | Out-Null
             Copy-Item -LiteralPath $file.Source -Destination $file.Destination
         }
-        $latteFlavor = Join-Path $fixture.Directory '.config/yazi/flavors/catppuccin-latte.yazi/flavor.toml'
-        foreach ($flavorFile in @((Join-Path $fixture.Directory '.config/yazi/flavors/catppuccin-macchiato.yazi/flavor.toml'), $latteFlavor)) {
+        $yaziFlavors = @(Get-DotfilesYaziFlavors $fixture.Directory)
+        Assert-True ($yaziFlavors.Count -eq 2 -and $yaziFlavors[1] -eq 'catppuccin-latte') 'theme.toml names a dark flavor and Latte'
+        $latteFlavor = Get-DotfilesYaziFlavorFile $fixture.Directory $yaziFlavors[1]
+        foreach ($flavorFile in @((Get-DotfilesYaziFlavorFile $fixture.Directory $yaziFlavors[0]), $latteFlavor)) {
             New-Item -ItemType Directory -Path (Split-Path -Parent $flavorFile) -Force | Out-Null
             [IO.File]::WriteAllText($flavorFile, '# flavor')
         }
@@ -561,7 +579,7 @@ exit 0
             Assert-True ($report -contains "  [ok] $name") "The doctor must check the $name command"
         }
         Assert-True ($report -contains '  [ok] Node.js via mise') 'A runtime mise can locate passes'
-        Assert-True (($report -contains '  [ok] yazi flavor catppuccin-macchiato') -and ($report -contains '  [ok] yazi flavor catppuccin-latte')) 'Installed yazi flavors pass'
+        Assert-True (($report -contains "  [ok] yazi flavor $($yaziFlavors[0])") -and ($report -contains "  [ok] yazi flavor $($yaziFlavors[1])")) 'Installed yazi flavors pass'
         foreach ($file in $files) {
             [IO.File]::WriteAllText($file.Destination, 'stale configuration')
             Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } 'check\(s\) need attention'
@@ -597,6 +615,11 @@ exit 0
         $fixture = New-Fixture
         $yaziConfig = Join-Path $fixture.Directory '.config/yazi'
         $flavorsDirectory = Join-Path $yaziConfig 'flavors'
+        # The link stage has put theme.toml in place by the time runtimes install.
+        New-Item -ItemType Directory -Path $yaziConfig -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $repository 'config/yazi/theme.toml') -Destination (Join-Path $yaziConfig 'theme.toml')
+        $darkFlavor, $lightFlavor = Get-DotfilesYaziFlavors $fixture.Directory
+        Assert-True ($lightFlavor -eq 'catppuccin-latte' -and $darkFlavor -match '^catppuccin-[a-z]+$') "theme.toml names the flavors: $darkFlavor, $lightFlavor"
         $runtimeState = @{ MiseExitCode = 1; YaExitCode = 0; YaInstalls = $true; Calls = [Collections.Generic.List[string]]::new(); ConfigHomes = [Collections.Generic.List[string]]::new() }
         function Get-DotfilesCommandPath { param($Name) if ($Name -in @('mise', 'ya')) { "mock-$Name" } }
         function Invoke-DotfilesNativeCommand {
@@ -626,26 +649,30 @@ exit 0
             Assert-True (($runtimeState.Calls -join "`n") -eq 'mock-mise install --yes') 'A mise failure stops before the flavors'
             $runtimeState.MiseExitCode = 0
             $runtimeState.YaExitCode = 2
-            Assert-Throws { Invoke-DotfilesRuntimeInstall $fixture.Directory } 'ya pkg add yazi-rs/flavors:catppuccin-macchiato failed \(exit code 2\)\. Rerun install.ps1 to retry'
+            Assert-Throws { Invoke-DotfilesRuntimeInstall $fixture.Directory } "ya pkg add yazi-rs/flavors:$darkFlavor failed \(exit code 2\)\. Rerun install.ps1 to retry"
             $runtimeState.YaExitCode = 0
             $runtimeState.YaInstalls = $false
-            Assert-Throws { Invoke-DotfilesRuntimeInstall $fixture.Directory } 'yazi flavor catppuccin-macchiato was not installed'
+            Assert-Throws { Invoke-DotfilesRuntimeInstall $fixture.Directory } "yazi flavor $darkFlavor was not installed"
             Assert-True ($env:YAZI_CONFIG_HOME -eq 'previous value') 'YAZI_CONFIG_HOME is restored after a failure'
             $runtimeState.YaInstalls = $true
             $runtimeState.Calls.Clear()
             Invoke-DotfilesRuntimeInstall $fixture.Directory
-            Assert-True (($runtimeState.Calls -join "`n") -eq "mock-mise install --yes`nmock-ya pkg add yazi-rs/flavors:catppuccin-macchiato`nmock-ya pkg add yazi-rs/flavors:catppuccin-latte") "The retry adds every missing flavor: $($runtimeState.Calls -join ' | ')"
+            Assert-True (($runtimeState.Calls -join "`n") -eq "mock-mise install --yes`nmock-ya pkg add yazi-rs/flavors:$darkFlavor`nmock-ya pkg add yazi-rs/flavors:$lightFlavor") "The retry adds every missing flavor: $($runtimeState.Calls -join ' | ')"
             Assert-True (@($runtimeState.ConfigHomes | Where-Object { $_ -ne $yaziConfig }).Count -eq 0) 'ya must see the yazi configuration under the home directory'
             Assert-True ($env:YAZI_CONFIG_HOME -eq 'previous value') 'YAZI_CONFIG_HOME is restored after success'
             $runtimeState.Calls.Clear()
             Invoke-DotfilesRuntimeInstall $fixture.Directory
             Assert-True (($runtimeState.Calls -join "`n") -eq 'mock-mise install --yes') 'Installed flavors are skipped'
+            # Without the managed theme.toml the flavors are unknown, so the stage says what to rerun.
+            Rename-Item -LiteralPath (Join-Path $yaziConfig 'theme.toml') -NewName 'theme.toml.aside'
+            Assert-Throws { Invoke-DotfilesRuntimeInstall $fixture.Directory } 'yazi theme file is missing.*Rerun install.ps1'
+            Rename-Item -LiteralPath (Join-Path $yaziConfig 'theme.toml.aside') -NewName 'theme.toml'
             # A flavor that package.toml already declares is installed from it; the other is still added.
             Remove-Item -LiteralPath $flavorsDirectory -Recurse -Force
-            [IO.File]::WriteAllText((Join-Path $yaziConfig 'package.toml'), "[[flavor.deps]]`nuse = `"yazi-rs/flavors:catppuccin-macchiato`"`n")
+            [IO.File]::WriteAllText((Join-Path $yaziConfig 'package.toml'), "[[flavor.deps]]`nuse = `"yazi-rs/flavors:$darkFlavor`"`n")
             $runtimeState.Calls.Clear()
             Invoke-DotfilesRuntimeInstall $fixture.Directory
-            Assert-True (($runtimeState.Calls -join "`n") -eq "mock-mise install --yes`nmock-ya pkg install`nmock-ya pkg add yazi-rs/flavors:catppuccin-latte") "Declared flavors come from package.toml: $($runtimeState.Calls -join ' | ')"
+            Assert-True (($runtimeState.Calls -join "`n") -eq "mock-mise install --yes`nmock-ya pkg install`nmock-ya pkg add yazi-rs/flavors:$lightFlavor") "Declared flavors come from package.toml: $($runtimeState.Calls -join ' | ')"
             # ya is needed only while a flavor is missing.
             function Get-DotfilesCommandPath { param($Name) if ($Name -eq 'mise') { 'mock-mise' } }
             Invoke-DotfilesRuntimeInstall $fixture.Directory

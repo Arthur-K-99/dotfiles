@@ -62,7 +62,10 @@ link() {
 main() {
     echo "Linking dotfiles..."
     link "$DOTFILES_DIR/home/.zshrc" "$HOME/.zshrc" || return 1
-    link "$DOTFILES_DIR/home/.tmux.conf" "$HOME/.tmux.conf" || return 1
+    # tmux reads ~/.tmux.conf as well as the XDG file when both exist, so the
+    # link from before the move is retired rather than left dangling.
+    link "$DOTFILES_DIR/config/tmux/tmux.conf" "$HOME/.config/tmux/tmux.conf" || return 1
+    retire_link "$DOTFILES_DIR/home/.tmux.conf" "$HOME/.tmux.conf" || return 1
     link "$DOTFILES_DIR/config/eza" "$HOME/.config/eza" || return 1
     link "$DOTFILES_DIR/config/oh-my-posh/config.omp.json" "$HOME/.config/oh-my-posh/config.omp.json" || return 1
     link "$DOTFILES_DIR/config/bat/config" "$HOME/.config/bat/config" || return 1
@@ -84,6 +87,18 @@ main() {
     # through a directory link the rewrite lands in the repository.
     link "$DOTFILES_DIR/config/zsh-abbr" "$HOME/.config/zsh-abbr" || return 1
     ensure_gitconfig "$HOME/.gitconfig" || return 1
+}
+
+# A destination that still links to a source this repository no longer
+# provides is removed. Regular files and links elsewhere belong to the user
+# and stay; the doctor reports them.
+retire_link() {
+    local retired_src="$1"
+    local dst="$2"
+    if [ -L "$dst" ] && [ "$(readlink "$dst")" = "$retired_src" ]; then
+        rm "$dst" || return 1
+        echo "  retired: $dst"
+    fi
 }
 
 # Git writes `git config --global` to ~/.config/git/config, the managed file,
