@@ -126,18 +126,24 @@ if (Get-Module PSReadLine) {
     # Predictive IntelliSense with the list view needs PSReadLine 2.2+, which
     # Windows PowerShell does not ship. CompletionPredictor (PowerShell 7.2+)
     # adds suggestions from tab completion to those from history.
+    $predictionOptions = @{}
     if ((Get-Command Set-PSReadLineOption).Parameters.ContainsKey('PredictionViewStyle')) {
         $readLineColors['InlinePrediction'] = '#6e738d' # overlay0
         $readLineColors['ListPrediction'] = '#c6a0f6' # mauve
         $readLineColors['ListPredictionSelected'] = "$esc[48;2;54;58;79m" # surface0 background
-        $readLineOptions['PredictionSource'] = 'History'
-        $readLineOptions['PredictionViewStyle'] = 'ListView'
+        $predictionOptions['PredictionSource'] = 'History'
+        $predictionOptions['PredictionViewStyle'] = 'ListView'
         Import-Module CompletionPredictor -ErrorAction SilentlyContinue
         if (Get-Module CompletionPredictor) {
-            $readLineOptions['PredictionSource'] = 'HistoryAndPlugin'
+            $predictionOptions['PredictionSource'] = 'HistoryAndPlugin'
         }
     }
     Set-PSReadLineOption @readLineOptions
+    # PSReadLine refuses predictions when its output is redirected or lacks
+    # virtual terminal support; the rest of the configuration must survive that.
+    if ($predictionOptions.Count) {
+        try { Set-PSReadLineOption @predictionOptions } catch { }
+    }
     # Keys shared with zsh: Tab opens a completion menu, Up and Down search
     # history by prefix, Ctrl+D exits an empty line, Ctrl+W deletes a word.
     Set-PSReadLineKeyHandler -Key Tab -Function MenuComplete
