@@ -48,25 +48,17 @@ check_macos_app() {
     fi
 }
 
-check_nvm_default() {
-    local default_version
-    if [ ! -s "$NVM_DIR/nvm.sh" ]; then
-        fail "nvm ($NVM_DIR/nvm.sh)"
+check_mise_node() {
+    local node_path
+    if ! command -v mise >/dev/null 2>&1; then
+        fail "Node.js via mise (mise is not installed)"
         return
     fi
-    # shellcheck disable=SC1091
-    if ! source "$NVM_DIR/nvm.sh" --no-use || ! command -v nvm >/dev/null 2>&1; then
-        fail "nvm could not be loaded"
-        return
-    fi
-    ok "nvm"
-    if default_version="$(nvm version default)" && [ "$default_version" != "N/A" ] && \
-        nvm use --silent default >/dev/null 2>&1; then
-        ok "default Node.js ($default_version)"
-        check_command node node
-        check_command npm npm
+    # A system Node.js must not hide a missing mise installation.
+    if node_path="$(mise which node 2>/dev/null)" && [ -n "$node_path" ]; then
+        ok "Node.js via mise ($node_path)"
     else
-        fail "nvm default Node.js (run: nvm install --lts && nvm alias default 'lts/*')"
+        fail "Node.js via mise (rerun: mise install)"
     fi
 }
 
@@ -107,6 +99,8 @@ check_plugins() {
         check_readable "$plugin" "$zinit_base/plugins/zsh-users---$plugin/$plugin.plugin.zsh"
     done
     check_readable "fzf-tab" "$zinit_base/plugins/Aloxaf---fzf-tab/fzf-tab.plugin.zsh"
+    check_readable "zsh-abbr" "$zinit_base/plugins/olets---zsh-abbr/zsh-abbr.plugin.zsh"
+    check_readable "zsh-you-should-use" "$zinit_base/plugins/MichaelAquilina---zsh-you-should-use/you-should-use.plugin.zsh"
     if [ -x "$HOME/.tmux/plugins/tpm/bin/install_plugins" ]; then
         ok "TPM installer"
     else
@@ -114,6 +108,9 @@ check_plugins() {
     fi
     check_readable "TPM" "$HOME/.tmux/plugins/tpm/tpm"
     check_readable "Catppuccin tmux theme" "$HOME/.tmux/plugins/tmux/catppuccin.tmux"
+    local yazi_dir="${XDG_CONFIG_HOME:-$HOME/.config}/yazi"
+    check_readable "yazi flavor catppuccin-macchiato" "$yazi_dir/flavors/catppuccin-macchiato.yazi/flavor.toml"
+    check_readable "yazi flavor catppuccin-latte" "$yazi_dir/flavors/catppuccin-latte.yazi/flavor.toml"
 }
 
 doctor_main() {
@@ -133,7 +130,30 @@ doctor_main() {
     check_command neovim nvim
     check_command gh gh
     check_command oh-my-posh oh-my-posh
-    check_nvm_default
+    check_command carapace carapace
+    check_command atuin atuin
+    check_command mise mise
+    check_command direnv direnv
+    check_command vivid vivid
+    check_command delta delta
+    check_command lazygit lazygit
+    check_command lazydocker lazydocker
+    check_command yazi yazi
+    check_command ya ya
+    check_command ripgrep rg
+    check_command fd fd fdfind
+    check_command dust dust
+    check_command duf duf
+    check_command procs procs
+    check_command sd sd
+    check_command xh xh
+    check_command hyperfine hyperfine
+    check_command glow glow
+    check_command tldr tldr
+    check_command gum gum
+
+    echo "Checking runtimes..."
+    check_mise_node
 
     echo "Checking terminal capabilities..."
     check_terminfo tmux-256color
@@ -155,6 +175,14 @@ doctor_main() {
     check_link "$DOTFILES_DIR/config/oh-my-posh/config.omp.json" "$HOME/.config/oh-my-posh/config.omp.json"
     check_link "$DOTFILES_DIR/config/bat/config" "$HOME/.config/bat/config"
     check_link "$DOTFILES_DIR/config/ghostty/config" "$HOME/.config/ghostty/config"
+    check_link "$DOTFILES_DIR/config/git" "$HOME/.config/git"
+    check_link "$DOTFILES_DIR/config/lazygit/config.yml" "$HOME/.config/lazygit/config.yml"
+    check_link "$DOTFILES_DIR/config/yazi/yazi.toml" "$HOME/.config/yazi/yazi.toml"
+    check_link "$DOTFILES_DIR/config/yazi/theme.toml" "$HOME/.config/yazi/theme.toml"
+    check_link "$DOTFILES_DIR/config/atuin/config.toml" "$HOME/.config/atuin/config.toml"
+    check_link "$DOTFILES_DIR/config/atuin/themes/catppuccin-macchiato-blue.toml" "$HOME/.config/atuin/themes/catppuccin-macchiato-blue.toml"
+    check_link "$DOTFILES_DIR/config/mise/config.toml" "$HOME/.config/mise/config.toml"
+    check_link "$DOTFILES_DIR/config/zsh-abbr/user-abbreviations" "$HOME/.config/zsh-abbr/user-abbreviations"
     echo "Checking plugins..."
     check_plugins
 

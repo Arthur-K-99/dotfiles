@@ -1,0 +1,18 @@
+# zsh-abbr (https://zsh-abbr.olets.dev) user abbreviations, linked to
+# ~/.config/zsh-abbr/user-abbreviations. zsh-abbr rewrites this file whenever
+# `abbr add` or `abbr erase` runs: alphabetised, one `abbr name=expansion`
+# line each with the expansion quoted the way zsh's (q) flag does (git\ add),
+# and without comments. The lines below already use that form so the first
+# rewrite changes nothing but this header; commit whatever it writes.
+abbr g=git
+abbr ga=git\ add
+abbr gc=git\ commit
+abbr gco=git\ checkout
+abbr gd=git\ diff
+abbr gl=git\ log\ --oneline\ --graph\ --decorate
+abbr gp=git\ push
+abbr gpl=git\ pull
+abbr gs=git\ status
+abbr gsw=git\ switch
+abbr ld=lazydocker
+abbr lg=lazygit

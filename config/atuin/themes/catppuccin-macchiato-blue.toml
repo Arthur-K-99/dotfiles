@@ -1,0 +1,16 @@
+# Catppuccin Macchiato for atuin, blue accent. Vendored verbatim from
+# https://raw.githubusercontent.com/catppuccin/atuin/main/themes/macchiato/catppuccin-macchiato-blue.toml
+# (https://github.com/catppuccin/atuin, MIT license, fetched 2026-10-11).
+# Selected by [theme] name in config/atuin/config.toml.
+[theme]
+name = "catppuccin-macchiato-blue"
+
+[colors]
+AlertInfo = "#a6da95"
+AlertWarn = "#f5a97f"
+AlertError = "#ed8796"
+Annotation = "#8aadf4"
+Base = "#cad3f5"
+Guidance = "#939ab7"
+Important = "#ed8796"
+Title = "#8aadf4"

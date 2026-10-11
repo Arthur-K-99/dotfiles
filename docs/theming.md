@@ -46,9 +46,13 @@ Two philosophies are in play. Explicit hex values look identical in every termin
 | eza | `config/eza/theme.yml` | explicit hex, every file kind and column |
 | fzf, including fzf-tab | `FZF_DEFAULT_OPTS` in `home/.zshrc` and `config/powershell/profile.ps1` | explicit hex, two copies that must match |
 | bat | `--theme` in `config/bat/config` | named theme shipped with bat 0.25+; older packages get the file from `scripts/bootstrap_tools.sh` |
-| zsh completion menus | `LS_COLORS` default in `home/.zshrc` | ANSI, follows the terminal palette |
+| delta (git pager) | `features = catppuccin-macchiato` in `config/git/config`, colors in the vendored `config/git/catppuccin.gitconfig` | explicit hex from `catppuccin/delta`; all four flavors are included |
+| lazygit | `gui.theme` in `config/lazygit/config.yml` | explicit hex from `catppuccin/lazygit` (macchiato, blue accent) |
+| atuin | `[theme] name` in `config/atuin/config.toml`, colors in `config/atuin/themes/catppuccin-macchiato-blue.toml` | explicit hex from `catppuccin/atuin` |
+| yazi | `[flavor]` in `config/yazi/theme.toml` | named flavors installed as packages by `ya pkg add` |
+| zsh completion menus, fd | `vivid generate catppuccin-macchiato` in `home/.zshrc` | named vivid theme; a small ANSI default applies without vivid |
 | zsh syntax highlighting, autosuggestions | plugin defaults | ANSI |
-| btop, lazygit, delta, Neovim | not yet managed | see `docs/roadmap.md` |
+| btop, Neovim | not yet managed | see `docs/roadmap.md` |
 
 ## Switching flavor today
 
@@ -62,7 +66,12 @@ Pick a flavor (`latte`, `frappe`, `macchiato`, `mocha`) and change these, in ord
 6. `config/ghostty/config`: the `dark:` half of the `theme` line, spelled as `ghostty +list-themes` prints it (`Catppuccin Mocha`, with the space). The `light:` half stays Latte unless you want a dark flavor in light mode too.
 7. `config/windows-terminal/fragment.json`: replace the scheme with the flavor's file from <https://github.com/catppuccin/windows-terminal> and rename every `colorScheme` to match; restart Windows Terminal.
 8. `config/powershell/profile.ps1`: the hex values in `$readLineColors` and the prediction colors below it, plus the two `48;2;R;G;B` background sequences (surface0 of the new flavor).
-9. Run `bash scripts/test.sh` and `scripts/doctor.sh`, then open a new shell.
+9. `config/git/config`: `features = catppuccin-<flavor>`; the vendored include already carries every flavor.
+10. `config/lazygit/config.yml`: replace the `gui.theme` block with the flavor's file from <https://github.com/catppuccin/lazygit> (`themes-mergable/<flavor>/blue.yml`).
+11. `config/atuin/config.toml` and `config/atuin/themes/`: vendor the flavor's theme file from <https://github.com/catppuccin/atuin>, set `[theme] name` to its name, and add the new file to the linker, the Windows managed files and the doctor.
+12. `config/yazi/theme.toml`: `dark = "catppuccin-<flavor>"`, then `ya pkg add yazi-rs/flavors:catppuccin-<flavor>` (and the flavor list in `bootstrap_yazi_flavors`).
+13. `home/.zshrc`: `vivid generate catppuccin-<flavor>`.
+14. Run `bash scripts/test.sh` and `scripts/doctor.sh`, then open a new shell.
 
 A script that does all of this from a single palette file is planned for phase 4.
 

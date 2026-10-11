@@ -1,0 +1,11 @@
+# Global gitignore, read as the XDG default ~/.config/git/ignore because
+# core.excludesFile is unset. Only OS litter and editor swap files belong
+# here; project dependencies such as node_modules/ are each project's job.
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.direnv/
+.envrc.local
+**/.claude/settings.local.json

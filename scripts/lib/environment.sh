@@ -27,7 +27,6 @@ dotfiles_macos_app_installed() {
 
 dotfiles_init_environment() {
     local brew_path brew_environment
-    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
     if [ "$(uname)" = "Darwin" ] && brew_path="$(dotfiles_find_homebrew)"; then
         brew_environment="$("$brew_path" shellenv)" || return
         eval "$brew_environment" || return

@@ -19,4 +19,16 @@ gh
 # tmux-256color terminfo used by .tmux.conf
 ncurses-term
 
-# Note: eza, zoxide, oh-my-posh are not in apt — installed by scripts/bootstrap_tools.sh
+# Phase 3 tools that Debian 12 and Ubuntu 24.04 package. fd installs as
+# fdfind and bat as batcat; the shell aliases cover both names.
+ripgrep
+fd-find
+duf
+sd
+hyperfine
+vivid
+direnv
+
+# Not in apt (installed by scripts/bootstrap_tools.sh): eza, zoxide, oh-my-posh,
+# mise, carapace, atuin, delta, lazygit, lazydocker, yazi, dust, procs, xh,
+# tlrc, glow and gum.

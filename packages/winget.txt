@@ -11,6 +11,31 @@ junegunn.fzf
 ajeetdsouza.zoxide
 aristocratos.btop4win
 
+# Shell quality of life: completion, history, runtimes, per-directory environments
+rsteube.Carapace
+Atuinsh.Atuin
+jdx.mise
+direnv.direnv
+
+# Git
+dandavison.delta
+JesseDuffield.lazygit
+JesseDuffield.Lazydocker
+
+# Files, search and the modern CLI set
+sxyazi.yazi
+BurntSushi.ripgrep.MSVC
+sharkdp.fd
+bootandy.dust
+muesli.duf
+dalance.procs
+chmln.sd
+ducaale.xh
+sharkdp.hyperfine
+charmbracelet.glow
+tldr-pages.tlrc
+charmbracelet.gum
+
 # Editor
 Neovim.Neovim
 

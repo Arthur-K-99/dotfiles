@@ -1,0 +1,18 @@
+# atuin (https://atuin.sh) shell history, linked to ~/.config/atuin/config.toml.
+# Every key is documented at https://docs.atuin.sh/latest/configuration/config/;
+# anything not set here keeps atuin's default. Sync is not configured: with
+# update_check off and no sync, atuin makes no network requests.
+search_mode = "fuzzy"                          # fzf-style matching
+filter_mode = "global"                         # Ctrl-R searches every host and directory
+filter_mode_shell_up_key_binding = "directory" # Up arrow searches the current directory only
+style = "compact"                              # no frame around the list
+inline_height = 20                             # lines the search UI may take; 0 is full screen
+show_preview = true                            # show the full command when it is cut off
+enter_accept = true                            # Enter runs the command, Tab edits it first
+keymap_mode = "emacs"                          # matches the zsh line editor
+update_check = false                           # packages handle upgrades
+
+[theme]
+# Colors come from config/atuin/themes/<name>.toml, linked into
+# ~/.config/atuin/themes/ where atuin looks (ATUIN_THEME_DIR overrides).
+name = "catppuccin-macchiato-blue"
