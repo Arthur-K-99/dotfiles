@@ -2,6 +2,9 @@
 
 My personal machine setup and source of truth for rebuilding macOS, Debian/Ubuntu, WSL, and native Windows environments.
 
+- [docs/roadmap.md](docs/roadmap.md): what is planned, phase by phase, and the checklist for adding a tool.
+- [docs/theming.md](docs/theming.md): where every color lives and how to switch Catppuccin flavor.
+
 ## Bootstrap
 
 ### macOS / Debian / Ubuntu / WSL
@@ -76,14 +79,15 @@ Native Windows installs PowerShell, Windows Terminal, and command-line tools thr
 ```
 dotfiles/
 ├── home/           # Symlinked to $HOME/
-├── config/         # Symlinked into $HOME/.config/
+├── config/         # Symlinked into $HOME/.config/ (bat, eza, oh-my-posh, powershell)
 ├── packages/       # Declarative package lists (brew, apt, winget)
-├── scripts/        # Install and symlink scripts
+├── scripts/        # Install, symlink, bootstrap and doctor scripts
 ├── tests/          # Isolated installer regression tests
+├── docs/           # Roadmap and theming notes
 ├── install.sh      # Unix entry point
 └── install.ps1     # Windows entry point
 ```
 
 ## Scope
 
-The current baseline covers terminal tools, shell configuration, prompt configuration, and tmux. GUI applications and operating-system preferences should be added as opt-in profiles rather than silently changing every machine. Good future profiles include `development`, `personal`, and platform-specific OS settings.
+The current baseline covers terminal tools, shell configuration, prompt configuration, and tmux, all in one Catppuccin flavor. GUI applications and operating-system preferences should be added as opt-in profiles rather than silently changing every machine. Good future profiles include `development`, `personal`, and platform-specific OS settings. Planned work, including terminal emulator configuration, new tools and Neovim, is tracked in [docs/roadmap.md](docs/roadmap.md).
