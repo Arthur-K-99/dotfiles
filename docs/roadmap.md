@@ -10,7 +10,7 @@ Work lands in phases. Each phase is one pull request that leaves every platform 
 | 2 | Terminal emulators and PowerShell parity | Done ([#3](https://github.com/Arthur-K-99/dotfiles/pull/3)) |
 | 3 | New tools: completion engine, history, runtimes, git, TUIs | Done ([#4](https://github.com/Arthur-K-99/dotfiles/pull/4)) |
 | 4 | tmux plugin suite, theme switcher, fastfetch | Done ([#6](https://github.com/Arthur-K-99/dotfiles/pull/6)) |
-| 5 | Neovim | In review |
+| 5 | Neovim | In review ([#7](https://github.com/Arthur-K-99/dotfiles/pull/7)) |
 
 ## Adding a tool: the checklist
 
