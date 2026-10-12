@@ -5,8 +5,8 @@
 #   bash scripts/theme.sh --check                          verify the locations agree
 #
 # docs/theming.md lists where a flavor lives. Locations that name the flavor
-# (tmux, bat, Ghostty, git, atuin, yazi, vivid, the Windows Terminal scheme,
-# the PSReadLine background sequences) get the new name; files that carry hex
+# (tmux, bat, Ghostty, git, atuin, yazi, Neovim, vivid, the Windows Terminal
+# scheme, the PSReadLine background sequences) get the new name; files that carry hex
 # values (oh-my-posh, eza, fzf in zsh and PowerShell, PSReadLine, the Windows
 # Terminal scheme, lazygit, fastfetch and the palette table in docs/theming.md)
 # get every color replaced by the same-named color of the new flavor, read
@@ -33,7 +33,7 @@ theme_hex_files() {
 # Locations that spell the flavor out. theme_location_file names the file and
 # theme_location_text the exact text that must be there for a flavor.
 theme_locations() {
-    printf '%s\n' tmux bat ghostty git atuin yazi vivid windows-terminal psreadline theming-doc
+    printf '%s\n' tmux bat ghostty git atuin yazi nvim vivid windows-terminal psreadline theming-doc
 }
 
 theme_location_file() {
@@ -44,6 +44,7 @@ theme_location_file() {
         git) printf 'config/git/config\n' ;;
         atuin) printf 'config/atuin/config.toml\n' ;;
         yazi) printf 'config/yazi/theme.toml\n' ;;
+        nvim) printf 'config/nvim/lua/plugins/colorscheme.lua\n' ;;
         vivid) printf 'home/.zshrc\n' ;;
         windows-terminal) printf 'config/windows-terminal/fragment.json\n' ;;
         psreadline) printf 'config/powershell/profile.ps1\n' ;;
@@ -63,6 +64,8 @@ theme_location_text() {
         git) printf 'features = catppuccin-%s\n' "$flavor" ;;
         atuin) printf 'name = "catppuccin-%s-blue"\n' "$flavor" ;;
         yazi) printf 'dark = "catppuccin-%s"\n' "$flavor" ;;
+        # Neovim follows the terminal background: Latte when light, the flavor when dark.
+        nvim) printf 'dark = "%s"\n' "$flavor" ;;
         vivid) printf 'vivid generate catppuccin-%s\n' "$flavor" ;;
         windows-terminal) printf '"Catppuccin %s"\n' "$title" ;;
         # PSReadLine backgrounds are RGB escape sequences of surface0.

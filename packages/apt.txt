@@ -14,8 +14,10 @@ tmux
 bat
 fzf
 btop
-neovim
 gh
+# nvim-treesitter compiles parsers with cc (the tree-sitter CLI comes from a
+# GitHub release in scripts/bootstrap_tools.sh)
+build-essential
 # tmux-256color terminfo used by the tmux configuration
 ncurses-term
 # tmux-yank copies through wl-copy on Wayland and xsel on X11 (clip.exe is
@@ -36,4 +38,6 @@ direnv
 # Not in apt (installed by scripts/bootstrap_tools.sh): eza, zoxide, oh-my-posh,
 # mise, carapace, atuin, delta, lazygit, lazydocker, yazi, dust, procs, xh,
 # tlrc, glow, gum, sesh and fastfetch (apt carries fastfetch from Debian 13
-# and Ubuntu 25.04 only).
+# and Ubuntu 25.04 only). Neovim and the tree-sitter CLI come from GitHub
+# releases too: Debian 12 packages Neovim 0.7, Debian 13 0.10, Ubuntu 24.04
+# 0.9 and Ubuntu 26.04 0.11, and the configuration needs 0.12.

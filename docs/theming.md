@@ -54,7 +54,8 @@ Two philosophies are in play. Explicit hex values look identical in every termin
 | tmux-floax | `@floax-border-color` in `config/tmux/tmux.conf` | ANSI |
 | zsh completion menus, fd | `vivid generate catppuccin-macchiato` in `home/.zshrc` | named vivid theme; a small ANSI default applies without vivid |
 | zsh syntax highlighting, autosuggestions | plugin defaults | ANSI |
-| btop, Neovim | not yet managed | see `docs/roadmap.md` |
+| Neovim | `background` in `config/nvim/lua/plugins/colorscheme.lua` | the `catppuccin/nvim` plugin with `flavour = "auto"`: Latte when the terminal background is light, the flavor above when dark, like Ghostty and yazi |
+| btop | not yet managed | see `docs/roadmap.md` |
 
 ## Switching flavor
 
@@ -64,9 +65,9 @@ bash scripts/theme.sh mocha
 
 The flavors are `latte`, `frappe`, `macchiato` and `mocha`. The script reads the current flavor from `config/catppuccin/flavor` and rewrites every location in the table above:
 
-- **Named locations** get the new name: the tmux flavor, the bat theme, the `dark:` half of the Ghostty theme, the delta feature, the atuin theme name, the yazi `dark` flavor, the vivid theme, the Windows Terminal scheme name, and the PSReadLine background sequences. Each must be present, so a missing one fails the run instead of being forgotten.
+- **Named locations** get the new name: the tmux flavor, the bat theme, the `dark:` half of the Ghostty theme, the delta feature, the atuin theme name, the yazi and Neovim `dark` flavors, the vivid theme, the Windows Terminal scheme name, and the PSReadLine background sequences. Each must be present, so a missing one fails the run instead of being forgotten.
 - **Hex values** in oh-my-posh, eza, the fzf options of both shells, PSReadLine, the Windows Terminal scheme, lazygit, fastfetch and the palette table above are replaced color by color with the same-named color of the new flavor. Each file keeps its own upper- or lowercase convention.
-- **Labels**: comments and this document's mentions of the flavor follow along. The `light` halves of Ghostty and yazi stay Latte.
+- **Labels**: comments and this document's mentions of the flavor follow along. The `light` halves of Ghostty, yazi and Neovim stay Latte.
 - `bash scripts/theme.sh --check` then verifies that every location agrees; the test suite runs the same check and a round trip through every flavor, so the rewritten repository is ready to commit.
 
 After switching: review `git diff`, run `bash scripts/test.sh`, then `bash scripts/bootstrap_tools.sh` (installs the new yazi flavor, and the bat theme on old packages), start a new tmux server or press `prefix r`, and open a new shell. On Windows, rerun `install.ps1` or `scripts\install_runtimes.ps1` for the yazi flavor and restart Windows Terminal so the fragment is read again.

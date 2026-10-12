@@ -19,9 +19,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Install zsh and tmux for shell and configuration checks
+      - name: Install zsh, tmux and Neovim for shell and configuration checks
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y zsh tmux
+        run: sudo apt-get update && sudo apt-get install -y zsh tmux neovim
       - name: Check syntax and isolated installer behavior
         run: bash scripts/test.sh
 

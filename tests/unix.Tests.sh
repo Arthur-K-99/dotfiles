@@ -203,6 +203,7 @@ test_theme_switch_round_trip() {
         grep -q "^name = \"catppuccin-$to-blue\"$" "$repo/config/atuin/config.toml"
         grep -q "^dark = \"catppuccin-$to\"$" "$repo/config/yazi/theme.toml"
         grep -q '^light = "catppuccin-latte"$' "$repo/config/yazi/theme.toml"
+        grep -q "background = { light = \"latte\", dark = \"$to\" }," "$repo/config/nvim/lua/plugins/colorscheme.lua"
         grep -q "vivid generate catppuccin-$to " "$repo/home/.zshrc"
         grep -q "\"name\": \"Catppuccin $title\"" "$repo/config/windows-terminal/fragment.json"
         grep -q "\"background\": \"$(theme_upper "$base")\"" "$repo/config/windows-terminal/fragment.json"
@@ -654,8 +655,8 @@ test_github_release_install() {
     assert_equal from-release "$("$test_dir/bin/tool")"
     assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-release.*' | wc -l | tr -d ' ')"
     # Several binaries from one zip; {version} drops the v, Go and Debian spellings differ.
-    install_github_release owner/multi 'multi_{version}_linux_{arch_go}_{arch_deb}_{arch_amd64}.zip' first second
-    assert_equal 'https://github.com/owner/multi/releases/download/v1.2.3/multi_1.2.3_linux_x86_64_amd64_amd64.zip' "$(tail -n 1 "$test_dir/downloads")"
+    install_github_release owner/multi 'multi_{version}_linux_{arch_go}_{arch_deb}_{arch_amd64}_{arch_node}.zip' first second
+    assert_equal 'https://github.com/owner/multi/releases/download/v1.2.3/multi_1.2.3_linux_x86_64_amd64_amd64_x64.zip' "$(tail -n 1 "$test_dir/downloads")"
     [ -x "$test_dir/bin/first" ] && [ -x "$test_dir/bin/second" ]
     status=0
     install_github_release owner/multi 'multi_{version}_linux_{arch_go}_{arch_deb}.zip' absent > "$test_dir/output" 2>&1 || status=$?
@@ -668,8 +669,8 @@ test_github_release_install() {
     install_github_release owner/multi 'multi_{version}_linux_{arch_go}_{arch_deb}.zip' first second
     assert_equal '' "$(cat "$test_dir/commands")"
     printf 'aarch64\n' > "$test_dir/arch"
-    install_github_release owner/arm 'arm-{arch}-{arch_go}-{arch_deb}-{arch_amd64}' armtool
-    assert_contains "$(tail -n 1 "$test_dir/downloads")" 'arm-aarch64-arm64-arm64-aarch64'
+    install_github_release owner/arm 'arm-{arch}-{arch_go}-{arch_deb}-{arch_amd64}-{arch_node}' armtool
+    assert_contains "$(tail -n 1 "$test_dir/downloads")" 'arm-aarch64-arm64-arm64-aarch64-arm64'
     assert_equal bare "$("$test_dir/bin/armtool")"
     printf 'mips\n' > "$test_dir/arch"
     status=0
@@ -839,6 +840,292 @@ test_yazi_flavors_install_and_retry() {
     bootstrap_yazi_flavors
     assert_equal 'pkg install' "$(cat "$test_dir/commands")"
     [ -f "$XDG_CONFIG_HOME/yazi/flavors/$dark.yazi/flavor.toml" ]
+}
+
+test_neovim_release_install() {
+    source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    export DOTFILES_LOCAL_BIN="$test_dir/bin"
+    export DOTFILES_LOCAL_OPT="$test_dir/opt"
+    export TMPDIR="$test_dir/tmp"
+    mkdir -p "$TMPDIR" "$test_dir/payload/nvim-linux-x86_64/bin" "$test_dir/payload/nvim-linux-x86_64/share/nvim/runtime" \
+        "$test_dir/old-payload/nvim-linux-x86_64/bin" "$test_dir/bad-payload/nvim-linux-x86_64/share"
+    printf '#!/bin/sh\necho "NVIM v0.12.6"\n' > "$test_dir/payload/nvim-linux-x86_64/bin/nvim"
+    printf 'runtime\n' > "$test_dir/payload/nvim-linux-x86_64/share/nvim/runtime/filetype.lua"
+    printf '#!/bin/sh\necho "NVIM v0.11.6"\n' > "$test_dir/old-payload/nvim-linux-x86_64/bin/nvim"
+    chmod +x "$test_dir/payload/nvim-linux-x86_64/bin/nvim" "$test_dir/old-payload/nvim-linux-x86_64/bin/nvim"
+    tar -czf "$test_dir/asset.tar.gz" -C "$test_dir/payload" .
+    tar -czf "$test_dir/old-asset.tar.gz" -C "$test_dir/old-payload" .
+    tar -czf "$test_dir/bad-asset.tar.gz" -C "$test_dir/bad-payload" .
+    # The nvim on PATH is whatever the fixture says; the installed link is run by path.
+    nvim() {
+        if [ -f "$DOTFILES_TEST_FIXTURE/nvim-on-path" ]; then
+            cat "$DOTFILES_TEST_FIXTURE/nvim-on-path"
+            return 0
+        fi
+        return 127
+    }
+    uname() { if [ "${1:-}" = -m ]; then cat "$DOTFILES_TEST_FIXTURE/arch"; else command uname "$@"; fi; }
+    printf 'x86_64\n' > "$test_dir/arch"
+    curl() {
+        local output="" url=""
+        printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                -o|-w) output="$2"; shift ;;
+                -*) ;;
+                *) url="$1" ;;
+            esac
+            shift
+        done
+        case "$url" in
+            https://github.com/neovim/neovim/releases/latest) printf 'https://github.com/neovim/neovim/releases/tag/v0.12.6' ;;
+            https://github.com/neovim/neovim/releases/download/v0.12.6/*)
+                [ -f "$DOTFILES_TEST_FIXTURE/retry" ] || return 56
+                printf '%s\n' "$url" >> "$DOTFILES_TEST_FIXTURE/downloads"
+                cp "$DOTFILES_TEST_FIXTURE/$(cat "$DOTFILES_TEST_FIXTURE/serve")" "$output"
+                ;;
+            *) echo "unexpected URL $url" >&2; return 99 ;;
+        esac
+    }
+    printf 'asset.tar.gz\n' > "$test_dir/serve"
+    # A Neovim that is new enough, from any source, needs nothing.
+    printf 'NVIM v0.12.0\n' > "$test_dir/nvim-on-path"
+    install_neovim_release > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" 'Neovim 0.12.0 already installed'
+    [ ! -f "$test_dir/commands" ]
+    # An old distribution package triggers the download; a failed download leaves nothing behind.
+    printf 'NVIM v0.9.5\n' > "$test_dir/nvim-on-path"
+    local status=0
+    install_neovim_release > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 56 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'found 0.9.5, need'
+    [ ! -e "$test_dir/opt" ] && [ ! -e "$test_dir/bin/nvim" ]
+    assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-nvim.*' | wc -l | tr -d ' ')"
+    : > "$test_dir/retry"
+    install_neovim_release > "$test_dir/output"
+    assert_equal 'https://github.com/neovim/neovim/releases/download/v0.12.6/nvim-linux-x86_64.tar.gz' "$(cat "$test_dir/downloads")"
+    assert_equal "$test_dir/opt/nvim/bin/nvim" "$(readlink "$test_dir/bin/nvim")"
+    assert_equal 'NVIM v0.12.6' "$("$test_dir/bin/nvim" --version)"
+    [ -f "$test_dir/opt/nvim/share/nvim/runtime/filetype.lua" ]
+    [ ! -e "$test_dir/opt/nvim.new" ]
+    assert_contains "$(cat "$test_dir/output")" "Installed Neovim 0.12.6 into $test_dir/opt/nvim"
+    assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-nvim.*' | wc -l | tr -d ' ')"
+    # Without any nvim the release is installed too, replacing a previous tree whole.
+    rm "$test_dir/nvim-on-path"
+    printf 'stale\n' > "$test_dir/opt/nvim/stale-file"
+    install_neovim_release > "$test_dir/output"
+    assert_equal 2 "$(wc -l < "$test_dir/downloads" | tr -d ' ')"
+    [ ! -e "$test_dir/opt/nvim/stale-file" ] && [ -x "$test_dir/opt/nvim/bin/nvim" ]
+    # An archive without bin/nvim, or with a Neovim that is still too old, is refused and the current tree stays.
+    printf 'bad-asset.tar.gz\n' > "$test_dir/serve"
+    status=0
+    install_neovim_release > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'does not contain bin/nvim'
+    assert_equal 'NVIM v0.12.6' "$("$test_dir/bin/nvim" --version)"
+    printf 'old-asset.tar.gz\n' > "$test_dir/serve"
+    status=0
+    install_neovim_release > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'is older than'
+    printf 'asset.tar.gz\n' > "$test_dir/serve"
+    # A real file where the link belongs is reported, never replaced.
+    rm "$test_dir/bin/nvim"
+    printf 'user script\n' > "$test_dir/bin/nvim"
+    status=0
+    install_neovim_release > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'is not a link'
+    assert_equal 'user script' "$(cat "$test_dir/bin/nvim")"
+    rm "$test_dir/bin/nvim"
+    # arm64 machines get the arm64 asset.
+    printf 'aarch64\n' > "$test_dir/arch"
+    install_neovim_release > "$test_dir/output"
+    assert_equal 'https://github.com/neovim/neovim/releases/download/v0.12.6/nvim-linux-arm64.tar.gz' "$(tail -n 1 "$test_dir/downloads")"
+    # The version helpers behind the decision.
+    assert_equal 0.12.6 "$(dotfiles_nvim_version "$test_dir/bin/nvim")"
+    dotfiles_version_at_least 0.12 0.12.0
+    dotfiles_version_at_least 0.12.6 0.12.0
+    dotfiles_version_at_least 1.0 0.12.0
+    if dotfiles_version_at_least 0.11.6 0.12.0 || dotfiles_version_at_least 0.12.0 0.12.1; then
+        echo "An older version passed the minimum." >&2
+        return 1
+    fi
+}
+
+test_neovim_plugins_install_and_retry() {
+    source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    mkdir -p "$test_dir/node/bin"
+    printf 'NVIM v0.12.6\n' > "$test_dir/version"
+    # The check passes once plugins and tools are both installed; plugins() and
+    # install() each need their own retry file to succeed.
+    nvim() {
+        printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/nvim-args"
+        case "$*" in
+            --version) cat "$DOTFILES_TEST_FIXTURE/version" ;;
+            *'bootstrap").check()'*) [ -f "$DOTFILES_TEST_FIXTURE/plugins-installed" ] && [ -f "$DOTFILES_TEST_FIXTURE/tools-installed" ] ;;
+            *'bootstrap").plugins()'*)
+                [ -f "$DOTFILES_TEST_FIXTURE/plugins-ok" ] || { echo 'missing plugin catppuccin'; return 1; }
+                : > "$DOTFILES_TEST_FIXTURE/plugins-installed"
+                ;;
+            *'bootstrap").install()'*)
+                printf '%s\n' "$PATH" > "$DOTFILES_TEST_FIXTURE/install-path"
+                [ -f "$DOTFILES_TEST_FIXTURE/install-ok" ] || { echo 'missing package marksman'; return 1; }
+                : > "$DOTFILES_TEST_FIXTURE/tools-installed"
+                ;;
+        esac
+    }
+    mise() { [ "$1 $2" = 'which node' ] && [ -f "$DOTFILES_TEST_FIXTURE/node-present" ] && printf '%s/node/bin/node\n' "$DOTFILES_TEST_FIXTURE"; }
+    local status=0
+    bootstrap_neovim > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_equal $'--version\n--headless -c lua require("dotfiles.bootstrap").check()\n--headless -c lua require("dotfiles.bootstrap").plugins()' "$(cat "$test_dir/nvim-args")"
+    assert_contains "$(cat "$test_dir/output")" 'missing plugin catppuccin'
+    [ ! -f "$test_dir/plugins-installed" ]
+    # The retry installs the plugins; the parsers and servers fail and are retried in turn.
+    : > "$test_dir/plugins-ok"
+    : > "$test_dir/nvim-args"
+    status=0
+    bootstrap_neovim > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    [ -f "$test_dir/plugins-installed" ]
+    assert_contains "$(tail -n 1 "$test_dir/nvim-args")" 'bootstrap").install()'
+    assert_contains "$(cat "$test_dir/output")" 'missing package marksman'
+    # Without mise's Node.js the install runs with the current PATH; with it, that directory comes first.
+    assert_equal "$PATH" "$(cat "$test_dir/install-path")"
+    : > "$test_dir/install-ok"
+    : > "$test_dir/node-present"
+    : > "$test_dir/nvim-args"
+    bootstrap_neovim > "$test_dir/output"
+    assert_equal $'--version\n--headless -c lua require("dotfiles.bootstrap").check()\n--headless -c lua require("dotfiles.bootstrap").plugins()\n--headless -c lua require("dotfiles.bootstrap").install()' "$(cat "$test_dir/nvim-args")"
+    assert_equal "$test_dir/node/bin:$PATH" "$(cat "$test_dir/install-path")"
+    [ -f "$test_dir/tools-installed" ]
+    # Everything installed: one offline check and nothing else.
+    : > "$test_dir/nvim-args"
+    bootstrap_neovim > "$test_dir/output"
+    assert_equal $'--version\n--headless -c lua require("dotfiles.bootstrap").check()' "$(cat "$test_dir/nvim-args")"
+    assert_contains "$(cat "$test_dir/output")" 'already installed'
+    # An old or absent Neovim stops before anything runs.
+    printf 'NVIM v0.11.6\n' > "$test_dir/version"
+    status=0
+    bootstrap_neovim > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" '0.11.6 is older than'
+    unset -f nvim
+    command() {
+        if [ "$*" = '-v nvim' ]; then return 1; fi
+        builtin command "$@"
+    }
+    status=0
+    bootstrap_neovim > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'Neovim is not installed'
+}
+
+test_nvim_config_check() {
+    source "$TEST_REPO_DIR/scripts/test.sh"
+    # The real configuration passes; the checker runs without the user's configuration.
+    XDG_CONFIG_HOME="$test_dir/no-config" check_nvim_config "$TEST_REPO_DIR/config/nvim" > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" 'plugins pinned'
+    # A copy with a syntax error, an unpinned plugin and a stale lockfile entry fails on each.
+    cp -R "$TEST_REPO_DIR/config/nvim" "$test_dir/nvim"
+    printf 'return { "owner/new-plugin", opts = {} }\n' > "$test_dir/nvim/lua/plugins/new.lua"
+    printf 'local broken = {\n' > "$test_dir/nvim/lua/dotfiles/broken.lua"
+    printf '{\n  "lazy.nvim": { "branch": "main", "commit": "aaa" },\n  "gone.nvim": { "branch": "main", "commit": "bbb" }\n}\n' > "$test_dir/nvim/lazy-lock.json"
+    local status=0
+    check_nvim_config "$test_dir/nvim" > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'broken.lua'
+    assert_contains "$(cat "$test_dir/output")" "lacks the declared plugin 'new-plugin'"
+    assert_contains "$(cat "$test_dir/output")" "pins 'gone.nvim', which no plugin file declares"
+    assert_contains "$(cat "$test_dir/output")" "lacks the declared plugin 'catppuccin'"
+}
+
+test_doctor_neovim_checks() {
+    source "$TEST_REPO_DIR/scripts/doctor.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    export XDG_DATA_HOME="$test_dir/data"
+    nvim() {
+        printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/nvim-args"
+        case "$*" in
+            --version) cat "$DOTFILES_TEST_FIXTURE/version" ;;
+            *'bootstrap").check()'*)
+                printf 'ok plugin catppuccin\nok parser bash\nok package lua-language-server\n'
+                if [ -f "$DOTFILES_TEST_FIXTURE/tools-missing" ]; then
+                    printf 'missing plugin gitsigns.nvim\nstale plugin which-key.nvim\nmissing parser yaml\nmissing package marksman\nskipped parser python (no C compiler or tree-sitter CLI; see the README)\n'
+                    return 1
+                fi
+                ;;
+            --headless*)
+                if [ -f "$DOTFILES_TEST_FIXTURE/start-error" ]; then
+                    echo 'E5113: Lua chunk: init.lua:2: boom' >&2
+                    return 3
+                fi
+                ;;
+        esac
+    }
+    printf 'NVIM v0.12.6\n' > "$test_dir/version"
+    failures=0
+    check_nvim_version > "$test_dir/output"
+    assert_equal 0 "$failures"
+    assert_contains "$(cat "$test_dir/output")" '[ok] Neovim 0.12.6'
+    printf 'NVIM v0.9.5\n' > "$test_dir/version"
+    check_nvim_version > "$test_dir/output"
+    assert_equal 1 "$failures"
+    assert_contains "$(cat "$test_dir/output")" '0.9.5 is older than'
+    printf 'VIM - Vi IMproved 9.1\n' > "$test_dir/version"
+    check_nvim_version > "$test_dir/output"
+    assert_equal 2 "$failures"
+    assert_contains "$(cat "$test_dir/output")" 'did not report one'
+    # lazy.nvim by file, a clean start, then the report of plugins, parsers and servers.
+    failures=0
+    check_nvim_plugins > "$test_dir/output"
+    assert_equal 1 "$failures"
+    assert_contains "$(cat "$test_dir/output")" '[missing] lazy.nvim'
+    assert_contains "$(cat "$test_dir/output")" '[ok] Neovim starts without errors'
+    assert_contains "$(cat "$test_dir/output")" '[ok] Neovim plugin catppuccin'
+    assert_contains "$(cat "$test_dir/output")" '[ok] Neovim parser bash'
+    assert_contains "$(cat "$test_dir/output")" '[ok] Neovim language server lua-language-server'
+    assert_contains "$(tail -n 2 "$test_dir/nvim-args" | head -n 1)" 'vim.v.errmsg'
+    assert_contains "$(tail -n 1 "$test_dir/nvim-args")" 'bootstrap").check()'
+    mkdir -p "$XDG_DATA_HOME/nvim/lazy/lazy.nvim/lua/lazy"
+    : > "$XDG_DATA_HOME/nvim/lazy/lazy.nvim/lua/lazy/init.lua"
+    failures=0
+    check_nvim_plugins > "$test_dir/output"
+    assert_equal 0 "$failures"
+    # Missing or stale plugins, parsers and servers fail and name the bootstrap; skipped parsers do not count.
+    : > "$test_dir/tools-missing"
+    failures=0
+    check_nvim_plugins > "$test_dir/output"
+    assert_equal 4 "$failures"
+    assert_contains "$(cat "$test_dir/output")" '[missing] Neovim plugin gitsigns.nvim (rerun: bash scripts/bootstrap_tools.sh)'
+    assert_contains "$(cat "$test_dir/output")" '[stale] Neovim plugin which-key.nvim is not at the commit lazy-lock.json pins'
+    assert_contains "$(cat "$test_dir/output")" '[missing] Neovim parser yaml (rerun: bash scripts/bootstrap_tools.sh)'
+    assert_contains "$(cat "$test_dir/output")" '[missing] Neovim language server marksman (rerun: bash scripts/bootstrap_tools.sh)'
+    assert_contains "$(cat "$test_dir/output")" '[skip] Neovim parser python (no C compiler'
+    rm "$test_dir/tools-missing"
+    # A failing start is reported once and the report is not attempted.
+    : > "$test_dir/start-error"
+    : > "$test_dir/nvim-args"
+    failures=0
+    check_nvim_plugins > "$test_dir/output" 2>&1
+    assert_equal 1 "$failures"
+    assert_contains "$(cat "$test_dir/output")" 'E5113'
+    assert_equal 1 "$(wc -l < "$test_dir/nvim-args" | tr -d ' ')"
+    # Without nvim the version is missing and nothing is started.
+    unset -f nvim
+    command() {
+        if [ "$*" = '-v nvim' ]; then return 1; fi
+        builtin command "$@"
+    }
+    failures=0
+    : > "$test_dir/nvim-args"
+    check_nvim_version > "$test_dir/output"
+    check_nvim_plugins > "$test_dir/output"
+    assert_equal 1 "$failures"
+    assert_equal '' "$(cat "$test_dir/nvim-args")"
 }
 
 test_doctor_rejects_stale_configuration() {
@@ -1154,6 +1441,9 @@ run_tests() {
         fd_link_for_debian
         mise_bootstrap_and_runtimes
         yazi_flavors_install_and_retry
+        neovim_release_install
+        neovim_plugins_install_and_retry
+        doctor_neovim_checks
         tmux_plugin_failure_and_retry
         tmux_config_declares_plugins_in_order
         bat_theme_install_and_skip
@@ -1168,6 +1458,11 @@ run_tests() {
         tests+=(tmux_config_loads_and_errors_are_reported)
     else
         echo "  SKIP tmux_config_loads_and_errors_are_reported (tmux is not installed)."
+    fi
+    if command -v nvim >/dev/null 2>&1; then
+        tests+=(nvim_config_check)
+    else
+        echo "  SKIP nvim_config_check (nvim is not installed)."
     fi
     for test_name in "${tests[@]}"; do
         # A separate shell keeps errexit active inside each case and isolates mocks.

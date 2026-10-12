@@ -51,3 +51,51 @@ dotfiles_bat_theme() {
 dotfiles_yazi_flavors() {
     sed -E -n 's/^(dark|light) = "([^"]*)"[[:space:]]*$/\2/p' "$1" | awk '!seen[$0]++'
 }
+
+# The Neovim configuration needs the nvim-treesitter main branch, which
+# requires Neovim 0.12 (vim.lsp.config, the other 0.11 feature it relies on,
+# is older). Debian 12 (0.7), Debian 13 (0.10), Ubuntu 24.04 (0.9) and Ubuntu
+# 26.04 (0.11) package older releases, so the Linux bootstrap installs from
+# the GitHub release when the installed version is below this.
+DOTFILES_NVIM_MINIMUM="0.12.0"
+
+# dotfiles_nvim_version [nvim]: the version of a Neovim binary, from the first
+# line of --version ("NVIM v0.12.6", or "NVIM v0.12.0-dev-123+g..." for a
+# development build, whose suffix is dropped).
+dotfiles_nvim_version() {
+    local first_line
+    first_line="$("${1:-nvim}" --version 2>/dev/null | head -n 1)" || return 1
+    case "$first_line" in
+        "NVIM v"*) ;;
+        *) return 1 ;;
+    esac
+    first_line="${first_line#NVIM v}"
+    first_line="${first_line%%[^0-9.]*}"
+    [ -n "$first_line" ] || return 1
+    printf '%s\n' "$first_line"
+}
+
+# dotfiles_version_at_least <version> <minimum>: dotted numeric versions,
+# missing components count as zero.
+dotfiles_version_at_least() {
+    local have="$1" want="$2" have_part want_part
+    while [ -n "$have" ] || [ -n "$want" ]; do
+        have_part="${have%%.*}"
+        want_part="${want%%.*}"
+        [ "$have" = "${have#*.}" ] && have="" || have="${have#*.}"
+        [ "$want" = "${want#*.}" ] && want="" || want="${want#*.}"
+        if [ "${have_part:-0}" -gt "${want_part:-0}" ]; then
+            return 0
+        elif [ "${have_part:-0}" -lt "${want_part:-0}" ]; then
+            return 1
+        fi
+    done
+    return 0
+}
+
+# dotfiles_nvim_lock_plugins <lazy-lock.json>: the plugin names lazy.nvim has
+# pinned, one per line. lazy.nvim writes one plugin per line, so the keys are
+# read without a JSON parser (python3 is not on every machine at this point).
+dotfiles_nvim_lock_plugins() {
+    sed -n 's/^  "\([^"]*\)": {.*$/\1/p' "$1"
+}
