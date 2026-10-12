@@ -55,10 +55,15 @@ bootstrap_tmux() (
     XDG_CONFIG_HOME="$work_dir/config" TMUX="$socket_path,0,0" "$tpm_dir/bin/install_plugins"
 )
 
+# The oh-my-posh and zoxide installers write into the local bin directory like
+# the release installers below. oh-my-posh's refuses a directory that does not
+# exist yet, which is the case on a new Linux account.
 bootstrap_oh_my_posh() {
+    local bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
     if ! command -v oh-my-posh &>/dev/null; then
         echo "Installing oh-my-posh..."
-        curl -fsSL https://ohmyposh.dev/install.sh | bash -s -- -d "$HOME/.local/bin"
+        mkdir -p "$bin_dir" || return
+        curl -fsSL https://ohmyposh.dev/install.sh | bash -s -- -d "$bin_dir"
     else
         echo "oh-my-posh already installed"
     fi
@@ -67,7 +72,8 @@ bootstrap_oh_my_posh() {
 bootstrap_zoxide() {
     if ! command -v zoxide &>/dev/null; then
         echo "Installing zoxide..."
-        curl -sSfL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh
+        curl -sSfL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | \
+            sh -s -- --bin-dir "${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
     else
         echo "zoxide already installed"
     fi
@@ -354,23 +360,45 @@ install_linux_tools() {
 # DOTFILES_TREE_SITTER_MINIMUM (lib/environment.sh); Debian 13 packages 0.22
 # and Ubuntu 24.04 0.20. A CLI that is too old is left where it is and the
 # release goes into the local bin directory, which precedes /usr/bin on PATH.
-# The zip holds the one binary (the .gz assets hold it bare).
+# The zip holds the one binary (the .gz assets hold it bare). A release that
+# fails for want of a newer glibc is removed again and recorded (see
+# dotfiles_tree_sitter_record), so Neovim skips the parsers instead of
+# compiling with it; any other failure stops the bootstrap.
 install_tree_sitter_cli() {
-    local version bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
-    if version="$(dotfiles_tree_sitter_version)" && dotfiles_version_at_least "$version" "$DOTFILES_TREE_SITTER_MINIMUM"; then
+    local version glibc errors tag needed record bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
+    record="$(dotfiles_tree_sitter_record)"
+    if version="$(dotfiles_tree_sitter_version)" && dotfiles_version_at_least "$version" "$DOTFILES_TREE_SITTER_MINIMUM" && \
+        ! dotfiles_tree_sitter_glibc_error >/dev/null; then
         echo "tree-sitter $version already installed"
+        return 0
+    fi
+    if [ -r "$record" ] && glibc="$(dotfiles_glibc_version)" && tag="$(github_latest_tag tree-sitter/tree-sitter)" && \
+        [ "$(cat "$record")" = "$tag $glibc" ]; then
+        echo "tree-sitter $tag does not run on glibc $glibc; Neovim keeps skipping the parsers"
         return 0
     fi
     echo "Installing tree-sitter from tree-sitter/tree-sitter${version:+ (found $version, need $DOTFILES_TREE_SITTER_MINIMUM)}..."
     download_github_release tree-sitter/tree-sitter 'tree-sitter-cli-linux-{arch_node}.zip' tree-sitter || return
+    if errors="$(dotfiles_tree_sitter_glibc_error "$bin_dir/tree-sitter")" && glibc="$(dotfiles_glibc_version)" && \
+        tag="$(github_latest_tag tree-sitter/tree-sitter)"; then
+        needed="${errors#*GLIBC_}"
+        needed="${needed%%[!0-9.]*}"
+        rm -f "$bin_dir/tree-sitter" || return
+        mkdir -p "$(dirname "$record")" || return
+        printf '%s %s\n' "$tag" "$glibc" > "$record" || return
+        echo "tree-sitter $tag needs glibc ${needed:-newer than $glibc} and this system has $glibc; Neovim will skip compiling parsers and highlight those file types with Vim's syntax files."
+        return 0
+    fi
     if ! version="$(dotfiles_tree_sitter_version "$bin_dir/tree-sitter")"; then
-        echo "$bin_dir/tree-sitter does not report a version after installing." >&2
+        errors="$("$bin_dir/tree-sitter" --version 2>&1)" || :
+        printf '%s does not report a version after installing:\n%s\n' "$bin_dir/tree-sitter" "$errors" >&2
         return 1
     fi
     if ! dotfiles_version_at_least "$version" "$DOTFILES_TREE_SITTER_MINIMUM"; then
         echo "The tree-sitter release ($version) is older than $DOTFILES_TREE_SITTER_MINIMUM." >&2
         return 1
     fi
+    rm -f "$record"
 }
 
 # --- Runtimes and themes ------------------------------------------------------

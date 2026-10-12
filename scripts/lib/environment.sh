@@ -98,6 +98,41 @@ dotfiles_version_at_least() {
 # installs the GitHub release when the installed version is below this.
 DOTFILES_TREE_SITTER_MINIMUM="0.26.1"
 
+# The tree-sitter CLI releases for Linux are built against glibc 2.39. On an
+# older glibc, such as Debian 12's 2.36, a release does not start at all
+# (arm64 since 0.26) or starts with a "weak version" warning (x86_64 0.27.1),
+# and with the latter every Debian 12 test hung installing a parser. The
+# bootstrap leaves out a release the loader complains about and records
+# "<tag> <glibc>"
+# in this file, so a rerun does not fetch the same release again and the
+# doctor can tell a CLI left out on purpose from a missing one. Neovim then
+# skips compiling parsers, as on Windows without a C compiler.
+dotfiles_tree_sitter_record() {
+    printf '%s\n' "${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/tree-sitter-unsupported"
+}
+
+# dotfiles_tree_sitter_glibc_error [tree-sitter]: prints the loader's
+# complaint, and succeeds, when the binary wants a newer glibc than this one.
+dotfiles_tree_sitter_glibc_error() {
+    local errors
+    errors="$("${1:-tree-sitter}" --version 2>&1 >/dev/null)" || :
+    case "$errors" in
+        *"GLIBC_"*" not found"*) printf '%s\n' "$errors" ;;
+        *) return 1 ;;
+    esac
+}
+
+# dotfiles_glibc_version: the C library version of a glibc system ("2.36");
+# fails on macOS and musl systems.
+dotfiles_glibc_version() {
+    local version
+    version="$(getconf GNU_LIBC_VERSION 2>/dev/null)" || return 1
+    case "$version" in
+        "glibc "?*) printf '%s\n' "${version#glibc }" ;;
+        *) return 1 ;;
+    esac
+}
+
 # dotfiles_tree_sitter_version [tree-sitter]: the version of a tree-sitter CLI
 # binary, from "tree-sitter 0.27.1".
 dotfiles_tree_sitter_version() {

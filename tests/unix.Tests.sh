@@ -179,7 +179,7 @@ test_tmux_config_loads_and_errors_are_reported() {
 test_theme_switch_round_trip() {
     source "$TEST_REPO_DIR/scripts/theme.sh"
     mkdir -p "$test_dir/repo"
-    (cd "$TEST_REPO_DIR" && tar -cf - config home docs) | tar -xf - -C "$test_dir/repo"
+    cp -R "$TEST_REPO_DIR/config" "$TEST_REPO_DIR/home" "$TEST_REPO_DIR/docs" "$test_dir/repo/"
     cp -R "$test_dir/repo" "$test_dir/original"
     DOTFILES_DIR="$test_dir/repo"
     local repo="$test_dir/repo"
@@ -482,6 +482,7 @@ test_install_stages_and_failure_reporting() {
 
 test_eza_index_and_download_failures() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    export DOTFILES_LOCAL_BIN="$test_dir/bin"
     command() {
         case "$*" in
             '-v eza'|'-v oh-my-posh'|'-v zoxide') return 1 ;;
@@ -540,6 +541,17 @@ test_eza_index_and_download_failures() {
     status=0
     bootstrap_zoxide > "$test_dir/output" 2>&1 || status=$?
     assert_equal 45 "$status"
+    # A new account has no local bin directory yet, and the oh-my-posh
+    # installer refuses a missing one; both installers get the directory.
+    export DOTFILES_LOCAL_BIN="$test_dir/new/bin"
+    curl() { printf 'echo fixture installer\n'; }
+    bash() { cat >/dev/null; printf 'bash %s\n' "$*" >> "$test_dir/installers"; }
+    sh() { cat >/dev/null; printf 'sh %s\n' "$*" >> "$test_dir/installers"; }
+    bootstrap_oh_my_posh > "$test_dir/output"
+    [ -d "$test_dir/new/bin" ]
+    bootstrap_zoxide > "$test_dir/output"
+    assert_equal "bash -s -- -d $test_dir/new/bin
+sh -s -- --bin-dir $test_dir/new/bin" "$(cat "$test_dir/installers")"
 }
 
 test_tmux_plugin_failure_and_retry() {
@@ -1064,6 +1076,9 @@ test_tree_sitter_cli_install() {
     printf 'asset.zip\n' > "$test_dir/serve"
     tree-sitter() {
         if [ -f "$DOTFILES_TEST_FIXTURE/cli-on-path" ]; then
+            if [ -f "$DOTFILES_TEST_FIXTURE/cli-warns" ]; then
+                echo "tree-sitter: /lib/x86_64-linux-gnu/libc.so.6: weak version \`GLIBC_2.39' not found (required by tree-sitter)" >&2
+            fi
             cat "$DOTFILES_TEST_FIXTURE/cli-on-path"
             return 0
         fi
@@ -1113,6 +1128,70 @@ test_tree_sitter_cli_install() {
     printf '#!/bin/sh\necho "not a cli"\n' > "$test_dir/bin/tree-sitter"
     if dotfiles_tree_sitter_version "$test_dir/bin/tree-sitter"; then
         echo "A version was read from unrelated output." >&2
+        return 1
+    fi
+    # A release that fails for want of a newer glibc is removed and recorded,
+    # so Neovim skips the parsers and a rerun fetches nothing; any other
+    # failure stands and shows why.
+    export XDG_STATE_HOME="$test_dir/state"
+    local record="$test_dir/state/dotfiles/tree-sitter-unsupported"
+    mkdir -p "$test_dir/glibc-payload" "$test_dir/crash-payload"
+    printf '#!/bin/sh\necho "tree-sitter: /lib/aarch64-linux-gnu/libc.so.6: version \\`GLIBC_2.39'"'"' not found" >&2\nexit 1\n' > "$test_dir/glibc-payload/tree-sitter"
+    printf '#!/bin/sh\necho "Segmentation fault" >&2\nexit 139\n' > "$test_dir/crash-payload/tree-sitter"
+    chmod +x "$test_dir/glibc-payload/tree-sitter" "$test_dir/crash-payload/tree-sitter"
+    (cd "$test_dir/glibc-payload" && zip -q "$test_dir/glibc-asset.zip" tree-sitter)
+    (cd "$test_dir/crash-payload" && zip -q "$test_dir/crash-asset.zip" tree-sitter)
+    getconf() { [ "$1" = GNU_LIBC_VERSION ] && [ -f "$DOTFILES_TEST_FIXTURE/glibc" ] && cat "$DOTFILES_TEST_FIXTURE/glibc"; }
+    printf 'glibc 2.36\n' > "$test_dir/glibc"
+    rm -f "$test_dir/bin/tree-sitter" "$test_dir/downloads"
+    printf 'glibc-asset.zip\n' > "$test_dir/serve"
+    install_tree_sitter_cli > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" 'tree-sitter v0.27.1 needs glibc 2.39 and this system has 2.36'
+    [ ! -e "$test_dir/bin/tree-sitter" ]
+    assert_equal 'v0.27.1 2.36' "$(cat "$record")"
+    install_tree_sitter_cli > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" 'Neovim keeps skipping the parsers'
+    assert_equal 1 "$(wc -l < "$test_dir/downloads" | tr -d ' ')"
+    # A record from another release or another glibc is fetched again.
+    printf 'v0.27.0 2.36\n' > "$record"
+    install_tree_sitter_cli > "$test_dir/output"
+    assert_equal 2 "$(wc -l < "$test_dir/downloads" | tr -d ' ')"
+    assert_equal 'v0.27.1 2.36' "$(cat "$record")"
+    # One that starts but warns about a weak glibc symbol is left out as well:
+    # with it, parser installs hung on Debian 12. So is such a CLI on PATH.
+    mkdir -p "$test_dir/weak-payload"
+    printf '#!/bin/sh\necho "tree-sitter: libc.so.6: weak version \\`GLIBC_2.39'"'"' not found" >&2\necho "tree-sitter 0.27.1"\n' > "$test_dir/weak-payload/tree-sitter"
+    chmod +x "$test_dir/weak-payload/tree-sitter"
+    (cd "$test_dir/weak-payload" && zip -q "$test_dir/weak-asset.zip" tree-sitter)
+    printf 'weak-asset.zip\n' > "$test_dir/serve"
+    rm "$record"
+    printf 'tree-sitter 0.27.1\n' > "$test_dir/cli-on-path"
+    : > "$test_dir/cli-warns"
+    install_tree_sitter_cli > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" 'tree-sitter v0.27.1 needs glibc 2.39 and this system has 2.36'
+    [ ! -e "$test_dir/bin/tree-sitter" ]
+    assert_equal 'v0.27.1 2.36' "$(cat "$record")"
+    assert_equal 3 "$(wc -l < "$test_dir/downloads" | tr -d ' ')"
+    rm "$test_dir/cli-on-path" "$test_dir/cli-warns"
+    # A crash is no glibc mismatch, whatever the glibc.
+    printf 'crash-asset.zip\n' > "$test_dir/serve"
+    rm "$record"
+    status=0
+    install_tree_sitter_cli > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'does not report a version after installing:'
+    assert_contains "$(cat "$test_dir/output")" 'Segmentation fault'
+    [ ! -e "$record" ]
+    # A release that runs clears the record.
+    rm "$test_dir/bin/tree-sitter"
+    printf 'v0.27.0 2.36\n' > "$record"
+    printf 'asset.zip\n' > "$test_dir/serve"
+    install_tree_sitter_cli > "$test_dir/output"
+    [ -x "$test_dir/bin/tree-sitter" ] && [ ! -e "$record" ]
+    assert_equal 2.36 "$(dotfiles_glibc_version)"
+    printf 'NPTL 2.36\n' > "$test_dir/glibc"
+    if dotfiles_glibc_version; then
+        echo "A glibc version was read from unrelated output." >&2
         return 1
     fi
 }
@@ -1303,6 +1382,7 @@ test_doctor_neovim_checks() {
     assert_equal 1 "$(wc -l < "$test_dir/nvim-args" | tr -d ' ')"
     # Without nvim or tree-sitter the versions are missing and nothing is started.
     unset -f nvim tree-sitter
+    getconf() { return 1; }
     command() {
         case "$*" in
             '-v nvim'|'-v tree-sitter') return 1 ;;
@@ -1316,6 +1396,40 @@ test_doctor_neovim_checks() {
     check_nvim_plugins > "$test_dir/output"
     assert_equal 2 "$failures"
     assert_equal '' "$(cat "$test_dir/nvim-args")"
+    # A CLI that warns about a newer glibc hangs installing parsers.
+    unset -f command
+    tree-sitter() {
+        echo "tree-sitter: libc.so.6: weak version \`GLIBC_2.39' not found" >&2
+        echo "tree-sitter 0.27.1"
+    }
+    failures=0
+    check_tree_sitter > "$test_dir/output"
+    assert_equal 1 "$failures"
+    assert_contains "$(cat "$test_dir/output")" 'built for a newer glibc than this system'"'"'s (rerun: bash scripts/bootstrap_tools.sh)'
+    unset -f tree-sitter
+    command() {
+        case "$*" in
+            '-v nvim'|'-v tree-sitter') return 1 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    # A CLI the bootstrap left out for this glibc is skipped, as Neovim skips
+    # the parsers; without the record, or after a glibc upgrade, it is missing.
+    export XDG_STATE_HOME="$test_dir/state"
+    getconf() { [ "$1" = GNU_LIBC_VERSION ] && cat "$DOTFILES_TEST_FIXTURE/glibc"; }
+    printf 'glibc 2.36\n' > "$test_dir/glibc"
+    failures=0
+    check_tree_sitter > "$test_dir/output"
+    assert_equal 1 "$failures"
+    mkdir -p "$test_dir/state/dotfiles"
+    printf 'v0.27.1 2.36\n' > "$test_dir/state/dotfiles/tree-sitter-unsupported"
+    failures=0
+    check_tree_sitter > "$test_dir/output"
+    assert_equal 0 "$failures"
+    assert_contains "$(cat "$test_dir/output")" '[skip] tree-sitter CLI (v0.27.1 needs a newer glibc than 2.36'
+    printf 'glibc 2.41\n' > "$test_dir/glibc"
+    check_tree_sitter > "$test_dir/output"
+    assert_equal 1 "$failures"
 }
 
 test_doctor_rejects_stale_configuration() {
