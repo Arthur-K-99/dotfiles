@@ -35,7 +35,8 @@ dotfiles_linux_font_installed() {
 }
 
 # dotfiles_is_wsl: WSL kernels name themselves in the release, such as
-# 6.6.87.2-microsoft-standard-WSL2 (WSL 1: 4.4.0-19041-Microsoft).
+# 6.6.87.2-microsoft-standard-WSL2 (WSL 1: 4.4.0-19041-Microsoft). Containers
+# share the host's kernel, so Docker on a Windows host counts as WSL too.
 dotfiles_is_wsl() {
     case "$(uname -r)" in
         *[Mm]icrosoft*) return 0 ;;

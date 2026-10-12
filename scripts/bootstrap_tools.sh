@@ -411,9 +411,16 @@ install_tree_sitter_cli() {
 # ~/.local/share/fonts/CaskaydiaCove, where fontconfig finds it. WSL skips it:
 # Windows Terminal draws WSL's text with the font install.ps1 installs on
 # Windows.
+#
+# The new copy is assembled in .CaskaydiaCove.new beside the directory:
+# fontconfig skips hidden directories, so a copy cut short never counts as
+# installed, and the rename into place stays on one file system. The marker
+# file lets a later run replace the directory; one without it belongs to the
+# user and is left alone.
 install_nerd_font() (
-    local font_dir="${XDG_DATA_HOME:-$HOME/.local/share}/fonts/CaskaydiaCove"
-    local asset=CascadiaCode.tar.xz tag work
+    local fonts_dir="${XDG_DATA_HOME:-$HOME/.local/share}/fonts"
+    local font_dir="$fonts_dir/CaskaydiaCove" staging="$fonts_dir/.CaskaydiaCove.new"
+    local marker=.installed-by-dotfiles asset=CascadiaCode.tar.xz tag work
     if dotfiles_is_wsl; then
         echo "WSL uses the Windows font; install.ps1 installs $DOTFILES_FONT_FAMILY there"
         return 0
@@ -422,28 +429,32 @@ install_nerd_font() (
         echo "fontconfig is not installed; install packages first." >&2
         return 1
     fi
+    rm -rf "$staging" || return
     if dotfiles_linux_font_installed; then
         echo "$DOTFILES_FONT_FAMILY already installed"
         return 0
+    fi
+    if [ -e "$font_dir" ] && [ ! -e "$font_dir/$marker" ]; then
+        echo "$font_dir exists and the bootstrap did not install it; move it away to let the bootstrap install $DOTFILES_FONT_FAMILY there." >&2
+        return 1
     fi
     echo "Installing $DOTFILES_FONT_FAMILY into $font_dir..."
     tag="$(github_latest_tag ryanoasis/nerd-fonts)" || return
     work="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-font.XXXXXX")" || return
     trap 'rm -rf "$work"' EXIT
     curl -fsSL -o "$work/$asset" "https://github.com/ryanoasis/nerd-fonts/releases/download/$tag/$asset" || return
-    mkdir -p "$work/extract" "$work/fonts" || return
+    mkdir -p "$work/extract" || return
     tar -xJf "$work/$asset" -C "$work/extract" || return
     if ! compgen -G "$work/extract/CaskaydiaCoveNerdFontMono-*.ttf" >/dev/null; then
         echo "$asset does not contain the $DOTFILES_FONT_FAMILY files" >&2
         return 1
     fi
-    cp "$work/extract"/CaskaydiaCoveNerdFontMono-*.ttf "$work/fonts/" || return
+    mkdir -p "$staging" || return
+    cp "$work/extract"/CaskaydiaCoveNerdFontMono-*.ttf "$staging/" || return
+    : > "$staging/$marker" || return
     # The previous directory goes only once the new one is complete beside it.
-    mkdir -p "$(dirname "$font_dir")" || return
-    rm -rf "$font_dir.new" || return
-    mv "$work/fonts" "$font_dir.new" || return
     rm -rf "$font_dir" || return
-    mv "$font_dir.new" "$font_dir" || return
+    mv "$staging" "$font_dir" || return
     fc-cache -f "$font_dir" || return
     if ! dotfiles_linux_font_installed; then
         echo "fontconfig does not list $DOTFILES_FONT_FAMILY after installing $asset." >&2

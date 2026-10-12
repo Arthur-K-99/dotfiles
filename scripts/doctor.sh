@@ -46,6 +46,8 @@ check_macos_font() {
 check_linux_font() {
     if dotfiles_is_wsl; then
         skip "$DOTFILES_FONT_FAMILY (WSL uses the Windows font, which install.ps1 installs)"
+    elif ! command -v fc-list >/dev/null 2>&1; then
+        fail "$DOTFILES_FONT_FAMILY (fontconfig is not installed; rerun: bash scripts/install_packages.sh)"
     elif dotfiles_linux_font_installed; then
         ok "$DOTFILES_FONT_FAMILY"
     else

@@ -1253,18 +1253,32 @@ test_linux_font_install() {
     assert_contains "$(cat "$test_dir/output")" 'CaskaydiaCove Nerd Font Mono already installed'
     [ ! -f "$test_dir/commands" ]
     rm "$test_dir/registered"
-    # A failed download leaves nothing behind; the retry installs the Mono family alone.
+    # A directory the bootstrap did not create is the user's and stays.
+    mkdir -p "$font_dir"
+    printf 'mine\n' > "$font_dir/MyFont.ttf"
+    status=0
+    install_nerd_font > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'exists and the bootstrap did not install it'
+    assert_equal mine "$(cat "$font_dir/MyFont.ttf")"
+    [ ! -f "$test_dir/commands" ]
+    rm -r "$font_dir"
+    # A failed download leaves nothing behind, and a copy cut short earlier,
+    # hidden from fontconfig, is cleared; the retry installs the Mono family alone.
+    mkdir -p "$test_dir/data/fonts/.CaskaydiaCove.new"
+    printf 'partial\n' > "$test_dir/data/fonts/.CaskaydiaCove.new/CaskaydiaCoveNerdFontMono-Regular.ttf"
     status=0
     install_nerd_font > "$test_dir/output" 2>&1 || status=$?
     assert_equal 56 "$status"
-    [ ! -e "$test_dir/data/fonts" ]
+    [ ! -e "$font_dir" ] && [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.new" ]
     assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-font.*' | wc -l | tr -d ' ')"
     : > "$test_dir/retry"
     install_nerd_font > "$test_dir/output"
     assert_equal 'https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/CascadiaCode.tar.xz' "$(cat "$test_dir/downloads")"
     assert_equal 'CaskaydiaCoveNerdFontMono-Bold.ttf CaskaydiaCoveNerdFontMono-Regular.ttf' "$(cd "$font_dir" && echo *)"
+    [ -f "$font_dir/.installed-by-dotfiles" ]
     assert_equal "fc-cache -f $font_dir" "$(tail -n 1 "$test_dir/commands")"
-    [ ! -e "$font_dir.new" ]
+    [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.new" ]
     assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-font.*' | wc -l | tr -d ' ')"
     : > "$test_dir/commands"
     install_nerd_font > "$test_dir/output"
@@ -1310,6 +1324,17 @@ test_doctor_linux_font() {
     check_linux_font > "$test_dir/output"
     assert_equal 0 "$failures"
     assert_contains "$(cat "$test_dir/output")" '[skip] CaskaydiaCove Nerd Font Mono (WSL'
+    # Without fontconfig the package step is the one to rerun.
+    command() {
+        case "$*" in
+            '-v fc-list') return 1 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    printf '6.1.0-25-amd64\n' > "$test_dir/kernel"
+    check_linux_font > "$test_dir/output"
+    assert_equal 1 "$failures"
+    assert_contains "$(cat "$test_dir/output")" 'fontconfig is not installed; rerun: bash scripts/install_packages.sh'
 }
 
 # plugins() against local repositories: missing plugins are cloned at the
