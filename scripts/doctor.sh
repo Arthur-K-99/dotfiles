@@ -8,6 +8,7 @@ failures=0
 ok() { printf '  [ok] %s\n' "$1"; }
 fail() { printf '  [missing] %s\n' "$1"; failures=$((failures + 1)); }
 stale() { printf '  [stale] %s\n' "$1"; failures=$((failures + 1)); }
+skip() { printf '  [skip] %s\n' "$1"; }
 
 check_command() {
     local label="$1"
@@ -103,6 +104,78 @@ check_bat_theme() {
     done
 }
 
+check_tree_sitter() {
+    local version
+    if ! command -v tree-sitter >/dev/null 2>&1; then
+        fail "tree-sitter CLI $DOTFILES_TREE_SITTER_MINIMUM or newer (tree-sitter is not installed)"
+        return
+    fi
+    if ! version="$(dotfiles_tree_sitter_version)"; then
+        fail "tree-sitter CLI version (tree-sitter --version did not report one)"
+    elif dotfiles_version_at_least "$version" "$DOTFILES_TREE_SITTER_MINIMUM"; then
+        ok "tree-sitter CLI $version"
+    else
+        fail "tree-sitter CLI $version is older than $DOTFILES_TREE_SITTER_MINIMUM (Linux: rerun bash scripts/bootstrap_tools.sh)"
+    fi
+}
+
+check_nvim_version() {
+    local version
+    if ! command -v nvim >/dev/null 2>&1; then
+        fail "Neovim $DOTFILES_NVIM_MINIMUM or newer (nvim is not installed)"
+        return
+    fi
+    if ! version="$(dotfiles_nvim_version)"; then
+        fail "Neovim version (nvim --version did not report one)"
+    elif dotfiles_version_at_least "$version" "$DOTFILES_NVIM_MINIMUM"; then
+        ok "Neovim $version"
+    else
+        fail "Neovim $version is older than $DOTFILES_NVIM_MINIMUM (Linux: rerun bash scripts/bootstrap_tools.sh)"
+    fi
+}
+
+# lazy.nvim itself, then a headless start of the linked configuration, then
+# lua/dotfiles/bootstrap.lua's report: each plugin pinned in lazy-lock.json at
+# its commit, and each parser and language server from lua/dotfiles/tools.lua
+# (skipped where no compiler exists). Plugins are never fetched at startup
+# (install.missing is off), so none of this reaches the network; a clean start
+# prints nothing and leaves v:errmsg empty.
+check_nvim_plugins() {
+    local lazy_dir="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy"
+    local output line
+    # Without lazy.nvim a start would clone it, so the doctor stops here.
+    if [ ! -r "$lazy_dir/lazy.nvim/lua/lazy/init.lua" ]; then
+        fail "lazy.nvim ($lazy_dir/lazy.nvim; rerun: bash scripts/bootstrap_tools.sh)"
+        return 0
+    fi
+    ok "lazy.nvim"
+    command -v nvim >/dev/null 2>&1 || return 0
+    if output="$(nvim --headless -c 'lua if vim.v.errmsg ~= "" then os.exit(3) end' +qa 2>&1)" && [ -z "$output" ]; then
+        ok "Neovim starts without errors"
+    else
+        fail "Neovim headless start reported errors: ${output:-exit status $?}"
+        return 0
+    fi
+    output="$(nvim --headless -c 'lua require("dotfiles.bootstrap").check()' -c 'cquit 1' 2>&1)" || :
+    if [ -z "$output" ]; then
+        fail "Neovim plugins, parsers and language servers (the check printed nothing)"
+        return 0
+    fi
+    while IFS= read -r line; do
+        case "$line" in
+            "ok plugin "*) ok "Neovim plugin ${line#ok plugin }" ;;
+            "ok parser "*) ok "Neovim parser ${line#ok parser }" ;;
+            "ok package "*) ok "Neovim language server ${line#ok package }" ;;
+            "missing plugin "*) fail "Neovim plugin ${line#missing plugin } (rerun: bash scripts/bootstrap_tools.sh)" ;;
+            "stale plugin "*) stale "Neovim plugin ${line#stale plugin } is not at the commit lazy-lock.json pins (rerun: bash scripts/bootstrap_tools.sh)" ;;
+            "missing parser "*) fail "Neovim parser ${line#missing parser } (rerun: bash scripts/bootstrap_tools.sh)" ;;
+            "missing package "*) fail "Neovim language server ${line#missing package } (rerun: bash scripts/bootstrap_tools.sh)" ;;
+            "skipped parser "*) skip "Neovim parser ${line#skipped parser }" ;;
+            *) fail "Neovim check: $line" ;;
+        esac
+    done <<<"$output"
+}
+
 check_plugins() {
     local zinit_base="${XDG_DATA_HOME:-$HOME/.local/share}/zinit"
     local plugin
@@ -136,6 +209,7 @@ check_plugins() {
     for flavor in $(dotfiles_yazi_flavors "$DOTFILES_DIR/config/yazi/theme.toml"); do
         check_readable "yazi flavor $flavor" "$yazi_dir/flavors/$flavor.yazi/flavor.toml"
     done
+    check_nvim_plugins
 }
 
 doctor_main() {
@@ -181,6 +255,8 @@ doctor_main() {
 
     echo "Checking runtimes..."
     check_mise_node
+    check_nvim_version
+    check_tree_sitter
 
     echo "Checking terminal capabilities..."
     check_terminfo tmux-256color
@@ -212,6 +288,7 @@ doctor_main() {
     check_link "$DOTFILES_DIR/config/fastfetch/config.jsonc" "$HOME/.config/fastfetch/config.jsonc"
     check_link "$DOTFILES_DIR/config/mise/config.toml" "$HOME/.config/mise/config.toml"
     check_link "$DOTFILES_DIR/config/zsh-abbr" "$HOME/.config/zsh-abbr"
+    check_link "$DOTFILES_DIR/config/nvim" "$HOME/.config/nvim"
     check_readable "~/.gitconfig for identity (rerun: bash scripts/link_dotfiles.sh)" "$HOME/.gitconfig"
     echo "Checking plugins..."
     check_plugins

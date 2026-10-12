@@ -150,13 +150,13 @@ install_charm_tools() {
         "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" glow gum
 }
 
-# Projects spell architectures differently. Prints four words: {arch}
-# (x86_64|aarch64), {arch_go} (x86_64|arm64), {arch_deb} (amd64|arm64) and
-# {arch_amd64} (amd64|aarch64).
+# Projects spell architectures differently. Prints five words: {arch}
+# (x86_64|aarch64), {arch_go} (x86_64|arm64), {arch_deb} (amd64|arm64),
+# {arch_amd64} (amd64|aarch64) and {arch_node} (x64|arm64).
 dotfiles_arch() {
     case "$(uname -m)" in
-        x86_64|amd64) printf 'x86_64 x86_64 amd64 amd64\n' ;;
-        aarch64|arm64) printf 'aarch64 arm64 arm64 aarch64\n' ;;
+        x86_64|amd64) printf 'x86_64 x86_64 amd64 amd64 x64\n' ;;
+        aarch64|arm64) printf 'aarch64 arm64 arm64 aarch64 arm64\n' ;;
         *) echo "Unsupported architecture: $(uname -m)" >&2; return 1 ;;
     esac
 }
@@ -173,14 +173,13 @@ github_latest_tag() {
 }
 
 # install_github_release <owner/repo> <asset template> <binary>...
-# Downloads the latest release asset, extracts it (.tar.gz, .tgz, .tar.xz,
-# .zip, or a bare executable) and installs every named binary found inside.
-# Templates may use {tag}, {version} (the tag without a leading v), {arch},
-# {arch_go}, {arch_deb} and {arch_amd64}. Already-present binaries are skipped.
-install_github_release() (
+# Installs every named binary that is not on PATH from the latest release
+# asset. Templates may use {tag}, {version} (the tag without a leading v),
+# {arch}, {arch_go}, {arch_deb}, {arch_amd64} and {arch_node}.
+install_github_release() {
     local repo="$1" template="$2"
     shift 2
-    local binary tag version arch_words arch arch_go arch_deb arch_amd64 asset url work extract found bin_dir
+    local binary
     local missing=()
     for binary in "$@"; do
         command -v "$binary" &>/dev/null || missing+=("$binary")
@@ -190,16 +189,29 @@ install_github_release() (
         return 0
     fi
     echo "Installing ${missing[*]} from $repo..."
+    download_github_release "$repo" "$template" "${missing[@]}"
+}
+
+# download_github_release <owner/repo> <asset template> <binary>...
+# Downloads the latest release asset, extracts it (.tar.gz, .tgz, .tar.xz,
+# .zip, or a bare executable) and installs every named binary found inside
+# into the local bin directory, whatever PATH already holds: callers such as
+# install_tree_sitter_cli decide for themselves when a present binary is too old.
+download_github_release() (
+    local repo="$1" template="$2"
+    shift 2
+    local binary tag version arch_words arch arch_go arch_deb arch_amd64 arch_node asset url work extract found bin_dir
     tag="$(github_latest_tag "$repo")" || return
     version="${tag#v}"
     arch_words="$(dotfiles_arch)" || return
-    read -r arch arch_go arch_deb arch_amd64 <<<"$arch_words"
+    read -r arch arch_go arch_deb arch_amd64 arch_node <<<"$arch_words"
     asset="${template//\{tag\}/$tag}"
     asset="${asset//\{version\}/$version}"
     asset="${asset//\{arch\}/$arch}"
     asset="${asset//\{arch_go\}/$arch_go}"
     asset="${asset//\{arch_deb\}/$arch_deb}"
     asset="${asset//\{arch_amd64\}/$arch_amd64}"
+    asset="${asset//\{arch_node\}/$arch_node}"
     url="https://github.com/$repo/releases/download/$tag/$asset"
     work="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-release.XXXXXX")" || return
     trap 'rm -rf "$work"' EXIT
@@ -210,11 +222,11 @@ install_github_release() (
         *.tar.gz|*.tgz) tar -xzf "$work/$asset" -C "$extract" || return ;;
         *.tar.xz) tar -xJf "$work/$asset" -C "$extract" || return ;;
         *.zip) unzip -q "$work/$asset" -d "$extract" || return ;;
-        *) cp "$work/$asset" "$extract/${missing[0]}" || return ;;
+        *) cp "$work/$asset" "$extract/$1" || return ;;
     esac
     bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
     mkdir -p "$bin_dir" || return
-    for binary in "${missing[@]}"; do
+    for binary in "$@"; do
         found="$(find "$extract" -type f -name "$binary" | head -n 1)"
         if [ -z "$found" ]; then
             echo "$asset does not contain $binary" >&2
@@ -258,6 +270,60 @@ install_fd_link() {
     [ -x "$bin_dir/fd" ] || return 1
 }
 
+# Debian 12 packages Neovim 0.7, Debian 13 0.10 and Ubuntu 24.04 0.9; the
+# configuration needs DOTFILES_NVIM_MINIMUM (lib/environment.sh). The release
+# tarball carries the runtime files beside the binary
+# (nvim-linux-<arch>/{bin,lib,share}), which install_github_release would
+# leave behind, so the tree is unpacked whole into ~/.local/opt/nvim
+# (DOTFILES_LOCAL_OPT) and bin/nvim is linked into the local bin directory,
+# which precedes /usr/bin on PATH. A Neovim that is already new enough, from
+# any source, is kept.
+install_neovim_release() (
+    local opt_dir="${DOTFILES_LOCAL_OPT:-$HOME/.local/opt}/nvim"
+    local bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
+    local version tag arch_words arch_go asset url work extracted
+    if version="$(dotfiles_nvim_version)" && dotfiles_version_at_least "$version" "$DOTFILES_NVIM_MINIMUM"; then
+        echo "Neovim $version already installed"
+        return 0
+    fi
+    if [ -e "$bin_dir/nvim" ] && [ ! -L "$bin_dir/nvim" ]; then
+        echo "$bin_dir/nvim exists and is not a link; remove it to let the bootstrap install Neovim there." >&2
+        return 1
+    fi
+    echo "Installing Neovim from the GitHub release${version:+ (found $version, need $DOTFILES_NVIM_MINIMUM)}..."
+    tag="$(github_latest_tag neovim/neovim)" || return
+    arch_words="$(dotfiles_arch)" || return
+    read -r _ arch_go _ <<<"$arch_words"
+    asset="nvim-linux-$arch_go.tar.gz"
+    url="https://github.com/neovim/neovim/releases/download/$tag/$asset"
+    work="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-nvim.XXXXXX")" || return
+    trap 'rm -rf "$work"' EXIT
+    curl -fsSL -o "$work/$asset" "$url" || return
+    mkdir -p "$work/extract" || return
+    tar -xzf "$work/$asset" -C "$work/extract" || return
+    extracted="$(find "$work/extract" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+    if [ -z "$extracted" ] || [ ! -x "$extracted/bin/nvim" ]; then
+        echo "$asset does not contain bin/nvim" >&2
+        return 1
+    fi
+    # The previous tree goes only once the new one is complete beside it.
+    mkdir -p "$(dirname "$opt_dir")" "$bin_dir" || return
+    rm -rf "$opt_dir.new" || return
+    mv "$extracted" "$opt_dir.new" || return
+    rm -rf "$opt_dir" || return
+    mv "$opt_dir.new" "$opt_dir" || return
+    ln -sfn "$opt_dir/bin/nvim" "$bin_dir/nvim" || return
+    if ! version="$(dotfiles_nvim_version "$bin_dir/nvim")"; then
+        echo "$bin_dir/nvim does not run after installing $asset." >&2
+        return 1
+    fi
+    if ! dotfiles_version_at_least "$version" "$DOTFILES_NVIM_MINIMUM"; then
+        echo "The Neovim release $tag ($version) is older than $DOTFILES_NVIM_MINIMUM." >&2
+        return 1
+    fi
+    echo "Installed Neovim $version into $opt_dir"
+)
+
 install_linux_tools() {
     install_eza || return
     install_fd_link || return
@@ -280,6 +346,31 @@ install_linux_tools() {
     # The polyfilled build runs on glibc 2.17+, so Debian 12 is covered; the
     # archive holds usr/bin/fastfetch under a top-level directory.
     install_github_release fastfetch-cli/fastfetch 'fastfetch-linux-{arch_amd64}-polyfilled.tar.gz' fastfetch || return
+    install_neovim_release || return
+    install_tree_sitter_cli || return
+}
+
+# nvim-treesitter compiles parsers with the tree-sitter CLI and needs
+# DOTFILES_TREE_SITTER_MINIMUM (lib/environment.sh); Debian 13 packages 0.22
+# and Ubuntu 24.04 0.20. A CLI that is too old is left where it is and the
+# release goes into the local bin directory, which precedes /usr/bin on PATH.
+# The zip holds the one binary (the .gz assets hold it bare).
+install_tree_sitter_cli() {
+    local version bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
+    if version="$(dotfiles_tree_sitter_version)" && dotfiles_version_at_least "$version" "$DOTFILES_TREE_SITTER_MINIMUM"; then
+        echo "tree-sitter $version already installed"
+        return 0
+    fi
+    echo "Installing tree-sitter from tree-sitter/tree-sitter${version:+ (found $version, need $DOTFILES_TREE_SITTER_MINIMUM)}..."
+    download_github_release tree-sitter/tree-sitter 'tree-sitter-cli-linux-{arch_node}.zip' tree-sitter || return
+    if ! version="$(dotfiles_tree_sitter_version "$bin_dir/tree-sitter")"; then
+        echo "$bin_dir/tree-sitter does not report a version after installing." >&2
+        return 1
+    fi
+    if ! dotfiles_version_at_least "$version" "$DOTFILES_TREE_SITTER_MINIMUM"; then
+        echo "The tree-sitter release ($version) is older than $DOTFILES_TREE_SITTER_MINIMUM." >&2
+        return 1
+    fi
 }
 
 # --- Runtimes and themes ------------------------------------------------------
@@ -332,6 +423,53 @@ bootstrap_yazi_flavors() {
     done
 }
 
+# Neovim plugins come from config/nvim/lazy-lock.json; lua/dotfiles/bootstrap.lua
+# clones the missing ones at their pinned commits and moves drifted ones back
+# (the first start clones lazy.nvim itself; nothing is fetched at an
+# interactive start), then, in a fresh process so the plugins are loaded,
+# installs the Tree-sitter parsers and Mason packages from
+# lua/dotfiles/tools.lua. Its report decides which of the two steps runs and
+# verifies the result. Mason installs most servers with npm, so the Node.js
+# that mise installed joins PATH for that step; the shell does the same later.
+# Every Lua command is followed by cquit so a Lua error ends the process with
+# a failure instead of leaving a headless Neovim waiting.
+bootstrap_neovim() {
+    local version node_path report
+    if ! command -v nvim >/dev/null 2>&1; then
+        echo "Neovim is not installed; install packages first." >&2
+        return 1
+    fi
+    if ! version="$(dotfiles_nvim_version)" || ! dotfiles_version_at_least "$version" "$DOTFILES_NVIM_MINIMUM"; then
+        echo "Neovim ${version:-(unknown version)} is older than $DOTFILES_NVIM_MINIMUM; upgrade it (macOS: brew upgrade neovim) and rerun." >&2
+        return 1
+    fi
+    if report="$(nvim --headless -c 'lua require("dotfiles.bootstrap").check()' -c 'cquit 1' 2>&1)"; then
+        echo "Neovim plugins, parsers and language servers already installed"
+        return 0
+    fi
+    case "$report" in
+        *"missing plugin "*|*"stale plugin "*)
+            echo "Installing Neovim plugins from lazy-lock.json..."
+            nvim --headless -c 'lua require("dotfiles.bootstrap").plugins()' -c 'cquit 1' || return
+            ;;
+    esac
+    case "$report" in
+        *"missing parser "*|*"missing package "*)
+            echo "Installing Neovim parsers and language servers..."
+            if node_path="$(mise which node 2>/dev/null)" && [ -n "$node_path" ]; then
+                PATH="$(dirname "$node_path"):$PATH" nvim --headless -c 'lua require("dotfiles.bootstrap").install()' -c 'cquit 1' || return
+            else
+                nvim --headless -c 'lua require("dotfiles.bootstrap").install()' -c 'cquit 1' || return
+            fi
+            ;;
+    esac
+    if ! report="$(nvim --headless -c 'lua require("dotfiles.bootstrap").check()' -c 'cquit 1' 2>&1)"; then
+        printf '%s\n' "$report" >&2
+        echo "Neovim is not fully set up after installing; see the report above." >&2
+        return 1
+    fi
+}
+
 bootstrap_tools_main() {
     dotfiles_init_environment || return
     bootstrap_zinit || return
@@ -344,6 +482,7 @@ bootstrap_tools_main() {
     fi
     bootstrap_runtimes || return
     bootstrap_yazi_flavors || return
+    bootstrap_neovim || return
 }
 
 if [[ "${BASH_SOURCE[0]}" = "$0" ]]; then

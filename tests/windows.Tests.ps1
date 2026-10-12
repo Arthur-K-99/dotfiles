@@ -384,6 +384,20 @@ try {
             Assert-True ($match[0].Source -eq (Join-Path $repository "config/$relative")) "$relative must come from config/$relative"
         }
         Assert-True (@($destinations | Select-Object -Unique).Count -eq $destinations.Count) 'Destinations must be unique'
+        # Neovim reads %LOCALAPPDATA%\nvim; every file of config/nvim is managed there, one by one.
+        $nvimSource = Join-Path $repository 'config/nvim'
+        $nvimFiles = @(Get-ChildItem -LiteralPath $nvimSource -Recurse -File -Force)
+        Assert-True ($nvimFiles.Count -ge 3) 'config/nvim holds the Neovim configuration'
+        foreach ($nvimFile in $nvimFiles) {
+            $relative = $nvimFile.FullName.Substring((Get-Item -LiteralPath $nvimSource).FullName.Length).TrimStart('\', '/')
+            $expected = Join-Path $testRoot "AppData/Local/nvim/$relative"
+            $match = @($files | Where-Object { $_.Destination -eq $expected })
+            Assert-True ($match.Count -eq 1) "config/nvim/$relative must be managed under AppData/Local/nvim"
+            Assert-True ($match[0].Source -eq $nvimFile.FullName) "$relative must come from config/nvim"
+        }
+        foreach ($name in @('init.lua', 'lazy-lock.json', '.luarc.json', 'lua/dotfiles/options.lua')) {
+            Assert-True ($destinations -contains (Join-Path $testRoot "AppData/Local/nvim/$name")) "Neovim $name must be managed"
+        }
         # atuin selects its theme by file name, so the named theme must be among the managed files.
         $atuinConfig = [IO.File]::ReadAllText((Join-Path $repository 'config/atuin/config.toml'))
         Assert-True ($atuinConfig -match '(?m)^name = "([^"]+)"') 'atuin config names a theme'
@@ -574,8 +588,22 @@ exit 0
         function Test-DotfilesPowerShellModule { param($Name) $modulePresent }
         $report = [Collections.Generic.List[string]]::new()
         function Write-Host { param($Object) $report.Add([string]$Object) }
+        function Get-DotfilesNeovimVersion { param($Command) $neovimVersion }
+        $neovimVersion = [version]'0.12.6'
+        $neovimStartExitCode = 0
+        $neovimCheck = @{ Lines = @('ok plugin catppuccin', 'ok parser bash', 'ok package lua-language-server'); ExitCode = 0 }
+        $neovimStarts = 0
+        $lazyFile = Join-Path $fixture.Directory 'AppData/Local/nvim-data/lazy/lazy.nvim/lua/lazy/init.lua'
+        New-Item -ItemType Directory -Path (Split-Path -Parent $lazyFile) -Force | Out-Null
+        [IO.File]::WriteAllText($lazyFile, '-- lazy')
+        function Get-DotfilesNeovimCheck { param($Command) Assert-True ($Command -eq 'mock-command') 'The report comes from the discovered nvim'; [pscustomobject]$neovimCheck }
         function Invoke-DotfilesNativeCommand {
             param($Command, $Arguments, [switch]$Quiet)
+            if ($Arguments[0] -eq '--headless') {
+                $script:neovimStarts++
+                Assert-True ($Command -eq 'mock-command' -and $Quiet -and $Arguments[2] -eq $DotfilesNeovimStartLua -and $Arguments[-1] -eq '+qa') 'The doctor starts Neovim headless, quietly, and checks v:errmsg'
+                return $neovimStartExitCode
+            }
             Assert-True ($Command -eq 'mock-command' -and ($Arguments -join ' ') -eq 'which node' -and $Quiet) 'The doctor asks mise for node quietly'
             $runtimeExitCode
         }
@@ -601,6 +629,50 @@ exit 0
         }
         Assert-True ($report -contains '  [ok] Node.js via mise') 'A runtime mise can locate passes'
         foreach ($flavor in $yaziFlavors) { Assert-True ($report -contains "  [ok] yazi flavor $flavor") "Installed yazi flavor $flavor passes" }
+        Assert-True ($report -contains '  [ok] Neovim 0.12.6') 'A new enough Neovim passes'
+        Assert-True ($report -contains '  [ok] lazy.nvim') 'An installed lazy.nvim passes'
+        Assert-True ($report -contains '  [ok] Neovim starts without errors') 'A clean headless start passes'
+        foreach ($line in @('  [ok] Neovim plugin catppuccin', '  [ok] Neovim parser bash', '  [ok] Neovim language server lua-language-server')) {
+            Assert-True ($report -contains $line) "The report line is shown: $line"
+        }
+        # An old Neovim is one failure that names the upgrade and skips the start and the report.
+        $neovimVersion = [version]'0.9.5'
+        $report.Clear()
+        Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } '1 check\(s\) need attention'
+        Assert-True (@($report | Where-Object { $_ -match '^  \[missing\] Neovim 0\.12\.0 or newer \(found: 0\.9\.5; winget upgrade' }).Count -eq 1) 'An old Neovim names the upgrade'
+        Assert-True (-not ($report -contains '  [ok] Neovim starts without errors')) 'An old Neovim is not started'
+        $neovimVersion = [version]'0.12.6'
+        # Without lazy.nvim a start would clone it, so the doctor reports and stops.
+        Remove-Item -LiteralPath $lazyFile
+        $startsBefore = $script:neovimStarts
+        $report.Clear()
+        Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } '1 check\(s\) need attention'
+        Assert-True (@($report | Where-Object { $_ -match '^  \[missing\] lazy\.nvim \(.*rerun: scripts\\install_runtimes\.ps1\)$' }).Count -eq 1) 'A missing lazy.nvim names the stage that installs it'
+        Assert-True ($script:neovimStarts -eq $startsBefore) 'Neovim is not started without lazy.nvim'
+        [IO.File]::WriteAllText($lazyFile, '-- lazy')
+        # Missing and stale items fail and name the stage; skipped parsers do not count.
+        $neovimCheck = @{ Lines = @('ok plugin catppuccin', 'missing plugin gitsigns.nvim', 'stale plugin which-key.nvim', 'missing parser yaml', 'missing package marksman', 'skipped parser python (no C compiler or tree-sitter CLI; see the README)'); ExitCode = 1 }
+        $report.Clear()
+        Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } '4 check\(s\) need attention'
+        foreach ($line in @('  [missing] Neovim plugin gitsigns.nvim (rerun: scripts\install_runtimes.ps1)',
+                '  [stale] Neovim plugin which-key.nvim is not at the commit lazy-lock.json pins (rerun: scripts\install_runtimes.ps1)',
+                '  [missing] Neovim parser yaml (rerun: scripts\install_runtimes.ps1)',
+                '  [missing] Neovim language server marksman (rerun: scripts\install_runtimes.ps1)',
+                '  [skip] Neovim parser python (no C compiler or tree-sitter CLI; see the README)')) {
+            Assert-True ($report -contains $line) "The report line is shown: $line"
+        }
+        $neovimCheck = @{ Lines = @(); ExitCode = 0 }
+        $report.Clear()
+        Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } '1 check\(s\) need attention'
+        Assert-True ($report -contains '  [missing] Neovim plugins, parsers and language servers (the check printed nothing)') 'An empty report is a failure'
+        $neovimCheck = @{ Lines = @('ok plugin catppuccin'); ExitCode = 0 }
+        $neovimStartExitCode = 3
+        $report.Clear()
+        Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } '1 check\(s\) need attention'
+        Assert-True ($report -contains '  [missing] Neovim headless start reported errors (exit code 3)') 'A failing start is reported'
+        Assert-True (-not ($report -contains '  [ok] Neovim plugin catppuccin')) 'The report is not read after a failing start'
+        $neovimStartExitCode = 0
+        Invoke-DotfilesDoctor $repository $fixture.Directory
         foreach ($file in $files) {
             [IO.File]::WriteAllText($file.Destination, 'stale configuration')
             Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } 'check\(s\) need attention'
@@ -624,90 +696,134 @@ exit 0
         Assert-True ($report -contains '  [missing] yazi flavor catppuccin-latte (rerun: scripts\install_runtimes.ps1)') 'A missing yazi flavor names the stage that installs it'
         [IO.File]::WriteAllText($latteFlavor, '# flavor')
         Invoke-DotfilesDoctor $repository $fixture.Directory
-        # Without mise the runtime is missing too, and nothing is executed to find out.
-        function Get-DotfilesCommandPath { param($Name) if ($Name -ne 'mise') { 'mock-command' } }
+        # Without mise the runtime is missing too, and nothing is executed to find out;
+        # without nvim the version is missing and no headless start is attempted.
+        function Get-DotfilesCommandPath { param($Name) if ($Name -notin @('mise', 'nvim')) { 'mock-command' } }
         function Invoke-DotfilesNativeCommand { throw 'Unexpected native command' }
+        function Get-DotfilesNeovimVersion { throw 'Unexpected version query' }
+        function Get-DotfilesNeovimCheck { throw 'Unexpected report' }
         $report.Clear()
-        Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } '2 check\(s\) need attention'
+        Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } '4 check\(s\) need attention'
         Assert-True (($report -contains '  [missing] mise') -and ($report -contains '  [missing] Node.js via mise (rerun: scripts\install_runtimes.ps1)')) 'Both mise and its runtime are reported'
+        Assert-True (($report -contains '  [missing] nvim') -and (@($report | Where-Object { $_ -match '^  \[missing\] Neovim 0\.12\.0 or newer \(found: ;' }).Count -eq 1)) 'Both nvim and its version are reported'
     }
 
-    Invoke-Test 'Runtime installation runs mise, then installs the missing yazi flavors, and can be retried' {
+    Invoke-Test 'Neovim plugins, parsers and servers are installed headless as the report requires, and can be retried' {
         $fixture = New-Fixture
-        $yaziConfig = Join-Path $fixture.Directory '.config/yazi'
-        $flavorsDirectory = Join-Path $yaziConfig 'flavors'
-        # The link stage has put theme.toml in place by the time runtimes install.
-        New-Item -ItemType Directory -Path $yaziConfig -Force | Out-Null
-        Copy-Item -LiteralPath (Join-Path $repository 'config/yazi/theme.toml') -Destination (Join-Path $yaziConfig 'theme.toml')
-        $yaziFlavors = @(Get-DotfilesYaziFlavors $fixture.Directory)
-        $darkFlavor = $yaziFlavors[0]
-        Assert-True ($yaziFlavors[-1] -eq 'catppuccin-latte' -and $darkFlavor -match '^catppuccin-[a-z]+$') "theme.toml names the flavors: $yaziFlavors"
-        $expectedAdds = @($yaziFlavors | ForEach-Object { "mock-ya pkg add yazi-rs/flavors:$_" }) -join "`n"
-        # package.toml declares the dark flavor; the remaining ones are still added.
-        $expectedAfterDeclared = @(@('mock-ya pkg install') + @($yaziFlavors | Where-Object { $_ -ne $darkFlavor } | ForEach-Object { "mock-ya pkg add yazi-rs/flavors:$_" })) -join "`n"
-        $runtimeState = @{ MiseExitCode = 1; YaExitCode = 0; YaInstalls = $true; Calls = [Collections.Generic.List[string]]::new(); ConfigHomes = [Collections.Generic.List[string]]::new() }
-        function Get-DotfilesCommandPath { param($Name) if ($Name -in @('mise', 'ya')) { "mock-$Name" } }
+        # The mocked report resolves a line once the step that fixes it has succeeded,
+        # as the real report would; StayBroken keeps every line as it is.
+        $neovimState = @{ Version = [version]'0.12.6'; Report = @('ok plugin fzf-lua', 'missing plugin catppuccin', 'missing package marksman'); PluginsDone = $false; InstallDone = $false; StayBroken = $false
+            PluginsExitCode = 1; InstallExitCode = 1; NodeDirectory = $null; Calls = [Collections.Generic.List[string]]::new(); InstallPath = $null }
+        function Get-DotfilesCommandPath { param($Name) if ($Name -eq 'nvim') { 'mock-nvim' } }
+        function Get-DotfilesNeovimVersion { param($Command) Assert-True ($Command -eq 'mock-nvim') 'The version comes from the discovered nvim'; $neovimState.Version }
+        function Get-DotfilesNeovimCheck {
+            param($Command)
+            Assert-True ($Command -eq 'mock-nvim') 'The report comes from the discovered nvim'
+            $lines = @(foreach ($line in $neovimState.Report) {
+                if ($neovimState.StayBroken) { $line }
+                elseif ($neovimState.PluginsDone -and $line -match '^(missing|stale) plugin (.*)$') { "ok plugin $($Matches[2])" }
+                elseif ($neovimState.InstallDone -and $line -match '^missing (parser|package) (.*)$') { "ok $($Matches[1]) $($Matches[2])" }
+                else { $line }
+            })
+            $code = 0
+            if (@($lines | Where-Object { $_ -notmatch '^(ok|skipped) ' }).Count) { $code = 1 }
+            [pscustomobject]@{ Lines = $lines; ExitCode = $code }
+        }
+        function Get-DotfilesMiseNodeDirectory { $neovimState.NodeDirectory }
         function Invoke-DotfilesNativeCommand {
             param($Command, $Arguments, [switch]$Quiet)
-            Assert-True (-not $Quiet) 'Installation output stays visible'
-            $runtimeState.Calls.Add("$Command $($Arguments -join ' ')")
-            if ($Command -eq 'mock-mise') { return $runtimeState.MiseExitCode }
-            Assert-True ($Command -eq 'mock-ya' -and $Arguments[0] -eq 'pkg') "Unexpected native command: $Command $Arguments"
-            $runtimeState.ConfigHomes.Add([string]$env:YAZI_CONFIG_HOME)
-            if ($runtimeState.YaExitCode -eq 0 -and $runtimeState.YaInstalls) {
-                # ya pkg install installs what package.toml declares; ya pkg add installs the named flavor.
-                if ($Arguments[1] -eq 'install') {
-                    $flavors = @([regex]::Matches([IO.File]::ReadAllText((Join-Path $yaziConfig 'package.toml')), 'flavors:([a-z-]+)') | ForEach-Object { $_.Groups[1].Value })
-                } else { $flavors = @(($Arguments[2] -split ':')[1]) }
-                foreach ($flavor in $flavors) {
-                    $flavorFile = Join-Path $flavorsDirectory "$flavor.yazi/flavor.toml"
-                    New-Item -ItemType Directory -Path (Split-Path -Parent $flavorFile) -Force | Out-Null
-                    [IO.File]::WriteAllText($flavorFile, '# flavor')
-                }
+            Assert-True ($Command -eq 'mock-nvim' -and -not $Quiet -and $Arguments[0] -eq '--headless' -and $Arguments[-2] -eq '-c' -and $Arguments[-1] -eq 'cquit 1') 'Installation runs nvim headless, visibly, with cquit after the Lua'
+            $neovimState.Calls.Add($Arguments[2])
+            if ($Arguments[2] -eq $DotfilesNeovimPluginsLua) {
+                if ($neovimState.PluginsExitCode -eq 0) { $neovimState.PluginsDone = $true }
+                return $neovimState.PluginsExitCode
             }
-            return $runtimeState.YaExitCode
+            Assert-True ($Arguments[2] -eq $DotfilesNeovimInstallLua) "Unexpected nvim command: $Arguments"
+            $neovimState.InstallPath = $env:PATH
+            if ($neovimState.InstallExitCode -eq 0) { $neovimState.InstallDone = $true }
+            return $neovimState.InstallExitCode
         }
-        $savedConfigHome = $env:YAZI_CONFIG_HOME
-        $env:YAZI_CONFIG_HOME = 'previous value'
+        $savedPath = $env:PATH
         try {
-            Assert-Throws { Invoke-DotfilesRuntimeInstall $fixture.Directory } 'mise install failed \(exit code 1\)\. Rerun install.ps1 to retry'
-            Assert-True (($runtimeState.Calls -join "`n") -eq 'mock-mise install --yes') 'A mise failure stops before the flavors'
-            $runtimeState.MiseExitCode = 0
-            $runtimeState.YaExitCode = 2
-            Assert-Throws { Invoke-DotfilesRuntimeInstall $fixture.Directory } "ya pkg add yazi-rs/flavors:$darkFlavor failed \(exit code 2\)\. Rerun install.ps1 to retry"
-            $runtimeState.YaExitCode = 0
-            $runtimeState.YaInstalls = $false
-            Assert-Throws { Invoke-DotfilesRuntimeInstall $fixture.Directory } "yazi flavor $darkFlavor was not installed"
-            Assert-True ($env:YAZI_CONFIG_HOME -eq 'previous value') 'YAZI_CONFIG_HOME is restored after a failure'
-            $runtimeState.YaInstalls = $true
-            $runtimeState.Calls.Clear()
-            Invoke-DotfilesRuntimeInstall $fixture.Directory
-            Assert-True (($runtimeState.Calls -join "`n") -eq "mock-mise install --yes`n$expectedAdds") "The retry adds every missing flavor: $($runtimeState.Calls -join ' | ')"
-            Assert-True (@($runtimeState.ConfigHomes | Where-Object { $_ -ne $yaziConfig }).Count -eq 0) 'ya must see the yazi configuration under the home directory'
-            Assert-True ($env:YAZI_CONFIG_HOME -eq 'previous value') 'YAZI_CONFIG_HOME is restored after success'
-            $runtimeState.Calls.Clear()
-            Invoke-DotfilesRuntimeInstall $fixture.Directory
-            Assert-True (($runtimeState.Calls -join "`n") -eq 'mock-mise install --yes') 'Installed flavors are skipped'
-            # Without the managed theme.toml the flavors are unknown, so the stage says what to rerun.
-            Rename-Item -LiteralPath (Join-Path $yaziConfig 'theme.toml') -NewName 'theme.toml.aside'
-            Assert-Throws { Invoke-DotfilesRuntimeInstall $fixture.Directory } 'yazi theme file is missing.*Rerun install.ps1'
-            Rename-Item -LiteralPath (Join-Path $yaziConfig 'theme.toml.aside') -NewName 'theme.toml'
-            # A flavor that package.toml already declares is installed from it; the other is still added.
-            Remove-Item -LiteralPath $flavorsDirectory -Recurse -Force
-            [IO.File]::WriteAllText((Join-Path $yaziConfig 'package.toml'), "[[flavor.deps]]`nuse = `"yazi-rs/flavors:$darkFlavor`"`n")
-            $runtimeState.Calls.Clear()
-            Invoke-DotfilesRuntimeInstall $fixture.Directory
-            Assert-True (($runtimeState.Calls -join "`n") -eq "mock-mise install --yes`n$expectedAfterDeclared") "Declared flavors come from package.toml: $($runtimeState.Calls -join ' | ')"
-            # ya is needed only while a flavor is missing.
-            function Get-DotfilesCommandPath { param($Name) if ($Name -eq 'mise') { 'mock-mise' } }
-            Invoke-DotfilesRuntimeInstall $fixture.Directory
-            Remove-Item -LiteralPath $flavorsDirectory -Recurse -Force
-            Assert-Throws { Invoke-DotfilesRuntimeInstall $fixture.Directory } 'ya is unavailable.*Reopen PowerShell and rerun install.ps1'
+            Assert-Throws { Install-DotfilesNeovim } 'Neovim plugin install failed \(exit code 1\)\. Rerun install.ps1 to retry'
+            Assert-True (($neovimState.Calls -join "`n") -eq $DotfilesNeovimPluginsLua) "A failed plugin install stops before the parsers: $($neovimState.Calls -join ' | ')"
+            $neovimState.PluginsExitCode = 0
+            $neovimState.Calls.Clear()
+            Assert-Throws { Install-DotfilesNeovim } 'parser and language server install failed \(exit code 1\)\. Rerun install.ps1 to retry'
+            Assert-True ($neovimState.Calls.Count -eq 2 -and $neovimState.Calls[1] -eq $DotfilesNeovimInstallLua) "The parsers follow the plugins: $($neovimState.Calls -join ' | ')"
+            Assert-True ($neovimState.InstallPath -eq $savedPath) 'Without a mise Node.js the install runs with the current PATH'
+            Assert-True ($env:PATH -eq $savedPath) 'PATH is restored after a failure'
+            # The retry installs only what is still missing: the plugins are in place.
+            $neovimState.InstallExitCode = 0
+            $neovimState.NodeDirectory = Join-Path $fixture.Directory 'node'
+            $neovimState.Calls.Clear()
+            Install-DotfilesNeovim
+            Assert-True (($neovimState.Calls -join "`n") -eq $DotfilesNeovimInstallLua) "The retry runs the remaining install: $($neovimState.Calls -join ' | ')"
+            Assert-True ($neovimState.InstallPath -eq "$($neovimState.NodeDirectory)$([IO.Path]::PathSeparator)$savedPath") "mise's Node.js leads PATH while Mason installs: $($neovimState.InstallPath)"
+            Assert-True ($env:PATH -eq $savedPath) 'PATH is restored after success'
+            $neovimState.Calls.Clear()
+            Install-DotfilesNeovim
+            Assert-True ($neovimState.Calls.Count -eq 0) 'A passing report installs nothing'
+            # Only what the report names runs: a missing package alone, then a stale plugin alone.
+            $neovimState.PluginsDone = $false; $neovimState.InstallDone = $false
+            $neovimState.Report = @('ok plugin catppuccin', 'missing package marksman')
+            Install-DotfilesNeovim
+            Assert-True (($neovimState.Calls -join "`n") -eq $DotfilesNeovimInstallLua) "A missing package runs the package install alone: $($neovimState.Calls -join ' | ')"
+            $neovimState.PluginsDone = $false; $neovimState.InstallDone = $false
+            $neovimState.Calls.Clear()
+            $neovimState.Report = @('stale plugin which-key.nvim', 'ok package marksman')
+            Install-DotfilesNeovim
+            Assert-True (($neovimState.Calls -join "`n") -eq $DotfilesNeovimPluginsLua) "A stale plugin runs the plugin install alone: $($neovimState.Calls -join ' | ')"
+            # A report that still finds gaps after the installs is a failure that shows them.
+            $neovimState.PluginsDone = $false; $neovimState.InstallDone = $false
+            $neovimState.StayBroken = $true
+            Assert-Throws { Install-DotfilesNeovim } 'not fully set up after installing: stale plugin which-key.nvim\. Rerun install.ps1'
+            $neovimState.StayBroken = $false
+            # An old or missing Neovim stops before the report.
+            $neovimState.Calls.Clear()
+            $neovimState.Version = [version]'0.11.6'
+            Assert-Throws { Install-DotfilesNeovim } "Neovim 0.12.0 or newer is required \(found 0.11.6\).*winget upgrade --id Neovim.Neovim --exact"
+            $neovimState.Version = $null
+            Assert-Throws { Install-DotfilesNeovim } 'Neovim 0.12.0 or newer is required \(found \)'
             function Get-DotfilesCommandPath { param($Name) $null }
-            $runtimeState.Calls.Clear()
-            Assert-Throws { Invoke-DotfilesRuntimeInstall $fixture.Directory } 'mise is unavailable.*Reopen PowerShell and rerun install.ps1'
-            Assert-True ($runtimeState.Calls.Count -eq 0) 'Nothing runs without a discoverable mise'
-        } finally { $env:YAZI_CONFIG_HOME = $savedConfigHome }
+            Assert-Throws { Install-DotfilesNeovim } 'nvim is unavailable.*Reopen PowerShell and rerun install.ps1'
+            Assert-True ($neovimState.Calls.Count -eq 0) 'Nothing runs without a usable Neovim'
+        } finally { $env:PATH = $savedPath }
+    }
+
+    Invoke-Test 'The Lua handed to nvim survives native argument passing in this PowerShell edition' {
+        # Windows PowerShell passes a native argument with inner double quotes
+        # unescaped, which turned the Lua into a syntax error; the strings use
+        # single quotes and a real child process proves they arrive intact.
+        $fixture = New-Fixture
+        $echo = Join-Path $fixture.Directory 'echo-argument.ps1'
+        [IO.File]::WriteAllText($echo, 'param([string]$Argument) Write-Output $Argument')
+        $shell = (Get-Process -Id $PID).Path
+        foreach ($lua in @($DotfilesNeovimStartLua, $DotfilesNeovimCheckLua, $DotfilesNeovimPluginsLua, $DotfilesNeovimInstallLua)) {
+            Assert-True ($lua -notmatch '"') "No double quotes in the Lua: $lua"
+            $received = [string](@(& $shell -NoProfile -NonInteractive -File $echo $lua) | Select-Object -First 1)
+            Assert-True ($received -eq $lua) "The child received '$received', not '$lua'"
+        }
+    }
+
+    Invoke-Test 'Neovim version and mise Node.js discovery read the first line of the command output' {
+        $fixture = New-Fixture
+        $shell = (Get-Process -Id $PID).Path
+        # The version parser reads the first line of nvim --version and ignores development suffixes.
+        $versionScript = Join-Path $fixture.Directory 'fake-nvim.ps1'
+        [IO.File]::WriteAllText($versionScript, 'Write-Output "NVIM v0.12.0-dev-123+gabcdef"; Write-Output "Build type: Release"')
+        Assert-True ($null -eq (Get-DotfilesNeovimVersion $shell)) 'A shell is not Neovim'
+        function Invoke-Fake-Nvim { param($Switch) & $shell -NoProfile -NonInteractive -File $versionScript }
+        Assert-True ((Get-DotfilesNeovimVersion 'Invoke-Fake-Nvim') -eq [version]'0.12.0') 'Development builds parse to their base version'
+        # The mise Node.js directory is the parent of what `mise which node` prints, and absent without mise or node.
+        function Get-DotfilesCommandPath { param($Name) if ($Name -eq 'mise') { 'Invoke-Fake-Mise' } }
+        $nodeFile = Join-Path $fixture.Directory 'runtimes/node/bin/node'
+        function Invoke-Fake-Mise { param($Which, $Tool) Assert-True ("$Which $Tool" -eq 'which node') 'mise is asked where node is'; $global:LASTEXITCODE = 0; Write-Output $nodeFile }
+        Assert-True ((Get-DotfilesMiseNodeDirectory) -eq (Split-Path -Parent $nodeFile)) 'The node directory is the parent of what mise reports'
+        function Invoke-Fake-Mise { param($Which, $Tool) $global:LASTEXITCODE = 1 }
+        Assert-True ($null -eq (Get-DotfilesMiseNodeDirectory)) 'Without node there is no directory'
+        function Get-DotfilesCommandPath { param($Name) $null }
+        Assert-True ($null -eq (Get-DotfilesMiseNodeDirectory)) 'Without mise there is no directory'
     }
 
     Invoke-Test 'Linking seeds an unmanaged .gitconfig once and never rewrites it' {

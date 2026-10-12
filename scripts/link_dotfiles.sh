@@ -92,6 +92,10 @@ main() {
     # zsh-abbr rewrites its file with mv, which would replace a file symlink;
     # through a directory link the rewrite lands in the repository.
     link "$DOTFILES_DIR/config/zsh-abbr" "$HOME/.config/zsh-abbr" || return 1
+    # Neovim reads the whole directory (init.lua, lua/, lazy-lock.json), and
+    # lazy.nvim writes the lockfile beside init.lua, so the directory is linked
+    # and a `:Lazy update` lands in the repository, ready to commit.
+    link "$DOTFILES_DIR/config/nvim" "$HOME/.config/nvim" || return 1
     ensure_gitconfig "$HOME/.gitconfig" || return 1
 }
 

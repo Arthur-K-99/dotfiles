@@ -49,6 +49,13 @@ check_tmux_config() {
     rm -rf "$work"
 }
 
+# Parses every Lua file of the Neovim configuration and compares the plugin
+# specs with lazy-lock.json, without loading the configuration or any plugin:
+# `nvim -l` runs a script with no user configuration, so no network is touched.
+check_nvim_config() {
+    nvim -l "$DOTFILES_DIR/tests/nvim_check.lua" "$1"
+}
+
 test_main() {
     echo "Checking Bash syntax..."
     check_bash_syntax "$DOTFILES_DIR"
@@ -82,6 +89,13 @@ test_main() {
         check_tmux_config "$DOTFILES_DIR/config/tmux/tmux.conf"
     else
         echo "SKIP: tmux configuration check (tmux is not installed)."
+    fi
+
+    if command -v nvim >/dev/null 2>&1; then
+        echo "Checking Neovim configuration..."
+        check_nvim_config "$DOTFILES_DIR/config/nvim"
+    else
+        echo "SKIP: Neovim configuration check (nvim is not installed)."
     fi
 
     if command -v ghostty >/dev/null 2>&1; then

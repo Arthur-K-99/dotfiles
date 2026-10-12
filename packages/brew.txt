@@ -35,5 +35,7 @@ glow
 tlrc
 gum
 
-# Editor
+# Editor. nvim-treesitter compiles parsers with the tree-sitter CLI and the
+# C compiler from the Xcode command line tools.
 neovim
+tree-sitter-cli

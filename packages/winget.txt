@@ -37,8 +37,11 @@ charmbracelet.glow
 tldr-pages.tlrc
 charmbracelet.gum
 
-# Editor
+# Editor. nvim-treesitter compiles parsers with the tree-sitter CLI and a C
+# compiler; the compiler (Visual Studio Build Tools) is a manual install, see
+# the README.
 Neovim.Neovim
+tree-sitter.tree-sitter-cli
 
 # Dev tools
 GitHub.cli
