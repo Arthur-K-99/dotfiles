@@ -24,13 +24,51 @@ macos_cask_is_satisfied() {
     esac
 }
 
+# brew_upgrade_declared <--formula|--cask> <list file>: upgrades the listed
+# packages that Homebrew reports as outdated. Pinned ones are left alone
+# (naming one makes `brew upgrade` fail), and casks that update themselves,
+# such as Ghostty, are not reported as outdated, so their own updater keeps
+# them current. Packages installed some other way are not Homebrew's to
+# report either.
+brew_upgrade_declared() {
+    local kind="$1" list="$2" package outdated pinned
+    local upgrades=()
+    outdated="$(brew outdated "$kind" --quiet </dev/null)" || return
+    pinned="$(brew list --pinned "$kind" </dev/null)" || return
+    while IFS= read -r package; do
+        printf '%s\n' "$outdated" | grep -qxF -- "$package" || continue
+        if printf '%s\n' "$pinned" | grep -qxF -- "$package"; then
+            echo "  pinned, left alone: $package (brew unpin $package to upgrade it)"
+        else
+            upgrades+=("$package")
+        fi
+    done < <(parse_list "$list")
+    if [ "${#upgrades[@]}" -eq 0 ]; then
+        echo "  nothing to upgrade"
+        return 0
+    fi
+    brew upgrade "$kind" "${upgrades[@]}" </dev/null
+}
+
 install_macos() {
     local installer package
     if ! command -v brew &>/dev/null; then
         echo "Installing Homebrew..."
-        installer="$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || return
+        installer="$(curl -fsSL --retry 5 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || return
         /bin/bash -c "$installer" || return
         dotfiles_init_environment || return
+    fi
+    # A plain `brew install` upgrades an outdated formula as well, but not a
+    # pinned one and never a cask the loop below finds in place, so the
+    # update upgrades first and then only adds what is missing.
+    if dotfiles_updating; then
+        echo "Updating Homebrew..."
+        brew update </dev/null || return
+        echo "Upgrading Homebrew formulae..."
+        brew_upgrade_declared --formula "$DOTFILES_DIR/packages/brew.txt" || return
+        echo "Upgrading Homebrew casks..."
+        brew_upgrade_declared --cask "$DOTFILES_DIR/packages/brew-casks.txt" || return
+        export HOMEBREW_NO_INSTALL_UPGRADE=1
     fi
     # The loops read the package lists from stdin; brew must not inherit that
     # stream, or an install step that reads input swallows the remaining names.
@@ -69,15 +107,24 @@ check_linux_distribution() {
     esac
 }
 
+# apt-get install upgrades a listed package that is installed and has a newer
+# candidate, so after the index refresh this both installs and updates the
+# list. Held packages are left out: one with an upgrade fails the whole
+# command.
 install_linux() {
-    local package
+    local package held
     local packages=()
     check_linux_distribution || return
     echo "Updating apt..."
     sudo apt-get update -qq || return
-    echo "Installing apt packages..."
+    held="$(apt-mark showhold)" || return
+    if dotfiles_updating; then
+        echo "Installing and upgrading apt packages..."
+    else
+        echo "Installing apt packages..."
+    fi
     while IFS= read -r package; do
-        packages+=("$package")
+        dotfiles_apt_unheld "$held" "$package" && packages+=("$package")
     done < <(parse_list "$DOTFILES_DIR/packages/apt.txt")
     sudo apt-get install -y "${packages[@]}" || return
 }

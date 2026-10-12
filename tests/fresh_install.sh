@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs this checkout on a fresh machine the way the README does, reruns the
-# installer, and starts the configured shells. tests/unix.Tests.sh mocks every
+# installer, runs the update, and starts the configured shells. tests/unix.Tests.sh mocks every
 # download; this is the one check that reaches the real package archives,
 # releases and plugin repositories, so it catches upstream changes such as a
 # renamed release asset.
@@ -98,13 +98,37 @@ case "$status_right" in
 esac
 exit "$status"'
 
+# Sets the first recorded release tag back to one that never existed and
+# prints the record's path, so the update has a release to fetch again, as it
+# would after an upstream release. Prints nothing when there is no record
+# (every tool came from a package manager).
+FRESH_INSTALL_STALE_RECORD='record="$(find "${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/releases" -type f 2>/dev/null | sort | head -n 1)"
+if [ -n "$record" ]; then
+    echo v0.0.0-fresh-install > "$record"
+    printf "%s\n" "$record"
+fi'
+
 # fresh_install_run <checkout>
 fresh_install_run() {
+    local stale
     echo "==> Installing"
     as_user bash "$1/install.sh" || return
     # A rerun must succeed without changes, as the README promises.
     echo "==> Rerunning the installer"
     as_user bash "$1/install.sh" || return
+    # The update right after an install must succeed and end with the doctor,
+    # and must fetch the release whose record was set back.
+    echo "==> Updating"
+    stale="$(as_user bash -c "$FRESH_INSTALL_STALE_RECORD")" || return
+    as_user bash "$1/scripts/update.sh" || return
+    if [ -z "$stale" ]; then
+        echo "No release was recorded, so no tag was set back."
+    elif as_user grep -qx v0.0.0-fresh-install "$stale"; then
+        echo "The update did not fetch ${stale##*/releases/} again." >&2
+        return 1
+    else
+        echo "The update fetched ${stale##*/releases/} again: $(as_user cat "$stale")"
+    fi
     # Loading ~/.zshrc runs every tool's init script.
     check_quiet_start "an interactive zsh" bash -c "$FRESH_INSTALL_ZSH" || return
     check_quiet_start "tmux with its plugins" bash -c "$FRESH_INSTALL_TMUX" || return

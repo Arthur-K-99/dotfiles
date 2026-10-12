@@ -44,6 +44,24 @@ dotfiles_is_wsl() {
     return 1
 }
 
+# dotfiles_updating: scripts/update.sh exports DOTFILES_UPDATE=1 for the
+# install stages, which then bring what they installed to the latest release
+# instead of keeping whatever is present.
+dotfiles_updating() {
+    [ "${DOTFILES_UPDATE:-0}" = 1 ]
+}
+
+# dotfiles_apt_unheld <held packages> <package>: fails, saying so, when the
+# package is in the list `apt-mark showhold` printed. apt-get install -y stops
+# with "Held packages were changed" when a held package has an upgrade, so the
+# installers leave held packages at the version the user chose.
+dotfiles_apt_unheld() {
+    if printf '%s\n' "$1" | grep -qxF -- "$2"; then
+        echo "  held, left alone: $2 (sudo apt-mark unhold $2 to upgrade it)"
+        return 1
+    fi
+}
+
 dotfiles_init_environment() {
     local brew_path brew_environment
     if [ "$(uname)" = "Darwin" ] && brew_path="$(dotfiles_find_homebrew)"; then

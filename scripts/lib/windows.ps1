@@ -301,28 +301,85 @@ function Install-DotfilesPowerShellModule {
     if ($code -ne 0) { throw "Install-Module failed for $Name (exit code $code). Rerun install.ps1 to retry." }
 }
 
+# Updating installs the gallery's newest version beside the old one when it
+# is newer than the newest installed; the script exits 4 when it is not.
+function Update-DotfilesPowerShellModule {
+    param([string]$Name)
+    $shellPath = Get-DotfilesPowerShell7
+    $update = "`$installed = Get-Module -ListAvailable -Name '$Name' | Sort-Object Version -Descending | Select-Object -First 1; " +
+        "`$latest = Find-Module -Name '$Name' -Repository PSGallery -ErrorAction Stop; " +
+        "if ([version]`$latest.Version -le `$installed.Version) { exit 4 }; " +
+        "Install-Module -Name '$Name' -Scope CurrentUser -Repository PSGallery -Force -AllowClobber -ErrorAction Stop"
+    $code = Invoke-DotfilesNativeCommand $shellPath @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', $update)
+    if ($code -eq 4) { return $false }
+    if ($code -ne 0) { throw "Updating the $Name module failed (exit code $code). Rerun scripts\update.ps1 to retry." }
+    return $true
+}
+
 function Invoke-DotfilesModuleInstall {
+    param([switch]$Update)
     Write-Host 'Installing PowerShell modules from the PowerShell Gallery...'
     foreach ($name in Get-DotfilesPowerShellModules) {
-        if (Test-DotfilesPowerShellModule $name) { Write-Host "  already installed: $name"; continue }
+        if (Test-DotfilesPowerShellModule $name) {
+            if (-not $Update) { Write-Host "  already installed: $name"; continue }
+            if (Update-DotfilesPowerShellModule $name) { Write-Host "  updated: $name" }
+            else { Write-Host "  up to date: $name" }
+            continue
+        }
         Write-Host "  installing: $name"
         Install-DotfilesPowerShellModule $name
         if (-not (Test-DotfilesPowerShellModule $name)) { throw "$name was not found after installation. Rerun install.ps1 to retry." }
     }
 }
 
+# winget exit codes the installers act on, from winget's returnCodes.md.
+$script:WingetNoApplicationsFound = -1978335212       # 0x8A150014 APPINSTALLER_CLI_ERROR_NO_APPLICATIONS_FOUND
+$script:WingetUpdateNotApplicable = -1978335189       # 0x8A15002B: no newer version
+$script:WingetUpgradeVersionUnknown = -1978335152     # 0x8A150050: the installed version is unknown
+$script:WingetPackageIsPinned = -1978335128           # 0x8A150068: a pin prevents the upgrade
+$script:WingetInstallTechnologyMismatch = -1978335090 # 0x8A15008E: the upgrade uses another installer type
+$script:WingetRebootRequiredToFinish = -1978334967    # 0x8A150109
+
+# Packages that host the running update: replacing Windows Terminal or
+# PowerShell 7 while it runs the script would close it or fail on files in
+# use, so the update names the command to run from another shell instead.
+function Get-DotfilesRunningHostPackages {
+    if ($env:WT_SESSION) { 'Microsoft.WindowsTerminal' }
+    if ($PSVersionTable.PSEdition -eq 'Core') { 'Microsoft.PowerShell' }
+}
+
+# A pinned package, one whose installed version winget cannot tell, or one
+# whose upgrade needs another installer type is left as it is and reported.
+function Update-DotfilesWingetPackage {
+    param([string]$WingetCommand, [string]$Package)
+    $code = Invoke-DotfilesNativeCommand $WingetCommand @('upgrade', '--id', $Package, '--exact', '--silent', '--accept-package-agreements', '--accept-source-agreements')
+    if ($code -eq 0) { Write-Host "  upgraded: $Package" }
+    elseif ($code -eq $script:WingetUpdateNotApplicable) { Write-Host "  up to date: $Package" }
+    elseif ($code -eq $script:WingetRebootRequiredToFinish) { Write-Host "  upgraded: $Package (restart Windows to finish)" }
+    elseif ($code -eq $script:WingetPackageIsPinned) { Write-Host "  pinned, left alone: $Package (winget pin remove --id $Package to upgrade it)" }
+    elseif ($code -eq $script:WingetUpgradeVersionUnknown) { Write-Host "  left alone: $Package (winget cannot tell its installed version; winget upgrade --id $Package --exact --include-unknown)" }
+    elseif ($code -eq $script:WingetInstallTechnologyMismatch) { Write-Host "  left alone: $Package (the upgrade uses another installer type; reinstall it with winget to change)" }
+    else { throw "winget failed to upgrade $Package (exit code $code). Rerun scripts\update.ps1 to retry." }
+}
+
 function Invoke-DotfilesPackageInstall {
-    param([string]$DotfilesDir)
+    param([string]$DotfilesDir, [switch]$Update)
     $wingetCommand = Get-DotfilesCommandPath 'winget'
     if (-not $wingetCommand) { throw 'winget is required. Install App Installer from the Microsoft Store and rerun install.ps1.' }
     $packages = Get-Content -LiteralPath (Join-Path $DotfilesDir 'packages/winget.txt') |
         ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -notmatch '^#' }
-    Write-Host 'Installing packages via winget...'
+    $hosts = @()
+    if ($Update) { $hosts = @(Get-DotfilesRunningHostPackages); Write-Host 'Installing and upgrading packages via winget...' }
+    else { Write-Host 'Installing packages via winget...' }
     foreach ($package in $packages) {
         $code = Invoke-DotfilesNativeCommand $wingetCommand @('list', '--id', $package, '--exact', '--accept-source-agreements') -Quiet
-        if ($code -eq 0) { Write-Host "  already installed: $package"; continue }
-        # APPINSTALLER_CLI_ERROR_NO_APPLICATIONS_FOUND (0x8A150014).
-        if ($code -ne -1978335212) { throw "winget could not check $package (exit code $code). Rerun install.ps1 after correcting the error." }
+        if ($code -eq 0) {
+            if (-not $Update) { Write-Host "  already installed: $package" }
+            elseif ($hosts -contains $package) { Write-Host "  left alone: $package runs this update (from another shell: winget upgrade --id $package --exact)" }
+            else { Update-DotfilesWingetPackage $wingetCommand $package }
+            continue
+        }
+        if ($code -ne $script:WingetNoApplicationsFound) { throw "winget could not check $package (exit code $code). Rerun install.ps1 after correcting the error." }
         Write-Host "  installing: $package"
         $code = Invoke-DotfilesNativeCommand $wingetCommand @('install', '--id', $package, '--exact', '--silent', '--accept-package-agreements', '--accept-source-agreements')
         if ($code -ne 0) { throw "winget failed to install $package (exit code $code). Rerun install.ps1 to retry." }
@@ -349,8 +406,11 @@ function Get-DotfilesYaziFlavorFile {
     Join-Path $HomeDirectory ".config/yazi/flavors/$Flavor.yazi/flavor.toml"
 }
 
+# Updating, ya upgrades these flavors by name, so the user's other packages in
+# package.toml stay as they are; a flavor package.toml does not list was put
+# in place by hand and is left alone.
 function Install-DotfilesYaziFlavors {
-    param([string]$HomeDirectory)
+    param([string]$HomeDirectory, [switch]$Update)
     $yaziConfig = Join-Path $HomeDirectory '.config/yazi'
     $packageFile = Join-Path $yaziConfig 'package.toml'
     # ya reads YAZI_CONFIG_HOME like yazi does; the profile points it at the same
@@ -358,7 +418,8 @@ function Install-DotfilesYaziFlavors {
     $savedConfigHome = $env:YAZI_CONFIG_HOME
     $env:YAZI_CONFIG_HOME = $yaziConfig
     try {
-        foreach ($flavor in Get-DotfilesYaziFlavors $HomeDirectory) {
+        $flavors = @(Get-DotfilesYaziFlavors $HomeDirectory)
+        foreach ($flavor in $flavors) {
             $flavorFile = Get-DotfilesYaziFlavorFile $HomeDirectory $flavor
             if (Test-Path -LiteralPath $flavorFile -PathType Leaf) { Write-Host "  already installed: yazi flavor $flavor"; continue }
             $yaCommand = Get-DotfilesCommandPath 'ya'
@@ -374,6 +435,19 @@ function Install-DotfilesYaziFlavors {
             if ($code -ne 0) { throw "ya $($arguments -join ' ') failed (exit code $code). Rerun install.ps1 to retry." }
             if (-not (Test-Path -LiteralPath $flavorFile -PathType Leaf)) { throw "yazi flavor $flavor was not installed. Rerun install.ps1 to retry." }
         }
+        if (-not $Update) { return }
+        $declared = ''
+        if (Test-Path -LiteralPath $packageFile -PathType Leaf) { $declared = [IO.File]::ReadAllText($packageFile) }
+        $upgrades = @(foreach ($flavor in $flavors) {
+            if ($declared.Contains("flavors:$flavor`"")) { "yazi-rs/flavors:$flavor" }
+            else { Write-Host "  left alone: yazi flavor $flavor (not in $packageFile)" }
+        })
+        if (-not $upgrades.Count) { return }
+        $yaCommand = Get-DotfilesCommandPath 'ya'
+        if (-not $yaCommand) { throw 'ya is unavailable after package installation. Reopen PowerShell and rerun scripts\update.ps1.' }
+        Write-Host '  upgrading: yazi flavors'
+        $code = Invoke-DotfilesNativeCommand $yaCommand (@('pkg', 'upgrade') + $upgrades)
+        if ($code -ne 0) { throw "ya pkg upgrade failed (exit code $code). Rerun scripts\update.ps1 to retry." }
     } finally {
         $env:YAZI_CONFIG_HOME = $savedConfigHome
     }
@@ -396,6 +470,7 @@ $script:DotfilesNeovimStartLua = "lua if vim.v.errmsg ~= '' then os.exit(3) end"
 $script:DotfilesNeovimCheckLua = "lua require('dotfiles.bootstrap').check()"
 $script:DotfilesNeovimPluginsLua = "lua require('dotfiles.bootstrap').plugins()"
 $script:DotfilesNeovimInstallLua = "lua require('dotfiles.bootstrap').install()"
+$script:DotfilesNeovimUpdateLua = "lua require('dotfiles.bootstrap').update()"
 
 function Get-DotfilesNeovimDataDirectory {
     param([string]$HomeDirectory)
@@ -449,44 +524,70 @@ function Get-DotfilesNeovimCommand {
     return $nvimCommand
 }
 
+# Runs nvim headless with one Lua command, mise's Node.js first on PATH for
+# Mason's npm packages, and returns the exit status.
+function Invoke-DotfilesNeovimWithNode {
+    param([string]$NvimCommand, [string]$Lua)
+    $savedPath = $env:PATH
+    $nodeDirectory = Get-DotfilesMiseNodeDirectory
+    if ($nodeDirectory) { $env:PATH = "$nodeDirectory$([IO.Path]::PathSeparator)$env:PATH" }
+    try {
+        return Invoke-DotfilesNativeCommand $NvimCommand @('--headless', '-c', $Lua, '-c', 'cquit 1')
+    } finally { $env:PATH = $savedPath }
+}
+
 # The report decides which of the two installs runs and verifies the result.
+# Updating, the plugins stay at the commits lazy-lock.json pins; update()
+# then brings the parsers to the revisions the pinned nvim-treesitter names
+# and the Mason packages to their latest versions.
 function Install-DotfilesNeovim {
+    param([switch]$Update)
     $nvimCommand = Get-DotfilesNeovimCommand
     $check = Get-DotfilesNeovimCheck $nvimCommand
-    if ($check.ExitCode -eq 0) { Write-Host '  already installed: Neovim plugins, parsers and language servers'; return }
-    if (@($check.Lines | Where-Object { $_ -match '^(missing|stale) plugin ' }).Count) {
-        Write-Host '  installing: Neovim plugins from lazy-lock.json'
-        $code = Invoke-DotfilesNativeCommand $nvimCommand @('--headless', '-c', $script:DotfilesNeovimPluginsLua, '-c', 'cquit 1')
-        if ($code -ne 0) { throw "The Neovim plugin install failed (exit code $code). Rerun install.ps1 to retry." }
+    if ($check.ExitCode -eq 0) { Write-Host '  already installed: Neovim plugins, parsers and language servers' }
+    else {
+        if (@($check.Lines | Where-Object { $_ -match '^(missing|stale) plugin ' }).Count) {
+            Write-Host '  installing: Neovim plugins from lazy-lock.json'
+            $code = Invoke-DotfilesNativeCommand $nvimCommand @('--headless', '-c', $script:DotfilesNeovimPluginsLua, '-c', 'cquit 1')
+            if ($code -ne 0) { throw "The Neovim plugin install failed (exit code $code). Rerun install.ps1 to retry." }
+        }
+        if (@($check.Lines | Where-Object { $_ -match '^missing (parser|package) ' }).Count) {
+            Write-Host '  installing: Neovim parsers and language servers'
+            $code = Invoke-DotfilesNeovimWithNode $nvimCommand $script:DotfilesNeovimInstallLua
+            if ($code -ne 0) { throw "The Neovim parser and language server install failed (exit code $code). Rerun install.ps1 to retry." }
+        }
+        $check = Get-DotfilesNeovimCheck $nvimCommand
+        if ($check.ExitCode -ne 0) { throw "Neovim is not fully set up after installing: $(($check.Lines | Where-Object { $_ -notmatch '^ok ' }) -join '; '). Rerun install.ps1 to retry." }
     }
-    if (@($check.Lines | Where-Object { $_ -match '^missing (parser|package) ' }).Count) {
-        Write-Host '  installing: Neovim parsers and language servers'
-        $savedPath = $env:PATH
-        $nodeDirectory = Get-DotfilesMiseNodeDirectory
-        if ($nodeDirectory) { $env:PATH = "$nodeDirectory$([IO.Path]::PathSeparator)$env:PATH" }
-        try {
-            $code = Invoke-DotfilesNativeCommand $nvimCommand @('--headless', '-c', $script:DotfilesNeovimInstallLua, '-c', 'cquit 1')
-        } finally { $env:PATH = $savedPath }
-        if ($code -ne 0) { throw "The Neovim parser and language server install failed (exit code $code). Rerun install.ps1 to retry." }
-    }
-    $check = Get-DotfilesNeovimCheck $nvimCommand
-    if ($check.ExitCode -ne 0) { throw "Neovim is not fully set up after installing: $(($check.Lines | Where-Object { $_ -notmatch '^ok ' }) -join '; '). Rerun install.ps1 to retry." }
+    if (-not $Update) { return }
+    Write-Host '  updating: Neovim parsers and language servers'
+    $code = Invoke-DotfilesNeovimWithNode $nvimCommand $script:DotfilesNeovimUpdateLua
+    if ($code -ne 0) { throw "The Neovim parser and language server update failed (exit code $code). Rerun scripts\update.ps1 to retry." }
 }
 
 # mise installs the runtimes declared in config/mise/config.toml, ya the yazi
 # flavors and Neovim its plugins; all read files the link stage placed, so
-# this stage runs after it.
+# this stage runs after it. Updating, mise also upgrades each runtime to the
+# newest release the file allows, from the home directory so that a project's
+# own mise file does not decide.
 function Invoke-DotfilesRuntimeInstall {
-    param([string]$HomeDirectory)
+    param([string]$HomeDirectory, [switch]$Update)
     $miseCommand = Get-DotfilesCommandPath 'mise'
     if (-not $miseCommand) { throw 'mise is unavailable after package installation. Reopen PowerShell and rerun install.ps1 to install the runtimes.' }
     Write-Host 'Installing runtimes declared in the mise configuration...'
     $code = Invoke-DotfilesNativeCommand $miseCommand @('install', '--yes')
     if ($code -ne 0) { throw "mise install failed (exit code $code). Rerun install.ps1 to retry." }
+    if ($Update) {
+        Write-Host 'Upgrading runtimes with mise...'
+        Push-Location -LiteralPath $HomeDirectory
+        try { $code = Invoke-DotfilesNativeCommand $miseCommand @('upgrade', '--yes') }
+        finally { Pop-Location }
+        if ($code -ne 0) { throw "mise upgrade failed (exit code $code). Rerun scripts\update.ps1 to retry." }
+    }
     Write-Host 'Installing yazi flavors...'
-    Install-DotfilesYaziFlavors $HomeDirectory
+    Install-DotfilesYaziFlavors $HomeDirectory -Update:$Update
     Write-Host 'Installing Neovim plugins, parsers and language servers...'
-    Install-DotfilesNeovim
+    Install-DotfilesNeovim -Update:$Update
 }
 
 function Invoke-DotfilesLink {
@@ -591,28 +692,34 @@ function Invoke-DotfilesDoctor {
     Write-Host 'All checks passed.'
 }
 
+# With -Update (scripts/update.ps1) the same stages also bring what they
+# installed to the latest release: winget packages, PowerShell modules, mise's
+# runtimes, the yazi flavors and the Neovim parsers and language servers.
 function Invoke-DotfilesInstall {
-    param([string]$DotfilesDir, [string]$HomeDirectory)
-    $stage = 'Installing packages'
+    param([string]$DotfilesDir, [string]$HomeDirectory, [switch]$Update)
+    $verb = 'Installing'
+    $entrypoint = Join-Path $DotfilesDir 'install.ps1'
+    if ($Update) { $verb = 'Updating'; $entrypoint = Join-Path $DotfilesDir 'scripts/update.ps1' }
+    $stage = "$verb packages"
     try {
         Write-Host "==> $stage"
-        Invoke-DotfilesPackageInstall $DotfilesDir
-        $stage = 'Installing PowerShell modules'
+        Invoke-DotfilesPackageInstall $DotfilesDir -Update:$Update
+        $stage = "$verb PowerShell modules"
         Write-Host "==> $stage"
-        Invoke-DotfilesModuleInstall
+        Invoke-DotfilesModuleInstall -Update:$Update
         $stage = 'Linking dotfiles'
         Write-Host "==> $stage"
         Invoke-DotfilesLink $DotfilesDir $HomeDirectory
-        $stage = 'Installing runtimes'
+        $stage = "$verb runtimes"
         Write-Host "==> $stage"
-        Invoke-DotfilesRuntimeInstall $HomeDirectory
+        Invoke-DotfilesRuntimeInstall $HomeDirectory -Update:$Update
         $stage = 'Verifying setup'
         Write-Host "==> $stage"
         Invoke-DotfilesDoctor $DotfilesDir $HomeDirectory
     } catch {
-        $entrypoint = Join-Path $DotfilesDir 'install.ps1'
         throw "$stage failed: $($_.Exception.Message) Completed setup remains in place. Fix the reported issue, then rerun: & '$($entrypoint.Replace("'", "''"))'"
     }
     Write-Host ''
-    Write-Host "Done. Restart Windows Terminal: the Catppuccin fragment sets the font and colors for the PowerShell and Command Prompt profiles."
+    if ($Update) { Write-Host 'Done. Everything is up to date and all setup checks passed.' }
+    else { Write-Host "Done. Restart Windows Terminal: the Catppuccin fragment sets the font and colors for the PowerShell and Command Prompt profiles." }
 }

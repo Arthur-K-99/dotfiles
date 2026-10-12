@@ -248,6 +248,64 @@ try {
         Assert-Throws { Invoke-DotfilesPackageInstall $repository } 'failed to install.*exit code 7'
     }
 
+    Invoke-Test 'Updating upgrades installed winget packages and leaves pinned, unknown and running ones alone' {
+        $fixture = New-Fixture
+        New-Item -ItemType Directory -Path (Join-Path $fixture.Directory 'packages') | Out-Null
+        [IO.File]::WriteAllLines((Join-Path $fixture.Directory 'packages/winget.txt'),
+            [string[]]@('# fixture', 'Test.Current', 'Test.Newer', 'Test.Pinned', 'Test.Unknown', 'Test.Missing', 'Microsoft.WindowsTerminal'))
+        $upgradeCodes = @{ 'Test.Current' = $WingetUpdateNotApplicable; 'Test.Newer' = 0; 'Test.Pinned' = $WingetPackageIsPinned; 'Test.Unknown' = $WingetUpgradeVersionUnknown }
+        $calls = [Collections.Generic.List[string]]::new()
+        $report = [Collections.Generic.List[string]]::new()
+        function Get-DotfilesCommandPath { param($Name) $Name }
+        function Get-DotfilesRunningHostPackages { 'Microsoft.WindowsTerminal' }
+        function Update-DotfilesProcessPath { }
+        function Invoke-DotfilesFontInstall { $calls.Add('font') }
+        function Write-Host { param($Object) $report.Add([string]$Object) }
+        function Invoke-DotfilesNativeCommand {
+            param($Command, $Arguments, [switch]$Quiet)
+            $calls.Add("$($Arguments[0]) $($Arguments[2])")
+            if ($Arguments[0] -eq 'list') {
+                if ($Arguments[2] -eq 'Test.Missing') { return $WingetNoApplicationsFound }
+                return 0
+            }
+            if ($Arguments[0] -eq 'upgrade') {
+                Assert-True (($Arguments -contains '--exact') -and ($Arguments -contains '--silent')) 'Upgrades name the exact package and run silently'
+                return $upgradeCodes[$Arguments[2]]
+            }
+            return 0
+        }
+        Invoke-DotfilesPackageInstall $fixture.Directory
+        Assert-True (@($calls | Where-Object { $_ -like 'upgrade *' }).Count -eq 0) 'A plain install upgrades nothing'
+        $calls.Clear(); $report.Clear()
+        Invoke-DotfilesPackageInstall $fixture.Directory -Update
+        $upgrades = @($calls | Where-Object { $_ -like 'upgrade *' }) -join ','
+        Assert-True ($upgrades -eq 'upgrade Test.Current,upgrade Test.Newer,upgrade Test.Pinned,upgrade Test.Unknown') "Every installed package but the running terminal is upgraded: $upgrades"
+        Assert-True (($calls -contains 'install Test.Missing') -and ($calls[-1] -eq 'font')) 'A missing package is installed and the font check still follows'
+        Assert-True (($report -contains '  up to date: Test.Current') -and ($report -contains '  upgraded: Test.Newer')) "Current and upgraded packages are reported: $($report -join ' | ')"
+        Assert-True (@($report | Where-Object { $_ -like '  pinned, left alone: Test.Pinned (winget pin remove*' }).Count -eq 1) 'A pinned package is left alone'
+        Assert-True (@($report | Where-Object { $_ -like '  left alone: Test.Unknown (*--include-unknown)' }).Count -eq 1) 'A package of unknown version is left alone'
+        Assert-True (@($report | Where-Object { $_ -like '  left alone: Microsoft.WindowsTerminal runs this update*' }).Count -eq 1) 'The terminal running the update is left alone'
+        $upgradeCodes['Test.Newer'] = 5
+        $calls.Clear()
+        Assert-Throws { Invoke-DotfilesPackageInstall $fixture.Directory -Update } 'failed to upgrade Test\.Newer \(exit code 5\)\. Rerun scripts\\update\.ps1'
+        Assert-True (-not $calls.Contains('font')) 'A failed upgrade stops before the font'
+        $upgradeCodes['Test.Newer'] = 0
+        Invoke-DotfilesPackageInstall $fixture.Directory -Update
+        Assert-True ((Get-DotfilesRunningHostPackages) -eq 'Microsoft.WindowsTerminal') 'The mock stands in for host detection'
+    }
+
+    Invoke-Test 'The update leaves PowerShell 7 and Windows Terminal to another shell only while they run it' {
+        $savedSession = $env:WT_SESSION
+        try {
+            $env:WT_SESSION = 'fixture-session'
+            $hosts = @(Get-DotfilesRunningHostPackages)
+            Assert-True ($hosts -contains 'Microsoft.WindowsTerminal') 'Inside Windows Terminal the terminal is a host'
+            Assert-True (($hosts -contains 'Microsoft.PowerShell') -eq ($PSVersionTable.PSEdition -eq 'Core')) 'PowerShell 7 is a host only when it runs the update'
+            $env:WT_SESSION = $null
+            Assert-True (-not (@(Get-DotfilesRunningHostPackages) -contains 'Microsoft.WindowsTerminal')) 'Outside Windows Terminal the terminal can be upgraded'
+        } finally { $env:WT_SESSION = $savedSession }
+    }
+
     Invoke-Test 'Registered package paths become discoverable in the current process' {
         $fixture = New-Fixture
         $commandName = 'dotfiles-discovery-' + [guid]::NewGuid().ToString('N')
@@ -338,6 +396,36 @@ try {
         Assert-True ($moduleState.Installed.Count -eq $expected.Count) 'The retry installs every module'
         $moduleState.CheckExitCode = 5
         Assert-Throws { Invoke-DotfilesModuleInstall } 'could not check the Terminal-Icons module \(exit code 5\)'
+    }
+
+    Invoke-Test 'Updating installs a newer gallery version of each module and nothing else' {
+        $moduleState = @{ Exit = @{ 'Terminal-Icons' = 4; 'PSFzf' = 0; 'posh-git' = 4; 'CompletionPredictor' = 4 }; Updates = [Collections.Generic.List[string]]::new() }
+        $report = [Collections.Generic.List[string]]::new()
+        function Get-DotfilesCommandPath { param($Name) if ($Name -eq 'pwsh.exe') { 'mock-pwsh' } }
+        function Write-Host { param($Object) $report.Add([string]$Object) }
+        function Invoke-DotfilesNativeCommand {
+            param($Command, $Arguments, [switch]$Quiet)
+            Assert-True ($Command -eq 'mock-pwsh' -and ($Arguments -contains '-NoProfile') -and ($Arguments -contains '-NonInteractive')) 'Modules are updated by pwsh without profiles'
+            $script = [string]$Arguments[-1]
+            if ($script -notmatch "Find-Module -Name '([^']+)'") { return 0 }
+            $name = $Matches[1]
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseInput($script, [ref]$null, [ref]$errors) | Out-Null
+            Assert-True ($errors.Count -eq 0) "The update script parses: $script"
+            Assert-True ($script -notmatch '"') 'The update script has no double quotes for native argument passing'
+            Assert-True ($script -match "Install-Module -Name '$name' -Scope CurrentUser -Repository PSGallery -Force") 'A newer version is installed for the current user'
+            $moduleState.Updates.Add($name)
+            return $moduleState.Exit[$name]
+        }
+        Invoke-DotfilesModuleInstall
+        Assert-True ($moduleState.Updates.Count -eq 0) 'A plain install does not look for newer versions'
+        Invoke-DotfilesModuleInstall -Update
+        Assert-True ($moduleState.Updates.Count -eq @(Get-DotfilesPowerShellModules).Count) 'Every module is checked'
+        Assert-True (($report -contains '  updated: PSFzf') -and ($report -contains '  up to date: posh-git')) "Updated and current modules are reported: $($report -join ' | ')"
+        $moduleState.Exit['PSFzf'] = 1
+        Assert-Throws { Invoke-DotfilesModuleInstall -Update } 'Updating the PSFzf module failed \(exit code 1\)\. Rerun scripts\\update\.ps1'
+        $moduleState.Exit['PSFzf'] = 0
+        Invoke-DotfilesModuleInstall -Update
     }
 
     Invoke-Test 'Module installation requires a discoverable PowerShell 7' {
@@ -791,6 +879,82 @@ exit 0
         } finally { $env:PATH = $savedPath }
     }
 
+    Invoke-Test 'Updating Neovim runs update() once the report passes, with mise Node.js first, and can be retried' {
+        $state = @{ Calls = [Collections.Generic.List[string]]::new(); Exit = 1; Path = $null }
+        function Get-DotfilesCommandPath { param($Name) if ($Name -eq 'nvim') { 'mock-nvim' } }
+        function Get-DotfilesNeovimVersion { param($Command) [version]'0.12.6' }
+        function Get-DotfilesNeovimCheck { param($Command) [pscustomobject]@{ Lines = @('ok plugin catppuccin', 'ok package marksman'); ExitCode = 0 } }
+        function Get-DotfilesMiseNodeDirectory { 'node-directory' }
+        function Invoke-DotfilesNativeCommand {
+            param($Command, $Arguments, [switch]$Quiet)
+            Assert-True ($Command -eq 'mock-nvim' -and $Arguments[0] -eq '--headless' -and $Arguments[-1] -eq 'cquit 1') 'The update runs nvim headless with cquit after the Lua'
+            $state.Calls.Add($Arguments[2])
+            $state.Path = $env:PATH
+            return $state.Exit
+        }
+        $savedPath = $env:PATH
+        try {
+            Install-DotfilesNeovim
+            Assert-True ($state.Calls.Count -eq 0) 'A plain install with a passing report runs nothing'
+            Assert-Throws { Install-DotfilesNeovim -Update } 'parser and language server update failed \(exit code 1\)\. Rerun scripts\\update\.ps1'
+            Assert-True (($state.Calls -join ',') -eq $DotfilesNeovimUpdateLua) "The update runs update(): $($state.Calls -join ',')"
+            Assert-True ($state.Path -eq "node-directory$([IO.Path]::PathSeparator)$savedPath") 'mise Node.js leads PATH during the update'
+            Assert-True ($env:PATH -eq $savedPath) 'PATH is restored after a failure'
+            $state.Exit = 0
+            Install-DotfilesNeovim -Update
+            Assert-True ($state.Calls.Count -eq 2) 'The retry runs the update again'
+        } finally { $env:PATH = $savedPath }
+    }
+
+    Invoke-Test 'Updating upgrades the mise runtimes from home and only the declared yazi flavors' {
+        $fixture = New-Fixture
+        $yaziConfig = Join-Path $fixture.Directory '.config/yazi'
+        New-Item -ItemType Directory -Path $yaziConfig -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $repository 'config/yazi/theme.toml') -Destination (Join-Path $yaziConfig 'theme.toml')
+        $flavors = @(Get-DotfilesYaziFlavors $fixture.Directory)
+        foreach ($flavor in $flavors) {
+            $flavorFile = Get-DotfilesYaziFlavorFile $fixture.Directory $flavor
+            New-Item -ItemType Directory -Path (Split-Path -Parent $flavorFile) -Force | Out-Null
+            [IO.File]::WriteAllText($flavorFile, '')
+        }
+        $packageFile = Join-Path $yaziConfig 'package.toml'
+        $declared = @('[[plugin.deps]]', 'use = "someone/plugin"') + @(foreach ($flavor in $flavors) { '[[flavor.deps]]'; "use = `"yazi-rs/flavors:$flavor`"" })
+        [IO.File]::WriteAllLines($packageFile, [string[]]$declared)
+        $state = @{ Calls = [Collections.Generic.List[string]]::new(); Location = $null; YaziHome = $null; Fail = '' }
+        function Get-DotfilesCommandPath { param($Name) "mock-$Name" }
+        function Install-DotfilesNeovim { param([switch]$Update) $state.Calls.Add("neovim $([bool]$Update)") }
+        function Invoke-DotfilesNativeCommand {
+            param($Command, $Arguments, [switch]$Quiet)
+            $line = "$Command $($Arguments -join ' ')"
+            $state.Calls.Add($line)
+            if ($line -eq 'mock-mise upgrade --yes') { $state.Location = (Get-Location).Path }
+            if ($Command -eq 'mock-ya') { $state.YaziHome = $env:YAZI_CONFIG_HOME }
+            if ($state.Fail -and $line -like $state.Fail) { return 9 }
+            return 0
+        }
+        $savedLocation = (Get-Location).Path
+        Invoke-DotfilesRuntimeInstall $fixture.Directory
+        Assert-True (($state.Calls -join ',') -eq 'mock-mise install --yes,neovim False') "A plain install upgrades nothing: $($state.Calls -join ',')"
+        $state.Calls.Clear()
+        Invoke-DotfilesRuntimeInstall $fixture.Directory -Update
+        $upgrade = 'mock-ya pkg upgrade ' + (@($flavors | ForEach-Object { "yazi-rs/flavors:$_" }) -join ' ')
+        Assert-True (($state.Calls -join ',') -eq "mock-mise install --yes,mock-mise upgrade --yes,$upgrade,neovim True") "Updating upgrades the runtimes, the declared flavors and the Neovim tools: $($state.Calls -join ',')"
+        Assert-True ($state.Location.TrimEnd('/', '\') -eq $fixture.Directory.TrimEnd('/', '\')) "mise upgrades from the home directory: $($state.Location)"
+        Assert-True ((Get-Location).Path -eq $savedLocation) 'The location is restored'
+        Assert-True ($state.YaziHome -eq $yaziConfig) 'ya upgrades the managed yazi directory'
+        $state.Fail = 'mock-mise upgrade*'
+        Assert-Throws { Invoke-DotfilesRuntimeInstall $fixture.Directory -Update } 'mise upgrade failed \(exit code 9\)\. Rerun scripts\\update\.ps1'
+        Assert-True ((Get-Location).Path -eq $savedLocation) 'The location is restored after a failure'
+        $state.Fail = 'mock-ya pkg upgrade*'
+        Assert-Throws { Invoke-DotfilesRuntimeInstall $fixture.Directory -Update } 'ya pkg upgrade failed \(exit code 9\)\. Rerun scripts\\update\.ps1'
+        $state.Fail = ''
+        # A flavor package.toml does not list was put there by hand and stays.
+        [IO.File]::WriteAllLines($packageFile, [string[]]@('[[flavor.deps]]', "use = `"yazi-rs/flavors:$($flavors[-1])`""))
+        $state.Calls.Clear()
+        Invoke-DotfilesRuntimeInstall $fixture.Directory -Update
+        Assert-True ($state.Calls -contains "mock-ya pkg upgrade yazi-rs/flavors:$($flavors[-1])") "Only the listed flavor is upgraded: $($state.Calls -join ',')"
+    }
+
     Invoke-Test 'The Lua handed to nvim survives native argument passing in this PowerShell edition' {
         # Windows PowerShell passes a native argument with inner double quotes
         # unescaped, which turned the Lua into a syntax error; the strings use
@@ -799,7 +963,7 @@ exit 0
         $echo = Join-Path $fixture.Directory 'echo-argument.ps1'
         [IO.File]::WriteAllText($echo, 'param([string]$Argument) Write-Output $Argument')
         $shell = (Get-Process -Id $PID).Path
-        foreach ($lua in @($DotfilesNeovimStartLua, $DotfilesNeovimCheckLua, $DotfilesNeovimPluginsLua, $DotfilesNeovimInstallLua)) {
+        foreach ($lua in @($DotfilesNeovimStartLua, $DotfilesNeovimCheckLua, $DotfilesNeovimPluginsLua, $DotfilesNeovimInstallLua, $DotfilesNeovimUpdateLua)) {
             Assert-True ($lua -notmatch '"') "No double quotes in the Lua: $lua"
             $received = [string](@(& $shell -NoProfile -NonInteractive -File $echo $lua) | Select-Object -First 1)
             Assert-True ($received -eq $lua) "The child received '$received', not '$lua'"
@@ -881,6 +1045,25 @@ exit 0
         function Invoke-DotfilesDoctor { param($DotfilesDir, $HomeDirectory) $events.Add('verified') }
         Invoke-DotfilesInstall $repository $testRoot
         Assert-True (($events -join ',') -eq 'packages,modules,links,runtimes,verified,done') 'Retry should complete after verification succeeds'
+    }
+
+    Invoke-Test 'Updating runs every stage with -Update and names update.ps1 in the rerun advice' {
+        $events = [Collections.Generic.List[string]]::new()
+        function Invoke-DotfilesPackageInstall { param($DotfilesDir, [switch]$Update) $events.Add("packages $([bool]$Update)") }
+        function Invoke-DotfilesModuleInstall { param([switch]$Update) $events.Add("modules $([bool]$Update)") }
+        function Invoke-DotfilesLink { param($DotfilesDir, $HomeDirectory) $events.Add('links') }
+        function Invoke-DotfilesRuntimeInstall { param($HomeDirectory, [switch]$Update) $events.Add("runtimes $([bool]$Update)") }
+        function Invoke-DotfilesDoctor { param($DotfilesDir, $HomeDirectory) $events.Add('verified') }
+        function Write-Host { param($Object) if ([string]$Object -match '^(==>|Done\.)') { $events.Add([string]$Object) } }
+        Invoke-DotfilesInstall $repository $testRoot -Update
+        $expected = '==> Updating packages,packages True,==> Updating PowerShell modules,modules True,==> Linking dotfiles,links,==> Updating runtimes,runtimes True,==> Verifying setup,verified,Done. Everything is up to date and all setup checks passed.'
+        Assert-True (($events -join ',') -eq $expected) "Every stage updates and verification precedes completion: $($events -join ',')"
+        $events.Clear()
+        Invoke-DotfilesInstall $repository $testRoot
+        Assert-True (($events -join ',') -match '^==> Installing packages,packages False,.*runtimes False,') "A plain install passes no update: $($events -join ',')"
+        function Invoke-DotfilesRuntimeInstall { param($HomeDirectory, [switch]$Update) throw 'simulated runtime failure' }
+        Assert-Throws { Invoke-DotfilesInstall $repository $testRoot -Update } 'Updating runtimes failed: simulated runtime failure.*rerun: .*scripts[/\\]update\.ps1'
+        Assert-Throws { Invoke-DotfilesInstall $repository $testRoot } 'Installing runtimes failed: simulated runtime failure.*rerun: .*install\.ps1'
     }
 
     Invoke-Test 'Native exit statuses are returned even with native error promotion enabled' {
