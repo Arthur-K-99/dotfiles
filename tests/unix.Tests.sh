@@ -1177,6 +1177,141 @@ test_tree_sitter_cli_install() {
     fi
 }
 
+test_linux_font_install() {
+    source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    export XDG_DATA_HOME="$test_dir/data"
+    export TMPDIR="$test_dir/tmp"
+    local name font_dir="$test_dir/data/fonts/CaskaydiaCove"
+    mkdir -p "$TMPDIR" "$test_dir/payload" "$test_dir/bad-payload"
+    for name in CaskaydiaCoveNerdFontMono-Regular CaskaydiaCoveNerdFontMono-Bold \
+        CaskaydiaCoveNerdFont-Regular CaskaydiaCoveNerdFontPropo-Regular; do
+        printf 'font\n' > "$test_dir/payload/$name.ttf"
+    done
+    printf 'license\n' > "$test_dir/payload/LICENSE"
+    cp "$test_dir/payload/CaskaydiaCoveNerdFont-Regular.ttf" "$test_dir/bad-payload/"
+    tar -cJf "$test_dir/asset.tar.xz" -C "$test_dir/payload" .
+    tar -cJf "$test_dir/bad-asset.tar.xz" -C "$test_dir/bad-payload" .
+    printf 'asset.tar.xz\n' > "$test_dir/serve"
+    uname() { if [ "${1:-}" = -r ]; then cat "$DOTFILES_TEST_FIXTURE/kernel"; else command uname "$@"; fi; }
+    command() {
+        case "$*" in
+            '-v fc-cache') [ -f "$DOTFILES_TEST_FIXTURE/fontconfig" ] ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    # fontconfig lists the family once fc-cache has scanned a directory holding it.
+    fc-cache() {
+        printf 'fc-cache %s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        if [ ! -f "$DOTFILES_TEST_FIXTURE/cache-broken" ] && compgen -G "$2/CaskaydiaCoveNerdFontMono-*.ttf" >/dev/null; then
+            : > "$DOTFILES_TEST_FIXTURE/registered"
+        fi
+    }
+    fc-list() { [ "$1" = -q ] && [ "$2" = 'CaskaydiaCove Nerd Font Mono' ] && [ -f "$DOTFILES_TEST_FIXTURE/registered" ]; }
+    curl() {
+        local output="" url=""
+        printf 'curl %s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                -o|-w) output="$2"; shift ;;
+                -*) ;;
+                *) url="$1" ;;
+            esac
+            shift
+        done
+        case "$url" in
+            https://github.com/ryanoasis/nerd-fonts/releases/latest) printf 'https://github.com/ryanoasis/nerd-fonts/releases/tag/v3.4.0' ;;
+            https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/*)
+                [ -f "$DOTFILES_TEST_FIXTURE/retry" ] || return 56
+                printf '%s\n' "$url" >> "$DOTFILES_TEST_FIXTURE/downloads"
+                cp "$DOTFILES_TEST_FIXTURE/$(cat "$DOTFILES_TEST_FIXTURE/serve")" "$output"
+                ;;
+            *) echo "unexpected URL $url" >&2; return 99 ;;
+        esac
+    }
+    # WSL draws its text with the Windows font: nothing is checked or fetched.
+    printf '6.6.87.2-microsoft-standard-WSL2\n' > "$test_dir/kernel"
+    install_nerd_font > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" 'WSL uses the Windows font'
+    [ ! -f "$test_dir/commands" ]
+    printf '4.4.0-19041-Microsoft\n' > "$test_dir/kernel"
+    dotfiles_is_wsl
+    printf '6.1.0-25-amd64\n' > "$test_dir/kernel"
+    if dotfiles_is_wsl; then
+        echo "A Debian kernel was taken for WSL." >&2
+        return 1
+    fi
+    # fontconfig comes from the package list.
+    local status=0
+    install_nerd_font > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'fontconfig is not installed'
+    : > "$test_dir/fontconfig"
+    # A family fontconfig already lists, from any directory, needs nothing.
+    : > "$test_dir/registered"
+    install_nerd_font > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" 'CaskaydiaCove Nerd Font Mono already installed'
+    [ ! -f "$test_dir/commands" ]
+    rm "$test_dir/registered"
+    # A failed download leaves nothing behind; the retry installs the Mono family alone.
+    status=0
+    install_nerd_font > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 56 "$status"
+    [ ! -e "$test_dir/data/fonts" ]
+    assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-font.*' | wc -l | tr -d ' ')"
+    : > "$test_dir/retry"
+    install_nerd_font > "$test_dir/output"
+    assert_equal 'https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/CascadiaCode.tar.xz' "$(cat "$test_dir/downloads")"
+    assert_equal 'CaskaydiaCoveNerdFontMono-Bold.ttf CaskaydiaCoveNerdFontMono-Regular.ttf' "$(cd "$font_dir" && echo *)"
+    assert_equal "fc-cache -f $font_dir" "$(tail -n 1 "$test_dir/commands")"
+    [ ! -e "$font_dir.new" ]
+    assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-font.*' | wc -l | tr -d ' ')"
+    : > "$test_dir/commands"
+    install_nerd_font > "$test_dir/output"
+    assert_equal '' "$(cat "$test_dir/commands")"
+    # An archive without the Mono family is refused and the installed fonts stay.
+    rm "$test_dir/registered"
+    printf 'bad-asset.tar.xz\n' > "$test_dir/serve"
+    status=0
+    install_nerd_font > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'does not contain the CaskaydiaCove Nerd Font Mono files'
+    [ -f "$font_dir/CaskaydiaCoveNerdFontMono-Regular.ttf" ]
+    # The directory is replaced whole, and a family fontconfig still does not
+    # list afterwards is an error.
+    printf 'asset.tar.xz\n' > "$test_dir/serve"
+    printf 'stale\n' > "$font_dir/stale.ttf"
+    : > "$test_dir/cache-broken"
+    status=0
+    install_nerd_font > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'fontconfig does not list CaskaydiaCove Nerd Font Mono'
+    [ ! -e "$font_dir/stale.ttf" ] && [ -f "$font_dir/CaskaydiaCoveNerdFontMono-Bold.ttf" ]
+}
+
+test_doctor_linux_font() {
+    source "$TEST_REPO_DIR/scripts/doctor.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    uname() { if [ "${1:-}" = -r ]; then cat "$DOTFILES_TEST_FIXTURE/kernel"; else command uname "$@"; fi; }
+    fc-list() { [ "$1" = -q ] && [ "$2" = 'CaskaydiaCove Nerd Font Mono' ] && [ -f "$DOTFILES_TEST_FIXTURE/registered" ]; }
+    printf '6.1.0-25-amd64\n' > "$test_dir/kernel"
+    failures=0
+    check_linux_font > "$test_dir/output"
+    assert_equal 1 "$failures"
+    assert_contains "$(cat "$test_dir/output")" '[missing] CaskaydiaCove Nerd Font Mono (rerun: bash scripts/bootstrap_tools.sh)'
+    : > "$test_dir/registered"
+    failures=0
+    check_linux_font > "$test_dir/output"
+    assert_equal 0 "$failures"
+    assert_contains "$(cat "$test_dir/output")" '[ok] CaskaydiaCove Nerd Font Mono'
+    # WSL draws with the Windows font, so no Linux copy is needed.
+    rm "$test_dir/registered"
+    printf '5.15.153.1-microsoft-standard-WSL2\n' > "$test_dir/kernel"
+    check_linux_font > "$test_dir/output"
+    assert_equal 0 "$failures"
+    assert_contains "$(cat "$test_dir/output")" '[skip] CaskaydiaCove Nerd Font Mono (WSL'
+}
+
 # plugins() against local repositories: missing plugins are cloned at the
 # pinned commit, drifted ones return to it, a failed clone fails the run, and
 # the lockfile bytes never change. Needs an installed lazy.nvim to copy.
@@ -1711,6 +1846,8 @@ run_tests() {
         yazi_flavors_install_and_retry
         neovim_release_install
         tree_sitter_cli_install
+        linux_font_install
+        doctor_linux_font
         neovim_plugins_install_and_retry
         doctor_neovim_checks
         tmux_plugin_failure_and_retry

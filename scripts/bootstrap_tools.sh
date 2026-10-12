@@ -354,6 +354,7 @@ install_linux_tools() {
     install_github_release fastfetch-cli/fastfetch 'fastfetch-linux-{arch_amd64}-polyfilled.tar.gz' fastfetch || return
     install_neovim_release || return
     install_tree_sitter_cli || return
+    install_nerd_font || return
 }
 
 # nvim-treesitter compiles parsers with the tree-sitter CLI and needs
@@ -402,6 +403,53 @@ install_tree_sitter_cli() {
     fi
     rm -f "$record"
 }
+
+# Ghostty and the Windows Terminal fragment select DOTFILES_FONT_FAMILY
+# (lib/environment.sh); macOS installs it with a Homebrew cask and Windows with
+# oh-my-posh. On Linux the Mono family alone, 33 MB of the 100 MB the release
+# unpacks to, comes from the latest Nerd Fonts release into
+# ~/.local/share/fonts/CaskaydiaCove, where fontconfig finds it. WSL skips it:
+# Windows Terminal draws WSL's text with the font install.ps1 installs on
+# Windows.
+install_nerd_font() (
+    local font_dir="${XDG_DATA_HOME:-$HOME/.local/share}/fonts/CaskaydiaCove"
+    local asset=CascadiaCode.tar.xz tag work
+    if dotfiles_is_wsl; then
+        echo "WSL uses the Windows font; install.ps1 installs $DOTFILES_FONT_FAMILY there"
+        return 0
+    fi
+    if ! command -v fc-cache >/dev/null 2>&1; then
+        echo "fontconfig is not installed; install packages first." >&2
+        return 1
+    fi
+    if dotfiles_linux_font_installed; then
+        echo "$DOTFILES_FONT_FAMILY already installed"
+        return 0
+    fi
+    echo "Installing $DOTFILES_FONT_FAMILY into $font_dir..."
+    tag="$(github_latest_tag ryanoasis/nerd-fonts)" || return
+    work="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-font.XXXXXX")" || return
+    trap 'rm -rf "$work"' EXIT
+    curl -fsSL -o "$work/$asset" "https://github.com/ryanoasis/nerd-fonts/releases/download/$tag/$asset" || return
+    mkdir -p "$work/extract" "$work/fonts" || return
+    tar -xJf "$work/$asset" -C "$work/extract" || return
+    if ! compgen -G "$work/extract/CaskaydiaCoveNerdFontMono-*.ttf" >/dev/null; then
+        echo "$asset does not contain the $DOTFILES_FONT_FAMILY files" >&2
+        return 1
+    fi
+    cp "$work/extract"/CaskaydiaCoveNerdFontMono-*.ttf "$work/fonts/" || return
+    # The previous directory goes only once the new one is complete beside it.
+    mkdir -p "$(dirname "$font_dir")" || return
+    rm -rf "$font_dir.new" || return
+    mv "$work/fonts" "$font_dir.new" || return
+    rm -rf "$font_dir" || return
+    mv "$font_dir.new" "$font_dir" || return
+    fc-cache -f "$font_dir" || return
+    if ! dotfiles_linux_font_installed; then
+        echo "fontconfig does not list $DOTFILES_FONT_FAMILY after installing $asset." >&2
+        return 1
+    fi
+)
 
 # --- Runtimes and themes ------------------------------------------------------
 

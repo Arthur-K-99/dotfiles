@@ -1,10 +1,15 @@
-# Bootstrap prerequisites
+# Bootstrap prerequisites (xz-utils unpacks the Nerd Font release)
 ca-certificates
 curl
 git
 gnupg
 unzip
 wget
+xz-utils
+
+# fontconfig registers the Nerd Font that scripts/bootstrap_tools.sh installs
+# into ~/.local/share/fonts
+fontconfig
 
 # Shell
 zsh
@@ -41,3 +46,4 @@ direnv
 # and Ubuntu 25.04 only). Neovim and the tree-sitter CLI come from GitHub
 # releases too: Debian 12 packages Neovim 0.7, Debian 13 0.10, Ubuntu 24.04
 # 0.9 and Ubuntu 26.04 0.11, and the configuration needs 0.12.
+# The Nerd Font comes from its GitHub release as well.

@@ -29,7 +29,7 @@ On a brand-new Windows machine, install Git first with `winget install --id Git.
 
 The installers are designed to be safely rerunnable. Existing unmanaged files are preserved with timestamped `.bak` names before managed links are created. If replacement fails, the previous configuration is restored; any backup that cannot be restored is retained and its location is reported. On Windows, a matching file copy is used when symlink creation is unavailable.
 
-An install is complete only after setup verification passes, including automated font and plugin installation. A failed step returns a nonzero status and gives rerun instructions; completed work is preserved. Fix the reported problem and rerun the same installer to finish. Linux font installation remains manual.
+An install is complete only after setup verification passes, including automated font and plugin installation. A failed step returns a nonzero status and gives rerun instructions; completed work is preserved. Fix the reported problem and rerun the same installer to finish.
 
 ## Windows and WSL
 
@@ -66,7 +66,7 @@ Native Windows installs PowerShell, Windows Terminal, and command-line tools thr
 | zsh-abbr, zsh-you-should-use | Yes | No |
 | Neovim 0.12 with lazy.nvim: Catppuccin, Tree-sitter, LSP through Mason, fzf-lua, which-key, gitsigns, vim-tmux-navigator | Yes | Yes |
 | tree-sitter CLI (compiles the Tree-sitter parsers) | Yes | Yes |
-| CaskaydiaCove Nerd Font | macOS; manual on Linux | Yes |
+| CaskaydiaCove Nerd Font | Yes (WSL uses the Windows font) | Yes |
 
 ## After install
 
@@ -91,7 +91,7 @@ Native Windows installs PowerShell, Windows Terminal, and command-line tools thr
 - **Abbreviations:** zsh-abbr expands `g`, `gs`, `gc`, `lg` and friends on `Space` or `Enter`; `abbr add name=command` adds one and rewrites the tracked `config/zsh-abbr/user-abbreviations` through the linked directory, so commit the change. you-should-use reminds you of an alias after a command runs.
 - **Colors on Linux:** vivid 0.9 or newer carries the Catppuccin `LS_COLORS`; Debian 12 ships 0.8, so completion menus there fall back to the terminal palette until vivid is updated (`cargo install vivid` or the GitHub release).
 - **Files:** `y` opens yazi and changes to the directory you quit in. `fd` and `rg` replace `find` and `grep` (Debian installs fd as `fdfind`; the shell aliases it and the bootstrap links it as `fd` in `~/.local/bin` for tmux and scripts). `Ctrl+T` and `Alt+C` use fd, so ignored files stay out of the way.
-- **Font:** Ghostty and the Windows Terminal fragment select `CaskaydiaCove Nerd Font Mono` themselves (some pickers list it as `CaskaydiaCove NFM`); choose it by hand in any other terminal. On Linux, download it manually from [nerdfonts.com](https://www.nerdfonts.com/font-downloads) and install to `~/.local/share/fonts/`.
+- **Font:** Ghostty and the Windows Terminal fragment select `CaskaydiaCove Nerd Font Mono` themselves (some pickers list it as `CaskaydiaCove NFM`); choose it by hand in any other terminal. On Linux the bootstrap installs the Mono family from the latest Nerd Fonts release into `~/.local/share/fonts/CaskaydiaCove` and registers it with fontconfig; a rerun keeps the installed copy, so delete that directory and rerun to refresh it. WSL skips it, because Windows Terminal draws WSL's text with the font `install.ps1` installs on Windows.
 - **Machine-specific config:** Add anything that shouldn't be in the repo to `~/.zshrc.local` (sourced automatically).
 - **SSH agent:** The shared configuration preserves `SSH_AUTH_SOCK`. To use Bitwarden on a particular machine, add `export SSH_AUTH_SOCK="$HOME/.bitwarden-ssh-agent.sock"` to that machine's `~/.zshrc.local`.
 - **Tool binaries on Linux:** Tools that Debian and Ubuntu do not package come from signed apt repositories (eza, glow, gum) or from the latest GitHub release into `~/.local/bin` (lazygit, lazydocker, delta, atuin, carapace, yazi, dust, procs, xh, tlrc, sesh, fastfetch, tree-sitter, and Neovim as described above). Set `DOTFILES_LOCAL_BIN` before installing to use another directory; the installers put it on `PATH`. Rerunning the bootstrap does not upgrade release binaries; delete one from `~/.local/bin` and rerun to refresh it.
