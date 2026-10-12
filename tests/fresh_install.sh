@@ -61,6 +61,23 @@ check_quiet_start() {
     fi
 }
 
+# A terminal emulator gives zsh a terminal, which turns its line editor on;
+# without one, Debian 12's fzf 0.38 scripts fail to restore the zle option and
+# print errors a real terminal never shows. On Linux, util-linux's script
+# provides the terminal, and zsh's stderr goes to a file so it does not mix
+# with the terminal's output. macOS ships BSD script and a current fzf.
+FRESH_INSTALL_ZSH='errors="$(mktemp)" || exit 1
+command="DOTFILES_FASTFETCH=0 zsh -i -c exit 2>\"$errors\""
+if [ "$(uname)" = Linux ]; then
+    script -qec "$command" /dev/null </dev/null >/dev/null
+else
+    sh -c "$command" </dev/null >/dev/null
+fi
+status=$?
+cat "$errors" >&2
+rm -f "$errors"
+exit "$status"'
+
 # tmux reports configuration errors to the client that sources the file, and
 # run-shell output, such as a failing plugin manager, to its stdout; both must
 # stay empty. TPM silences the plugins themselves, so the last one,
@@ -88,10 +105,8 @@ fresh_install_run() {
     # A rerun must succeed without changes, as the README promises.
     echo "==> Rerunning the installer"
     as_user bash "$1/install.sh" || return
-    # Loading ~/.zshrc runs every tool's init script. The prompt hooks need a
-    # terminal: run by hand without one, Debian 12's fzf scripts fail to
-    # restore the zle option, which a real terminal never shows.
-    check_quiet_start "an interactive zsh" env DOTFILES_FASTFETCH=0 zsh -i -c exit || return
+    # Loading ~/.zshrc runs every tool's init script.
+    check_quiet_start "an interactive zsh" bash -c "$FRESH_INSTALL_ZSH" || return
     check_quiet_start "tmux with its plugins" bash -c "$FRESH_INSTALL_TMUX" || return
     echo "Fresh install passed."
 }
