@@ -33,6 +33,8 @@ o.undofile = true
 o.updatetime = 250
 o.timeoutlen = 300
 o.confirm = true -- ask instead of failing when a buffer has unsaved changes
+o.foldlevel = 99 -- Tree-sitter folds (plugins/treesitter.lua) start open
+o.foldlevelstart = 99
 o.completeopt = "menu,menuone,noinsert,fuzzy,popup"
 
 -- Search
@@ -41,7 +43,18 @@ o.smartcase = true
 o.inccommand = "split" -- live preview of :s substitutions
 
 -- Clipboard. The system clipboard is set after startup so a provider check
--- (pbcopy, wl-copy, xsel, clip.exe) does not slow the start.
+-- (pbcopy, wl-copy, xsel) does not slow the start. WSL without a display has
+-- no provider of its own, so clip.exe and PowerShell serve there, as they do
+-- for tmux-yank (the recipe from :help clipboard-wsl).
+if vim.fn.has("wsl") == 1 and vim.fn.executable("clip.exe") == 1 and not vim.env.WAYLAND_DISPLAY and not vim.env.DISPLAY then
+  local paste = 'powershell.exe -NoLogo -NoProfile -c [Console]::Out.Write($(Get-Clipboard -Raw).tostring().replace("`r", ""))'
+  vim.g.clipboard = {
+    name = "WslClipboard",
+    copy = { ["+"] = "clip.exe", ["*"] = "clip.exe" },
+    paste = { ["+"] = paste, ["*"] = paste },
+    cache_enabled = 0,
+  }
+end
 vim.schedule(function()
   o.clipboard = "unnamedplus"
 end)

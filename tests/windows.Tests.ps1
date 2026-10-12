@@ -592,11 +592,16 @@ exit 0
         $neovimVersion = [version]'0.12.6'
         $neovimStartExitCode = 0
         $neovimCheck = @{ Lines = @('ok plugin catppuccin', 'ok parser bash', 'ok package lua-language-server'); ExitCode = 0 }
+        $neovimStarts = 0
+        $lazyFile = Join-Path $fixture.Directory 'AppData/Local/nvim-data/lazy/lazy.nvim/lua/lazy/init.lua'
+        New-Item -ItemType Directory -Path (Split-Path -Parent $lazyFile) -Force | Out-Null
+        [IO.File]::WriteAllText($lazyFile, '-- lazy')
         function Get-DotfilesNeovimCheck { param($Command) Assert-True ($Command -eq 'mock-command') 'The report comes from the discovered nvim'; [pscustomobject]$neovimCheck }
         function Invoke-DotfilesNativeCommand {
             param($Command, $Arguments, [switch]$Quiet)
             if ($Arguments[0] -eq '--headless') {
-                Assert-True ($Command -eq 'mock-command' -and $Quiet -and ($Arguments -join ' ') -match 'vim\.v\.errmsg' -and $Arguments[-1] -eq '+qa') 'The doctor starts Neovim headless, quietly, and checks v:errmsg'
+                $script:neovimStarts++
+                Assert-True ($Command -eq 'mock-command' -and $Quiet -and $Arguments[2] -eq $DotfilesNeovimStartLua -and $Arguments[-1] -eq '+qa') 'The doctor starts Neovim headless, quietly, and checks v:errmsg'
                 return $neovimStartExitCode
             }
             Assert-True ($Command -eq 'mock-command' -and ($Arguments -join ' ') -eq 'which node' -and $Quiet) 'The doctor asks mise for node quietly'
@@ -625,6 +630,7 @@ exit 0
         Assert-True ($report -contains '  [ok] Node.js via mise') 'A runtime mise can locate passes'
         foreach ($flavor in $yaziFlavors) { Assert-True ($report -contains "  [ok] yazi flavor $flavor") "Installed yazi flavor $flavor passes" }
         Assert-True ($report -contains '  [ok] Neovim 0.12.6') 'A new enough Neovim passes'
+        Assert-True ($report -contains '  [ok] lazy.nvim') 'An installed lazy.nvim passes'
         Assert-True ($report -contains '  [ok] Neovim starts without errors') 'A clean headless start passes'
         foreach ($line in @('  [ok] Neovim plugin catppuccin', '  [ok] Neovim parser bash', '  [ok] Neovim language server lua-language-server')) {
             Assert-True ($report -contains $line) "The report line is shown: $line"
@@ -636,6 +642,14 @@ exit 0
         Assert-True (@($report | Where-Object { $_ -match '^  \[missing\] Neovim 0\.12\.0 or newer \(found: 0\.9\.5; winget upgrade' }).Count -eq 1) 'An old Neovim names the upgrade'
         Assert-True (-not ($report -contains '  [ok] Neovim starts without errors')) 'An old Neovim is not started'
         $neovimVersion = [version]'0.12.6'
+        # Without lazy.nvim a start would clone it, so the doctor reports and stops.
+        Remove-Item -LiteralPath $lazyFile
+        $startsBefore = $script:neovimStarts
+        $report.Clear()
+        Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } '1 check\(s\) need attention'
+        Assert-True (@($report | Where-Object { $_ -match '^  \[missing\] lazy\.nvim \(.*rerun: scripts\\install_runtimes\.ps1\)$' }).Count -eq 1) 'A missing lazy.nvim names the stage that installs it'
+        Assert-True ($script:neovimStarts -eq $startsBefore) 'Neovim is not started without lazy.nvim'
+        [IO.File]::WriteAllText($lazyFile, '-- lazy')
         # Missing and stale items fail and name the stage; skipped parsers do not count.
         $neovimCheck = @{ Lines = @('ok plugin catppuccin', 'missing plugin gitsigns.nvim', 'stale plugin which-key.nvim', 'missing parser yaml', 'missing package marksman', 'skipped parser python (no C compiler or tree-sitter CLI; see the README)'); ExitCode = 1 }
         $report.Clear()
@@ -694,44 +708,79 @@ exit 0
         Assert-True (($report -contains '  [missing] nvim') -and (@($report | Where-Object { $_ -match '^  \[missing\] Neovim 0\.12\.0 or newer \(found: ;' }).Count -eq 1)) 'Both nvim and its version are reported'
     }
 
-    Invoke-Test 'Neovim plugins, parsers and servers are installed headless when the report finds gaps, and can be retried' {
+    Invoke-Test 'Neovim plugins, parsers and servers are installed headless as the report requires, and can be retried' {
         $fixture = New-Fixture
-        $neovimState = @{ Version = [version]'0.12.6'; CheckExitCode = 1; PluginsExitCode = 1; InstallExitCode = 1; NodeDirectory = $null; Calls = [Collections.Generic.List[string]]::new(); InstallPath = $null }
+        # The mocked report resolves a line once the step that fixes it has succeeded,
+        # as the real report would; StayBroken keeps every line as it is.
+        $neovimState = @{ Version = [version]'0.12.6'; Report = @('ok plugin fzf-lua', 'missing plugin catppuccin', 'missing package marksman'); PluginsDone = $false; InstallDone = $false; StayBroken = $false
+            PluginsExitCode = 1; InstallExitCode = 1; NodeDirectory = $null; Calls = [Collections.Generic.List[string]]::new(); InstallPath = $null }
         function Get-DotfilesCommandPath { param($Name) if ($Name -eq 'nvim') { 'mock-nvim' } }
         function Get-DotfilesNeovimVersion { param($Command) Assert-True ($Command -eq 'mock-nvim') 'The version comes from the discovered nvim'; $neovimState.Version }
-        function Get-DotfilesNeovimCheck { param($Command) Assert-True ($Command -eq 'mock-nvim') 'The report comes from the discovered nvim'; [pscustomobject]@{ Lines = @('missing plugin catppuccin'); ExitCode = $neovimState.CheckExitCode } }
+        function Get-DotfilesNeovimCheck {
+            param($Command)
+            Assert-True ($Command -eq 'mock-nvim') 'The report comes from the discovered nvim'
+            $lines = @(foreach ($line in $neovimState.Report) {
+                if ($neovimState.StayBroken) { $line }
+                elseif ($neovimState.PluginsDone -and $line -match '^(missing|stale) plugin (.*)$') { "ok plugin $($Matches[2])" }
+                elseif ($neovimState.InstallDone -and $line -match '^missing (parser|package) (.*)$') { "ok $($Matches[1]) $($Matches[2])" }
+                else { $line }
+            })
+            $code = 0
+            if (@($lines | Where-Object { $_ -notmatch '^(ok|skipped) ' }).Count) { $code = 1 }
+            [pscustomobject]@{ Lines = $lines; ExitCode = $code }
+        }
         function Get-DotfilesMiseNodeDirectory { $neovimState.NodeDirectory }
         function Invoke-DotfilesNativeCommand {
             param($Command, $Arguments, [switch]$Quiet)
-            Assert-True ($Command -eq 'mock-nvim' -and -not $Quiet -and $Arguments[0] -eq '--headless') 'Installation runs nvim headless with visible output'
-            $neovimState.Calls.Add(($Arguments -join ' '))
-            if ($Arguments[-1] -match 'plugins\(\)') { return $neovimState.PluginsExitCode }
-            Assert-True ($Arguments[-1] -match 'install\(\)') "Unexpected nvim command: $Arguments"
+            Assert-True ($Command -eq 'mock-nvim' -and -not $Quiet -and $Arguments[0] -eq '--headless' -and $Arguments[-2] -eq '-c' -and $Arguments[-1] -eq 'cquit 1') 'Installation runs nvim headless, visibly, with cquit after the Lua'
+            $neovimState.Calls.Add($Arguments[2])
+            if ($Arguments[2] -eq $DotfilesNeovimPluginsLua) {
+                if ($neovimState.PluginsExitCode -eq 0) { $neovimState.PluginsDone = $true }
+                return $neovimState.PluginsExitCode
+            }
+            Assert-True ($Arguments[2] -eq $DotfilesNeovimInstallLua) "Unexpected nvim command: $Arguments"
             $neovimState.InstallPath = $env:PATH
+            if ($neovimState.InstallExitCode -eq 0) { $neovimState.InstallDone = $true }
             return $neovimState.InstallExitCode
         }
         $savedPath = $env:PATH
         try {
             Assert-Throws { Install-DotfilesNeovim } 'Neovim plugin install failed \(exit code 1\)\. Rerun install.ps1 to retry'
-            Assert-True (($neovimState.Calls -join "`n") -eq '--headless -c lua require("dotfiles.bootstrap").plugins()') "A failed plugin install stops before the parsers: $($neovimState.Calls -join ' | ')"
+            Assert-True (($neovimState.Calls -join "`n") -eq $DotfilesNeovimPluginsLua) "A failed plugin install stops before the parsers: $($neovimState.Calls -join ' | ')"
             $neovimState.PluginsExitCode = 0
             $neovimState.Calls.Clear()
             Assert-Throws { Install-DotfilesNeovim } 'parser and language server install failed \(exit code 1\)\. Rerun install.ps1 to retry'
-            Assert-True ($neovimState.Calls.Count -eq 2 -and $neovimState.Calls[1] -eq '--headless -c lua require("dotfiles.bootstrap").install()') "The parsers follow the plugins: $($neovimState.Calls -join ' | ')"
+            Assert-True ($neovimState.Calls.Count -eq 2 -and $neovimState.Calls[1] -eq $DotfilesNeovimInstallLua) "The parsers follow the plugins: $($neovimState.Calls -join ' | ')"
             Assert-True ($neovimState.InstallPath -eq $savedPath) 'Without a mise Node.js the install runs with the current PATH'
             Assert-True ($env:PATH -eq $savedPath) 'PATH is restored after a failure'
+            # The retry installs only what is still missing: the plugins are in place.
             $neovimState.InstallExitCode = 0
             $neovimState.NodeDirectory = Join-Path $fixture.Directory 'node'
             $neovimState.Calls.Clear()
             Install-DotfilesNeovim
-            Assert-True ($neovimState.Calls.Count -eq 2) 'The retry runs both installs'
+            Assert-True (($neovimState.Calls -join "`n") -eq $DotfilesNeovimInstallLua) "The retry runs the remaining install: $($neovimState.Calls -join ' | ')"
             Assert-True ($neovimState.InstallPath -eq "$($neovimState.NodeDirectory)$([IO.Path]::PathSeparator)$savedPath") "mise's Node.js leads PATH while Mason installs: $($neovimState.InstallPath)"
             Assert-True ($env:PATH -eq $savedPath) 'PATH is restored after success'
-            $neovimState.CheckExitCode = 0
             $neovimState.Calls.Clear()
             Install-DotfilesNeovim
             Assert-True ($neovimState.Calls.Count -eq 0) 'A passing report installs nothing'
+            # Only what the report names runs: a missing package alone, then a stale plugin alone.
+            $neovimState.PluginsDone = $false; $neovimState.InstallDone = $false
+            $neovimState.Report = @('ok plugin catppuccin', 'missing package marksman')
+            Install-DotfilesNeovim
+            Assert-True (($neovimState.Calls -join "`n") -eq $DotfilesNeovimInstallLua) "A missing package runs the package install alone: $($neovimState.Calls -join ' | ')"
+            $neovimState.PluginsDone = $false; $neovimState.InstallDone = $false
+            $neovimState.Calls.Clear()
+            $neovimState.Report = @('stale plugin which-key.nvim', 'ok package marksman')
+            Install-DotfilesNeovim
+            Assert-True (($neovimState.Calls -join "`n") -eq $DotfilesNeovimPluginsLua) "A stale plugin runs the plugin install alone: $($neovimState.Calls -join ' | ')"
+            # A report that still finds gaps after the installs is a failure that shows them.
+            $neovimState.PluginsDone = $false; $neovimState.InstallDone = $false
+            $neovimState.StayBroken = $true
+            Assert-Throws { Install-DotfilesNeovim } 'not fully set up after installing: stale plugin which-key.nvim\. Rerun install.ps1'
+            $neovimState.StayBroken = $false
             # An old or missing Neovim stops before the report.
+            $neovimState.Calls.Clear()
             $neovimState.Version = [version]'0.11.6'
             Assert-Throws { Install-DotfilesNeovim } "Neovim 0.12.0 or newer is required \(found 0.11.6\).*winget upgrade --id Neovim.Neovim --exact"
             $neovimState.Version = $null
@@ -740,6 +789,21 @@ exit 0
             Assert-Throws { Install-DotfilesNeovim } 'nvim is unavailable.*Reopen PowerShell and rerun install.ps1'
             Assert-True ($neovimState.Calls.Count -eq 0) 'Nothing runs without a usable Neovim'
         } finally { $env:PATH = $savedPath }
+    }
+
+    Invoke-Test 'The Lua handed to nvim survives native argument passing in this PowerShell edition' {
+        # Windows PowerShell passes a native argument with inner double quotes
+        # unescaped, which turned the Lua into a syntax error; the strings use
+        # single quotes and a real child process proves they arrive intact.
+        $fixture = New-Fixture
+        $echo = Join-Path $fixture.Directory 'echo-argument.ps1'
+        [IO.File]::WriteAllText($echo, 'param([string]$Argument) Write-Output $Argument')
+        $shell = (Get-Process -Id $PID).Path
+        foreach ($lua in @($DotfilesNeovimStartLua, $DotfilesNeovimCheckLua, $DotfilesNeovimPluginsLua, $DotfilesNeovimInstallLua)) {
+            Assert-True ($lua -notmatch '"') "No double quotes in the Lua: $lua"
+            $received = [string](@(& $shell -NoProfile -NonInteractive -File $echo $lua) | Select-Object -First 1)
+            Assert-True ($received -eq $lua) "The child received '$received', not '$lua'"
+        }
     }
 
     Invoke-Test 'Neovim version and mise Node.js discovery read the first line of the command output' {

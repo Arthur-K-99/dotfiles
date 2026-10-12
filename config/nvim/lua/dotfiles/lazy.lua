@@ -1,8 +1,8 @@
 -- lazy.nvim bootstrap and setup. The first start clones lazy.nvim itself;
--- the plugins come from lazy-lock.json through `:Lazy restore`, which the
--- bootstrap script runs headless. Missing plugins are never fetched while
--- Neovim starts, so a start is deterministic and the doctor's headless load
--- cannot trigger a clone.
+-- the plugins come from lazy-lock.json through
+-- require("dotfiles.bootstrap").plugins(), which the bootstrap scripts run
+-- headless. Missing plugins are never fetched while Neovim starts, so a start
+-- is deterministic and the doctor's headless load cannot trigger a clone.
 local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
 if not vim.uv.fs_stat(lazypath) then
   local repo = "https://github.com/folke/lazy.nvim.git"

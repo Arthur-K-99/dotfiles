@@ -104,6 +104,21 @@ check_bat_theme() {
     done
 }
 
+check_tree_sitter() {
+    local version
+    if ! command -v tree-sitter >/dev/null 2>&1; then
+        fail "tree-sitter CLI $DOTFILES_TREE_SITTER_MINIMUM or newer (tree-sitter is not installed)"
+        return
+    fi
+    if ! version="$(dotfiles_tree_sitter_version)"; then
+        fail "tree-sitter CLI version (tree-sitter --version did not report one)"
+    elif dotfiles_version_at_least "$version" "$DOTFILES_TREE_SITTER_MINIMUM"; then
+        ok "tree-sitter CLI $version"
+    else
+        fail "tree-sitter CLI $version is older than $DOTFILES_TREE_SITTER_MINIMUM (Linux: rerun bash scripts/bootstrap_tools.sh)"
+    fi
+}
+
 check_nvim_version() {
     local version
     if ! command -v nvim >/dev/null 2>&1; then
@@ -128,7 +143,12 @@ check_nvim_version() {
 check_nvim_plugins() {
     local lazy_dir="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy"
     local output line
-    check_readable "lazy.nvim" "$lazy_dir/lazy.nvim/lua/lazy/init.lua"
+    # Without lazy.nvim a start would clone it, so the doctor stops here.
+    if [ ! -r "$lazy_dir/lazy.nvim/lua/lazy/init.lua" ]; then
+        fail "lazy.nvim ($lazy_dir/lazy.nvim; rerun: bash scripts/bootstrap_tools.sh)"
+        return 0
+    fi
+    ok "lazy.nvim"
     command -v nvim >/dev/null 2>&1 || return 0
     if output="$(nvim --headless -c 'lua if vim.v.errmsg ~= "" then os.exit(3) end' +qa 2>&1)" && [ -z "$output" ]; then
         ok "Neovim starts without errors"
@@ -136,7 +156,7 @@ check_nvim_plugins() {
         fail "Neovim headless start reported errors: ${output:-exit status $?}"
         return 0
     fi
-    output="$(nvim --headless -c 'lua require("dotfiles.bootstrap").check()' 2>&1)" || :
+    output="$(nvim --headless -c 'lua require("dotfiles.bootstrap").check()' -c 'cquit 1' 2>&1)" || :
     if [ -z "$output" ]; then
         fail "Neovim plugins, parsers and language servers (the check printed nothing)"
         return 0
@@ -236,6 +256,7 @@ doctor_main() {
     echo "Checking runtimes..."
     check_mise_node
     check_nvim_version
+    check_tree_sitter
 
     echo "Checking terminal capabilities..."
     check_terminfo tmux-256color

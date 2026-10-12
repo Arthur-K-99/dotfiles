@@ -93,9 +93,22 @@ dotfiles_version_at_least() {
     return 0
 }
 
-# dotfiles_nvim_lock_plugins <lazy-lock.json>: the plugin names lazy.nvim has
-# pinned, one per line. lazy.nvim writes one plugin per line, so the keys are
-# read without a JSON parser (python3 is not on every machine at this point).
-dotfiles_nvim_lock_plugins() {
-    sed -n 's/^  "\([^"]*\)": {.*$/\1/p' "$1"
+# nvim-treesitter compiles parsers with the tree-sitter CLI, 0.26.1 or newer.
+# Debian 13 packages 0.22 and Ubuntu 24.04 0.20, so the Linux bootstrap
+# installs the GitHub release when the installed version is below this.
+DOTFILES_TREE_SITTER_MINIMUM="0.26.1"
+
+# dotfiles_tree_sitter_version [tree-sitter]: the version of a tree-sitter CLI
+# binary, from "tree-sitter 0.27.1".
+dotfiles_tree_sitter_version() {
+    local first_line
+    first_line="$("${1:-tree-sitter}" --version 2>/dev/null | head -n 1)" || return 1
+    case "$first_line" in
+        "tree-sitter "*) ;;
+        *) return 1 ;;
+    esac
+    first_line="${first_line#tree-sitter }"
+    first_line="${first_line%%[^0-9.]*}"
+    [ -n "$first_line" ] || return 1
+    printf '%s\n' "$first_line"
 }

@@ -959,18 +959,26 @@ test_neovim_plugins_install_and_retry() {
     export DOTFILES_TEST_FIXTURE="$test_dir"
     mkdir -p "$test_dir/node/bin"
     printf 'NVIM v0.12.6\n' > "$test_dir/version"
-    # The check passes once plugins and tools are both installed; plugins() and
-    # install() each need their own retry file to succeed.
+    # The report names what is missing; plugins() and install() each need their
+    # own retry file to succeed and record what they fixed.
     nvim() {
         printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/nvim-args"
         case "$*" in
             --version) cat "$DOTFILES_TEST_FIXTURE/version" ;;
-            *'bootstrap").check()'*) [ -f "$DOTFILES_TEST_FIXTURE/plugins-installed" ] && [ -f "$DOTFILES_TEST_FIXTURE/tools-installed" ] ;;
+            *'bootstrap").check()'*)
+                case "$*" in *' -c cquit 1') ;; *) echo 'the check must be followed by cquit' >&2; return 99 ;; esac
+                echo 'ok plugin fzf-lua'
+                [ -f "$DOTFILES_TEST_FIXTURE/plugins-installed" ] || echo 'missing plugin catppuccin'
+                [ -f "$DOTFILES_TEST_FIXTURE/tools-installed" ] || echo 'missing package marksman'
+                [ -f "$DOTFILES_TEST_FIXTURE/plugins-installed" ] && [ -f "$DOTFILES_TEST_FIXTURE/tools-installed" ] && [ ! -f "$DOTFILES_TEST_FIXTURE/stay-broken" ]
+                ;;
             *'bootstrap").plugins()'*)
+                case "$*" in *' -c cquit 1') ;; *) return 99 ;; esac
                 [ -f "$DOTFILES_TEST_FIXTURE/plugins-ok" ] || { echo 'missing plugin catppuccin'; return 1; }
                 : > "$DOTFILES_TEST_FIXTURE/plugins-installed"
                 ;;
             *'bootstrap").install()'*)
+                case "$*" in *' -c cquit 1') ;; *) return 99 ;; esac
                 printf '%s\n' "$PATH" > "$DOTFILES_TEST_FIXTURE/install-path"
                 [ -f "$DOTFILES_TEST_FIXTURE/install-ok" ] || { echo 'missing package marksman'; return 1; }
                 : > "$DOTFILES_TEST_FIXTURE/tools-installed"
@@ -978,10 +986,13 @@ test_neovim_plugins_install_and_retry() {
         esac
     }
     mise() { [ "$1 $2" = 'which node' ] && [ -f "$DOTFILES_TEST_FIXTURE/node-present" ] && printf '%s/node/bin/node\n' "$DOTFILES_TEST_FIXTURE"; }
+    local check='--headless -c lua require("dotfiles.bootstrap").check() -c cquit 1'
+    local plugins='--headless -c lua require("dotfiles.bootstrap").plugins() -c cquit 1'
+    local install='--headless -c lua require("dotfiles.bootstrap").install() -c cquit 1'
     local status=0
     bootstrap_neovim > "$test_dir/output" 2>&1 || status=$?
     assert_equal 1 "$status"
-    assert_equal $'--version\n--headless -c lua require("dotfiles.bootstrap").check()\n--headless -c lua require("dotfiles.bootstrap").plugins()' "$(cat "$test_dir/nvim-args")"
+    assert_equal "$(printf '%s\n' --version "$check" "$plugins")" "$(cat "$test_dir/nvim-args")"
     assert_contains "$(cat "$test_dir/output")" 'missing plugin catppuccin'
     [ ! -f "$test_dir/plugins-installed" ]
     # The retry installs the plugins; the parsers and servers fail and are retried in turn.
@@ -991,7 +1002,7 @@ test_neovim_plugins_install_and_retry() {
     bootstrap_neovim > "$test_dir/output" 2>&1 || status=$?
     assert_equal 1 "$status"
     [ -f "$test_dir/plugins-installed" ]
-    assert_contains "$(tail -n 1 "$test_dir/nvim-args")" 'bootstrap").install()'
+    assert_equal "$(printf '%s\n' --version "$check" "$plugins" "$install")" "$(cat "$test_dir/nvim-args")"
     assert_contains "$(cat "$test_dir/output")" 'missing package marksman'
     # Without mise's Node.js the install runs with the current PATH; with it, that directory comes first.
     assert_equal "$PATH" "$(cat "$test_dir/install-path")"
@@ -999,14 +1010,29 @@ test_neovim_plugins_install_and_retry() {
     : > "$test_dir/node-present"
     : > "$test_dir/nvim-args"
     bootstrap_neovim > "$test_dir/output"
-    assert_equal $'--version\n--headless -c lua require("dotfiles.bootstrap").check()\n--headless -c lua require("dotfiles.bootstrap").plugins()\n--headless -c lua require("dotfiles.bootstrap").install()' "$(cat "$test_dir/nvim-args")"
+    # Only what the report names is installed: the plugins were already in place.
+    assert_equal "$(printf '%s\n' --version "$check" "$install" "$check")" "$(cat "$test_dir/nvim-args")"
     assert_equal "$test_dir/node/bin:$PATH" "$(cat "$test_dir/install-path")"
     [ -f "$test_dir/tools-installed" ]
     # Everything installed: one offline check and nothing else.
     : > "$test_dir/nvim-args"
     bootstrap_neovim > "$test_dir/output"
-    assert_equal $'--version\n--headless -c lua require("dotfiles.bootstrap").check()' "$(cat "$test_dir/nvim-args")"
+    assert_equal "$(printf '%s\n' --version "$check")" "$(cat "$test_dir/nvim-args")"
     assert_contains "$(cat "$test_dir/output")" 'already installed'
+    # A stale plugin alone runs the plugin step alone, then the report confirms.
+    rm "$test_dir/plugins-installed"
+    : > "$test_dir/nvim-args"
+    bootstrap_neovim > "$test_dir/output"
+    assert_equal "$(printf '%s\n' --version "$check" "$plugins" "$check")" "$(cat "$test_dir/nvim-args")"
+    # A report that still finds gaps after the installs is a failure, with the report shown.
+    rm "$test_dir/tools-installed"
+    : > "$test_dir/stay-broken"
+    status=0
+    bootstrap_neovim > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'not fully set up'
+    assert_contains "$(cat "$test_dir/output")" 'ok plugin fzf-lua'
+    rm "$test_dir/stay-broken"
     # An old or absent Neovim stops before anything runs.
     printf 'NVIM v0.11.6\n' > "$test_dir/version"
     status=0
@@ -1022,6 +1048,147 @@ test_neovim_plugins_install_and_retry() {
     bootstrap_neovim > "$test_dir/output" 2>&1 || status=$?
     assert_equal 1 "$status"
     assert_contains "$(cat "$test_dir/output")" 'Neovim is not installed'
+}
+
+test_tree_sitter_cli_install() {
+    source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    export DOTFILES_LOCAL_BIN="$test_dir/bin"
+    export TMPDIR="$test_dir/tmp"
+    mkdir -p "$TMPDIR" "$test_dir/payload" "$test_dir/old-payload"
+    printf '#!/bin/sh\necho "tree-sitter 0.27.1"\n' > "$test_dir/payload/tree-sitter"
+    printf '#!/bin/sh\necho "tree-sitter 0.25.9"\n' > "$test_dir/old-payload/tree-sitter"
+    chmod +x "$test_dir/payload/tree-sitter" "$test_dir/old-payload/tree-sitter"
+    (cd "$test_dir/payload" && zip -q "$test_dir/asset.zip" tree-sitter)
+    (cd "$test_dir/old-payload" && zip -q "$test_dir/old-asset.zip" tree-sitter)
+    printf 'asset.zip\n' > "$test_dir/serve"
+    tree-sitter() {
+        if [ -f "$DOTFILES_TEST_FIXTURE/cli-on-path" ]; then
+            cat "$DOTFILES_TEST_FIXTURE/cli-on-path"
+            return 0
+        fi
+        return 127
+    }
+    uname() { if [ "${1:-}" = -m ]; then printf 'x86_64\n'; else command uname "$@"; fi; }
+    curl() {
+        local output="" url=""
+        printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                -o|-w) output="$2"; shift ;;
+                -*) ;;
+                *) url="$1" ;;
+            esac
+            shift
+        done
+        case "$url" in
+            https://github.com/tree-sitter/tree-sitter/releases/latest) printf 'https://github.com/tree-sitter/tree-sitter/releases/tag/v0.27.1' ;;
+            https://github.com/tree-sitter/tree-sitter/releases/download/v0.27.1/*)
+                printf '%s\n' "$url" >> "$DOTFILES_TEST_FIXTURE/downloads"
+                cp "$DOTFILES_TEST_FIXTURE/$(cat "$DOTFILES_TEST_FIXTURE/serve")" "$output"
+                ;;
+            *) echo "unexpected URL $url" >&2; return 99 ;;
+        esac
+    }
+    # A CLI that is new enough needs nothing; an old distribution package is not good enough.
+    printf 'tree-sitter 0.26.1\n' > "$test_dir/cli-on-path"
+    install_tree_sitter_cli > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" 'tree-sitter 0.26.1 already installed'
+    [ ! -f "$test_dir/commands" ]
+    printf 'tree-sitter 0.22.6\n' > "$test_dir/cli-on-path"
+    install_tree_sitter_cli > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" 'found 0.22.6, need 0.26.1'
+    assert_equal 'https://github.com/tree-sitter/tree-sitter/releases/download/v0.27.1/tree-sitter-cli-linux-x64.zip' "$(cat "$test_dir/downloads")"
+    assert_equal 'tree-sitter 0.27.1' "$("$test_dir/bin/tree-sitter" --version)"
+    # No CLI at all is installed too; a release that is still too old is refused.
+    rm "$test_dir/cli-on-path" "$test_dir/bin/tree-sitter"
+    install_tree_sitter_cli > "$test_dir/output"
+    [ -x "$test_dir/bin/tree-sitter" ]
+    printf 'old-asset.zip\n' > "$test_dir/serve"
+    local status=0
+    install_tree_sitter_cli > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" '(0.25.9) is older than 0.26.1'
+    assert_equal 0.25.9 "$(dotfiles_tree_sitter_version "$test_dir/bin/tree-sitter")"
+    printf '#!/bin/sh\necho "not a cli"\n' > "$test_dir/bin/tree-sitter"
+    if dotfiles_tree_sitter_version "$test_dir/bin/tree-sitter"; then
+        echo "A version was read from unrelated output." >&2
+        return 1
+    fi
+}
+
+# plugins() against local repositories: missing plugins are cloned at the
+# pinned commit, drifted ones return to it, a failed clone fails the run, and
+# the lockfile bytes never change. Needs an installed lazy.nvim to copy.
+# lazy.nvim adds itself to the plugins with its GitHub URL whatever the spec
+# says, so git.url_format points every "owner/name" at the fixture.
+test_nvim_bootstrap_plugins_keeps_lockfile() {
+    local real_lazy="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy/lazy.nvim"
+    local fx="$test_dir" plugin lazy_commit status
+    local -A first second
+    # lazy.nvim clones itself with blobs filtered, so a bare clone of it would
+    # reach for GitHub; a fresh repository of its files stays local.
+    mkdir -p "$fx/lazy-src" "$fx/data/nvim/lazy" "$fx/config/nvim" "$fx/state" "$fx/cache" "$fx/repos/folke" "$fx/repos/fixture"
+    (cd "$real_lazy" && tar -cf - --exclude=.git .) | tar -xf - -C "$fx/lazy-src"
+    git init -q -b main "$fx/lazy-src"
+    git -C "$fx/lazy-src" add -A
+    git -C "$fx/lazy-src" -c user.name=fixture -c user.email=fixture@example.com commit -q -m lazy
+    git clone -q --bare "$fx/lazy-src" "$fx/repos/folke/lazy.nvim.git"
+    git clone -q "file://$fx/repos/folke/lazy.nvim.git" "$fx/data/nvim/lazy/lazy.nvim"
+    lazy_commit="$(git -C "$fx/data/nvim/lazy/lazy.nvim" rev-parse HEAD)"
+    for plugin in alpha beta; do
+        git init -q -b main "$fx/src/$plugin"
+        printf 'one\n' > "$fx/src/$plugin/plugin.lua"
+        git -C "$fx/src/$plugin" add plugin.lua
+        git -C "$fx/src/$plugin" -c user.name=fixture -c user.email=fixture@example.com commit -q -m one
+        first[$plugin]="$(git -C "$fx/src/$plugin" rev-parse HEAD)"
+        printf 'two\n' > "$fx/src/$plugin/plugin.lua"
+        git -C "$fx/src/$plugin" -c user.name=fixture -c user.email=fixture@example.com commit -q -am two
+        second[$plugin]="$(git -C "$fx/src/$plugin" rev-parse HEAD)"
+        git clone -q --bare "$fx/src/$plugin" "$fx/repos/fixture/$plugin.git"
+    done
+    cat > "$fx/config/nvim/init.lua" <<INIT
+vim.opt.rtp:prepend("$TEST_REPO_DIR/config/nvim")
+vim.opt.rtp:prepend(vim.fn.stdpath("data") .. "/lazy/lazy.nvim")
+require("lazy").setup({
+  spec = { { "fixture/alpha" }, { "fixture/beta" } },
+  git = { url_format = "file://$fx/repos/%s.git" },
+  install = { missing = false },
+  checker = { enabled = false },
+  change_detection = { notify = false },
+  rocks = { enabled = false },
+})
+INIT
+    printf '{\n  "alpha": { "branch": "main", "commit": "%s" },\n  "beta": { "branch": "main", "commit": "%s" },\n  "lazy.nvim": { "branch": "main", "commit": "%s" }\n}\n' \
+        "${first[alpha]}" "${first[beta]}" "$lazy_commit" > "$fx/config/nvim/lazy-lock.json"
+    cp "$fx/config/nvim/lazy-lock.json" "$fx/lock-original.json"
+    run_plugins() {
+        XDG_CONFIG_HOME="$fx/config" XDG_DATA_HOME="$fx/data" XDG_STATE_HOME="$fx/state" XDG_CACHE_HOME="$fx/cache" \
+            nvim --headless -c 'lua require("dotfiles.bootstrap").plugins()' -c 'cquit 1' > "$fx/output" 2>&1
+    }
+    # Both plugins are cloned at the pinned (older) commit, not at the branch head.
+    run_plugins
+    assert_equal "${first[alpha]}" "$(git -C "$fx/data/nvim/lazy/alpha" rev-parse HEAD)"
+    assert_equal "${first[beta]}" "$(git -C "$fx/data/nvim/lazy/beta" rev-parse HEAD)"
+    assert_contains "$(cat "$fx/output")" 'ok plugin beta'
+    cmp -s "$fx/lock-original.json" "$fx/config/nvim/lazy-lock.json"
+    # alpha drifts and beta's clone goes while its repository is unreachable: the
+    # run fails, alpha is back on its commit, and beta stays pinned in the lockfile.
+    git -C "$fx/data/nvim/lazy/alpha" checkout -q "${second[alpha]}"
+    rm -rf "$fx/data/nvim/lazy/beta"
+    mv "$fx/repos/fixture/beta.git" "$fx/repos/fixture/beta.git.away"
+    status=0
+    run_plugins || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$fx/output")" 'missing plugin beta'
+    assert_equal "${first[alpha]}" "$(git -C "$fx/data/nvim/lazy/alpha" rev-parse HEAD)"
+    cmp -s "$fx/lock-original.json" "$fx/config/nvim/lazy-lock.json"
+    # Once reachable again, beta is cloned at the pinned commit.
+    mv "$fx/repos/fixture/beta.git.away" "$fx/repos/fixture/beta.git"
+    run_plugins
+    assert_equal "${first[beta]}" "$(git -C "$fx/data/nvim/lazy/beta" rev-parse HEAD)"
+    assert_contains "$(cat "$fx/output")" 'ok plugin lazy.nvim'
+    cmp -s "$fx/lock-original.json" "$fx/config/nvim/lazy-lock.json"
 }
 
 test_nvim_config_check() {
@@ -1052,6 +1219,7 @@ test_doctor_neovim_checks() {
         case "$*" in
             --version) cat "$DOTFILES_TEST_FIXTURE/version" ;;
             *'bootstrap").check()'*)
+                case "$*" in *' -c cquit 1') ;; *) echo 'the check must be followed by cquit' >&2; return 99 ;; esac
                 printf 'ok plugin catppuccin\nok parser bash\nok package lua-language-server\n'
                 if [ -f "$DOTFILES_TEST_FIXTURE/tools-missing" ]; then
                     printf 'missing plugin gitsigns.nvim\nstale plugin which-key.nvim\nmissing parser yaml\nmissing package marksman\nskipped parser python (no C compiler or tree-sitter CLI; see the README)\n'
@@ -1066,6 +1234,7 @@ test_doctor_neovim_checks() {
                 ;;
         esac
     }
+    tree-sitter() { cat "$DOTFILES_TEST_FIXTURE/ts-version"; }
     printf 'NVIM v0.12.6\n' > "$test_dir/version"
     failures=0
     check_nvim_version > "$test_dir/output"
@@ -1079,22 +1248,40 @@ test_doctor_neovim_checks() {
     check_nvim_version > "$test_dir/output"
     assert_equal 2 "$failures"
     assert_contains "$(cat "$test_dir/output")" 'did not report one'
-    # lazy.nvim by file, a clean start, then the report of plugins, parsers and servers.
+    # The tree-sitter CLI must be present and new enough to compile parsers.
+    printf 'tree-sitter 0.27.1\n' > "$test_dir/ts-version"
     failures=0
+    check_tree_sitter > "$test_dir/output"
+    assert_equal 0 "$failures"
+    assert_contains "$(cat "$test_dir/output")" '[ok] tree-sitter CLI 0.27.1'
+    printf 'tree-sitter 0.22.6\n' > "$test_dir/ts-version"
+    check_tree_sitter > "$test_dir/output"
+    assert_equal 1 "$failures"
+    assert_contains "$(cat "$test_dir/output")" '0.22.6 is older than 0.26.1'
+    printf 'something else\n' > "$test_dir/ts-version"
+    check_tree_sitter > "$test_dir/output"
+    assert_equal 2 "$failures"
+    assert_contains "$(cat "$test_dir/output")" 'did not report one'
+    # Without lazy.nvim a start would clone it, so nothing is started.
+    failures=0
+    : > "$test_dir/nvim-args"
     check_nvim_plugins > "$test_dir/output"
     assert_equal 1 "$failures"
-    assert_contains "$(cat "$test_dir/output")" '[missing] lazy.nvim'
-    assert_contains "$(cat "$test_dir/output")" '[ok] Neovim starts without errors'
-    assert_contains "$(cat "$test_dir/output")" '[ok] Neovim plugin catppuccin'
-    assert_contains "$(cat "$test_dir/output")" '[ok] Neovim parser bash'
-    assert_contains "$(cat "$test_dir/output")" '[ok] Neovim language server lua-language-server'
-    assert_contains "$(tail -n 2 "$test_dir/nvim-args" | head -n 1)" 'vim.v.errmsg'
-    assert_contains "$(tail -n 1 "$test_dir/nvim-args")" 'bootstrap").check()'
+    assert_contains "$(cat "$test_dir/output")" '[missing] lazy.nvim ('
+    assert_equal '' "$(cat "$test_dir/nvim-args")"
+    # With it: a clean start, then the report of plugins, parsers and servers.
     mkdir -p "$XDG_DATA_HOME/nvim/lazy/lazy.nvim/lua/lazy"
     : > "$XDG_DATA_HOME/nvim/lazy/lazy.nvim/lua/lazy/init.lua"
     failures=0
     check_nvim_plugins > "$test_dir/output"
     assert_equal 0 "$failures"
+    assert_contains "$(cat "$test_dir/output")" '[ok] lazy.nvim'
+    assert_contains "$(cat "$test_dir/output")" '[ok] Neovim starts without errors'
+    assert_contains "$(cat "$test_dir/output")" '[ok] Neovim plugin catppuccin'
+    assert_contains "$(cat "$test_dir/output")" '[ok] Neovim parser bash'
+    assert_contains "$(cat "$test_dir/output")" '[ok] Neovim language server lua-language-server'
+    assert_contains "$(tail -n 2 "$test_dir/nvim-args" | head -n 1)" 'vim.v.errmsg'
+    assert_contains "$(tail -n 1 "$test_dir/nvim-args")" 'bootstrap").check() -c cquit 1'
     # Missing or stale plugins, parsers and servers fail and name the bootstrap; skipped parsers do not count.
     : > "$test_dir/tools-missing"
     failures=0
@@ -1114,17 +1301,20 @@ test_doctor_neovim_checks() {
     assert_equal 1 "$failures"
     assert_contains "$(cat "$test_dir/output")" 'E5113'
     assert_equal 1 "$(wc -l < "$test_dir/nvim-args" | tr -d ' ')"
-    # Without nvim the version is missing and nothing is started.
-    unset -f nvim
+    # Without nvim or tree-sitter the versions are missing and nothing is started.
+    unset -f nvim tree-sitter
     command() {
-        if [ "$*" = '-v nvim' ]; then return 1; fi
-        builtin command "$@"
+        case "$*" in
+            '-v nvim'|'-v tree-sitter') return 1 ;;
+            *) builtin command "$@" ;;
+        esac
     }
     failures=0
     : > "$test_dir/nvim-args"
     check_nvim_version > "$test_dir/output"
+    check_tree_sitter > "$test_dir/output"
     check_nvim_plugins > "$test_dir/output"
-    assert_equal 1 "$failures"
+    assert_equal 2 "$failures"
     assert_equal '' "$(cat "$test_dir/nvim-args")"
 }
 
@@ -1442,6 +1632,7 @@ run_tests() {
         mise_bootstrap_and_runtimes
         yazi_flavors_install_and_retry
         neovim_release_install
+        tree_sitter_cli_install
         neovim_plugins_install_and_retry
         doctor_neovim_checks
         tmux_plugin_failure_and_retry
@@ -1463,6 +1654,14 @@ run_tests() {
         tests+=(nvim_config_check)
     else
         echo "  SKIP nvim_config_check (nvim is not installed)."
+    fi
+    # The plugin bootstrap runs against local repositories but needs a copy of
+    # lazy.nvim, which only a machine that applied the configuration has.
+    if command -v nvim >/dev/null 2>&1 && command -v git >/dev/null 2>&1 && \
+        [ -r "${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy/lazy.nvim/lua/lazy/init.lua" ]; then
+        tests+=(nvim_bootstrap_plugins_keeps_lockfile)
+    else
+        echo "  SKIP nvim_bootstrap_plugins_keeps_lockfile (needs nvim, git and an installed lazy.nvim)."
     fi
     for test_name in "${tests[@]}"; do
         # A separate shell keeps errexit active inside each case and isolates mocks.

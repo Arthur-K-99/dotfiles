@@ -32,6 +32,16 @@ local function locked()
   return vim.deepcopy(lock.lock)
 end
 
+local function read_file(path)
+  local handle = io.open(path, "rb")
+  if not handle then
+    return nil
+  end
+  local content = handle:read("*a")
+  handle:close()
+  return content
+end
+
 -- One line per pinned plugin: ok at the locked commit, missing, or stale at
 -- another commit. Returns the number of plugins that are not ok.
 local function report_plugins(snapshot)
@@ -58,10 +68,14 @@ end
 -- Install missing plugins at the commits lazy-lock.json pins and bring every
 -- other plugin back to its pinned commit. lazy.nvim rewrites the lockfile
 -- after each operation from what is installed, dropping plugins it has not
--- installed, so the lock read at startup is put back before the restore and
--- is what the final rewrite reproduces. Without the lockfile option a plain
--- install would clone branch heads and pin those instead.
+-- installed (a failed clone would unpin that plugin for the next run), so the
+-- lock read at startup is put back before the restore and the file itself is
+-- written back afterwards: this function never changes lazy-lock.json.
+-- Without the lockfile option a plain install would clone branch heads and
+-- pin those instead.
 function M.plugins()
+  local lockfile = require("lazy.core.config").options.lockfile
+  local original = read_file(lockfile)
   local snapshot = locked()
   local manage = require("lazy.manage")
   local lock = require("lazy.manage.lock")
@@ -69,6 +83,11 @@ function M.plugins()
   lock.lock = vim.deepcopy(snapshot)
   lock._loaded = true
   manage.restore({ wait = true, show = false })
+  if original and read_file(lockfile) ~= original then
+    local handle = assert(io.open(lockfile, "wb"))
+    handle:write(original)
+    handle:close()
+  end
   os.exit(report_plugins(snapshot) > 0 and 1 or 0)
 end
 

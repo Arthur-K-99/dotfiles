@@ -387,6 +387,20 @@ function Install-DotfilesYaziFlavors {
 # Tree-sitter parsers and Mason packages, and reports on all of them. Its check
 # is offline and fast; the installs are the only steps that reach the network.
 $script:DotfilesNeovimMinimum = [version]'0.12.0'
+# The Lua passed to nvim -c. Windows PowerShell hands native commands their
+# arguments with inner double quotes intact only by luck of the legacy
+# quoting, so the Lua uses single quotes and the tests push these strings
+# through a real process. cquit follows each one so a Lua error ends the
+# process with a failure instead of leaving a headless Neovim waiting.
+$script:DotfilesNeovimStartLua = "lua if vim.v.errmsg ~= '' then os.exit(3) end"
+$script:DotfilesNeovimCheckLua = "lua require('dotfiles.bootstrap').check()"
+$script:DotfilesNeovimPluginsLua = "lua require('dotfiles.bootstrap').plugins()"
+$script:DotfilesNeovimInstallLua = "lua require('dotfiles.bootstrap').install()"
+
+function Get-DotfilesNeovimDataDirectory {
+    param([string]$HomeDirectory)
+    Join-Path (Get-DotfilesLocalAppData $HomeDirectory) 'nvim-data'
+}
 
 # The three readers below run native commands whose stderr is discarded or
 # returned as data. Windows PowerShell turns redirected native stderr into a
@@ -409,7 +423,7 @@ function Get-DotfilesNeovimCheck {
     param([string]$Command)
     $ErrorActionPreference = 'Continue'
     $PSNativeCommandUseErrorActionPreference = $false
-    $lines = @(& $Command --headless -c 'lua require("dotfiles.bootstrap").check()' 2>&1 | ForEach-Object { [string]$_ })
+    $lines = @(& $Command --headless -c $script:DotfilesNeovimCheckLua -c 'cquit 1' 2>&1 | ForEach-Object { [string]$_ })
     return [pscustomobject]@{ Lines = $lines; ExitCode = $LASTEXITCODE }
 }
 
@@ -435,20 +449,28 @@ function Get-DotfilesNeovimCommand {
     return $nvimCommand
 }
 
+# The report decides which of the two installs runs and verifies the result.
 function Install-DotfilesNeovim {
     $nvimCommand = Get-DotfilesNeovimCommand
-    if ((Get-DotfilesNeovimCheck $nvimCommand).ExitCode -eq 0) { Write-Host '  already installed: Neovim plugins, parsers and language servers'; return }
-    Write-Host '  installing: Neovim plugins from lazy-lock.json'
-    $code = Invoke-DotfilesNativeCommand $nvimCommand @('--headless', '-c', 'lua require("dotfiles.bootstrap").plugins()')
-    if ($code -ne 0) { throw "The Neovim plugin install failed (exit code $code). Rerun install.ps1 to retry." }
-    Write-Host '  installing: Neovim parsers and language servers'
-    $savedPath = $env:PATH
-    $nodeDirectory = Get-DotfilesMiseNodeDirectory
-    if ($nodeDirectory) { $env:PATH = "$nodeDirectory$([IO.Path]::PathSeparator)$env:PATH" }
-    try {
-        $code = Invoke-DotfilesNativeCommand $nvimCommand @('--headless', '-c', 'lua require("dotfiles.bootstrap").install()')
-    } finally { $env:PATH = $savedPath }
-    if ($code -ne 0) { throw "The Neovim parser and language server install failed (exit code $code). Rerun install.ps1 to retry." }
+    $check = Get-DotfilesNeovimCheck $nvimCommand
+    if ($check.ExitCode -eq 0) { Write-Host '  already installed: Neovim plugins, parsers and language servers'; return }
+    if (@($check.Lines | Where-Object { $_ -match '^(missing|stale) plugin ' }).Count) {
+        Write-Host '  installing: Neovim plugins from lazy-lock.json'
+        $code = Invoke-DotfilesNativeCommand $nvimCommand @('--headless', '-c', $script:DotfilesNeovimPluginsLua, '-c', 'cquit 1')
+        if ($code -ne 0) { throw "The Neovim plugin install failed (exit code $code). Rerun install.ps1 to retry." }
+    }
+    if (@($check.Lines | Where-Object { $_ -match '^missing (parser|package) ' }).Count) {
+        Write-Host '  installing: Neovim parsers and language servers'
+        $savedPath = $env:PATH
+        $nodeDirectory = Get-DotfilesMiseNodeDirectory
+        if ($nodeDirectory) { $env:PATH = "$nodeDirectory$([IO.Path]::PathSeparator)$env:PATH" }
+        try {
+            $code = Invoke-DotfilesNativeCommand $nvimCommand @('--headless', '-c', $script:DotfilesNeovimInstallLua, '-c', 'cquit 1')
+        } finally { $env:PATH = $savedPath }
+        if ($code -ne 0) { throw "The Neovim parser and language server install failed (exit code $code). Rerun install.ps1 to retry." }
+    }
+    $check = Get-DotfilesNeovimCheck $nvimCommand
+    if ($check.ExitCode -ne 0) { throw "Neovim is not fully set up after installing: $(($check.Lines | Where-Object { $_ -notmatch '^ok ' }) -join '; '). Rerun install.ps1 to retry." }
 }
 
 # mise installs the runtimes declared in config/mise/config.toml, ya the yazi
@@ -487,7 +509,7 @@ function Invoke-DotfilesLink {
 }
 
 function Get-DotfilesDoctorCommands {
-    @('git', 'pwsh', 'oh-my-posh', 'bat', 'eza', 'fzf', 'zoxide', 'btop', 'nvim', 'gh', 'wt', 'fastfetch',
+    @('git', 'pwsh', 'oh-my-posh', 'bat', 'eza', 'fzf', 'zoxide', 'btop', 'nvim', 'tree-sitter', 'gh', 'wt', 'fastfetch',
         'carapace', 'atuin', 'mise', 'delta', 'lazygit', 'lazydocker', 'yazi',
         'rg', 'fd', 'dust', 'duf', 'procs', 'sd', 'xh', 'hyperfine', 'glow', 'tldr', 'gum', 'direnv')
 }
@@ -523,11 +545,19 @@ function Invoke-DotfilesDoctor {
         $nvimCommand = Get-DotfilesCommandPath 'nvim'
         $version = $null
         if ($nvimCommand) { $version = Get-DotfilesNeovimVersion $nvimCommand }
-        if ($version -and $version -ge $script:DotfilesNeovimMinimum) {
+        $lazyFile = Join-Path (Get-DotfilesNeovimDataDirectory $HomeDirectory) 'lazy/lazy.nvim/lua/lazy/init.lua'
+        if (-not ($version -and $version -ge $script:DotfilesNeovimMinimum)) {
+            Write-Host "  [missing] Neovim $($script:DotfilesNeovimMinimum) or newer (found: $version; winget upgrade --id Neovim.Neovim --exact)"; $failures++
+        } elseif (-not (Test-Path -LiteralPath $lazyFile -PathType Leaf)) {
+            # Without lazy.nvim a start would clone it, so the doctor stops here.
             Write-Host "  [ok] Neovim $version"
+            Write-Host "  [missing] lazy.nvim ($lazyFile; rerun: scripts\install_runtimes.ps1)"; $failures++
+        } else {
+            Write-Host "  [ok] Neovim $version"
+            Write-Host '  [ok] lazy.nvim'
             # A clean headless start prints nothing and leaves v:errmsg empty; plugins
             # are never fetched at startup, so neither this nor the report reaches the network.
-            $code = Invoke-DotfilesNativeCommand $nvimCommand @('--headless', '-c', 'lua if vim.v.errmsg ~= "" then os.exit(3) end', '+qa') -Quiet
+            $code = Invoke-DotfilesNativeCommand $nvimCommand @('--headless', '-c', $script:DotfilesNeovimStartLua, '+qa') -Quiet
             if ($code -ne 0) { Write-Host "  [missing] Neovim headless start reported errors (exit code $code)"; $failures++ }
             else {
                 Write-Host '  [ok] Neovim starts without errors'
@@ -546,7 +576,7 @@ function Invoke-DotfilesDoctor {
                     } else { Write-Host "  [missing] Neovim check: $line"; $failures++ }
                 }
             }
-        } else { Write-Host "  [missing] Neovim $($script:DotfilesNeovimMinimum) or newer (found: $version; winget upgrade --id Neovim.Neovim --exact)"; $failures++ }
+        }
     } catch { Write-Host "  [failed] $($_.Exception.Message)"; $failures++ }
     Write-Host 'Checking PowerShell modules...'
     try {
