@@ -179,7 +179,7 @@ test_tmux_config_loads_and_errors_are_reported() {
 test_theme_switch_round_trip() {
     source "$TEST_REPO_DIR/scripts/theme.sh"
     mkdir -p "$test_dir/repo"
-    (cd "$TEST_REPO_DIR" && tar -cf - config home docs) | tar -xf - -C "$test_dir/repo"
+    cp -R "$TEST_REPO_DIR/config" "$TEST_REPO_DIR/home" "$TEST_REPO_DIR/docs" "$test_dir/repo/"
     cp -R "$test_dir/repo" "$test_dir/original"
     DOTFILES_DIR="$test_dir/repo"
     local repo="$test_dir/repo"
@@ -1076,6 +1076,9 @@ test_tree_sitter_cli_install() {
     printf 'asset.zip\n' > "$test_dir/serve"
     tree-sitter() {
         if [ -f "$DOTFILES_TEST_FIXTURE/cli-on-path" ]; then
+            if [ -f "$DOTFILES_TEST_FIXTURE/cli-warns" ]; then
+                echo "tree-sitter: /lib/x86_64-linux-gnu/libc.so.6: weak version \`GLIBC_2.39' not found (required by tree-sitter)" >&2
+            fi
             cat "$DOTFILES_TEST_FIXTURE/cli-on-path"
             return 0
         fi
@@ -1154,6 +1157,22 @@ test_tree_sitter_cli_install() {
     install_tree_sitter_cli > "$test_dir/output"
     assert_equal 2 "$(wc -l < "$test_dir/downloads" | tr -d ' ')"
     assert_equal 'v0.27.1 2.36' "$(cat "$record")"
+    # One that starts but warns about a weak glibc symbol is left out as well:
+    # with it, parser installs hung on Debian 12. So is such a CLI on PATH.
+    mkdir -p "$test_dir/weak-payload"
+    printf '#!/bin/sh\necho "tree-sitter: libc.so.6: weak version \\`GLIBC_2.39'"'"' not found" >&2\necho "tree-sitter 0.27.1"\n' > "$test_dir/weak-payload/tree-sitter"
+    chmod +x "$test_dir/weak-payload/tree-sitter"
+    (cd "$test_dir/weak-payload" && zip -q "$test_dir/weak-asset.zip" tree-sitter)
+    printf 'weak-asset.zip\n' > "$test_dir/serve"
+    rm "$record"
+    printf 'tree-sitter 0.27.1\n' > "$test_dir/cli-on-path"
+    : > "$test_dir/cli-warns"
+    install_tree_sitter_cli > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" 'tree-sitter v0.27.1 needs glibc 2.39 and this system has 2.36'
+    [ ! -e "$test_dir/bin/tree-sitter" ]
+    assert_equal 'v0.27.1 2.36' "$(cat "$record")"
+    assert_equal 3 "$(wc -l < "$test_dir/downloads" | tr -d ' ')"
+    rm "$test_dir/cli-on-path" "$test_dir/cli-warns"
     # A crash is no glibc mismatch, whatever the glibc.
     printf 'crash-asset.zip\n' > "$test_dir/serve"
     rm "$record"
@@ -1377,6 +1396,23 @@ test_doctor_neovim_checks() {
     check_nvim_plugins > "$test_dir/output"
     assert_equal 2 "$failures"
     assert_equal '' "$(cat "$test_dir/nvim-args")"
+    # A CLI that warns about a newer glibc hangs installing parsers.
+    unset -f command
+    tree-sitter() {
+        echo "tree-sitter: libc.so.6: weak version \`GLIBC_2.39' not found" >&2
+        echo "tree-sitter 0.27.1"
+    }
+    failures=0
+    check_tree_sitter > "$test_dir/output"
+    assert_equal 1 "$failures"
+    assert_contains "$(cat "$test_dir/output")" 'built for a newer glibc than this system'"'"'s (rerun: bash scripts/bootstrap_tools.sh)'
+    unset -f tree-sitter
+    command() {
+        case "$*" in
+            '-v nvim'|'-v tree-sitter') return 1 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
     # A CLI the bootstrap left out for this glibc is skipped, as Neovim skips
     # the parsers; without the record, or after a glibc upgrade, it is missing.
     export XDG_STATE_HOME="$test_dir/state"

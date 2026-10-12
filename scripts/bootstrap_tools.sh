@@ -367,7 +367,8 @@ install_linux_tools() {
 install_tree_sitter_cli() {
     local version glibc errors tag needed record bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
     record="$(dotfiles_tree_sitter_record)"
-    if version="$(dotfiles_tree_sitter_version)" && dotfiles_version_at_least "$version" "$DOTFILES_TREE_SITTER_MINIMUM"; then
+    if version="$(dotfiles_tree_sitter_version)" && dotfiles_version_at_least "$version" "$DOTFILES_TREE_SITTER_MINIMUM" && \
+        ! dotfiles_tree_sitter_glibc_error >/dev/null; then
         echo "tree-sitter $version already installed"
         return 0
     fi
@@ -378,21 +379,18 @@ install_tree_sitter_cli() {
     fi
     echo "Installing tree-sitter from tree-sitter/tree-sitter${version:+ (found $version, need $DOTFILES_TREE_SITTER_MINIMUM)}..."
     download_github_release tree-sitter/tree-sitter 'tree-sitter-cli-linux-{arch_node}.zip' tree-sitter || return
+    if errors="$(dotfiles_tree_sitter_glibc_error "$bin_dir/tree-sitter")" && glibc="$(dotfiles_glibc_version)" && \
+        tag="$(github_latest_tag tree-sitter/tree-sitter)"; then
+        needed="${errors#*GLIBC_}"
+        needed="${needed%%[!0-9.]*}"
+        rm -f "$bin_dir/tree-sitter" || return
+        mkdir -p "$(dirname "$record")" || return
+        printf '%s %s\n' "$tag" "$glibc" > "$record" || return
+        echo "tree-sitter $tag needs glibc ${needed:-newer than $glibc} and this system has $glibc; Neovim will skip compiling parsers and highlight those file types with Vim's syntax files."
+        return 0
+    fi
     if ! version="$(dotfiles_tree_sitter_version "$bin_dir/tree-sitter")"; then
         errors="$("$bin_dir/tree-sitter" --version 2>&1)" || :
-        case "$errors" in
-            *"GLIBC_"*" not found"*)
-                if glibc="$(dotfiles_glibc_version)" && tag="$(github_latest_tag tree-sitter/tree-sitter)"; then
-                    needed="${errors#*GLIBC_}"
-                    needed="${needed%%[!0-9.]*}"
-                    rm -f "$bin_dir/tree-sitter" || return
-                    mkdir -p "$(dirname "$record")" || return
-                    printf '%s %s\n' "$tag" "$glibc" > "$record" || return
-                    echo "tree-sitter $tag needs glibc ${needed:-newer than $glibc} and this system has $glibc; Neovim will skip compiling parsers and highlight those file types with Vim's syntax files."
-                    return 0
-                fi
-                ;;
-        esac
         printf '%s does not report a version after installing:\n%s\n' "$bin_dir/tree-sitter" "$errors" >&2
         return 1
     fi
