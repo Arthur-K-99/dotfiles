@@ -94,7 +94,7 @@ Not tied to a phase; pick up when convenient.
 
 Done:
 
-- **An update command** ([#PR](PR_URL)). `scripts/update.sh` and `scripts/update.ps1` run the install stages again with `DOTFILES_UPDATE=1` (Windows: `-Update`). Besides adding what is missing, they upgrade:
+- **An update command** ([#12](https://github.com/Arthur-K-99/dotfiles/pull/12)). `scripts/update.sh` and `scripts/update.ps1` run the install stages again with `DOTFILES_UPDATE=1` (Windows: `-Update`). Besides adding what is missing, they upgrade:
   - **Packages:** only the ones `packages/*.txt` declares.
   - **Release tools:** each tool fetched from a GitHub release or installer script is fetched again when the latest tag differs from the one recorded under `~/.local/state/dotfiles/releases/<owner>/<repo>`.
   - **Plugin managers:** zinit, TPM and their plugins.
