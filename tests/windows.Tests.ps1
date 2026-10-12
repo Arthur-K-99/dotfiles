@@ -252,12 +252,15 @@ try {
         $fixture = New-Fixture
         New-Item -ItemType Directory -Path (Join-Path $fixture.Directory 'packages') | Out-Null
         [IO.File]::WriteAllLines((Join-Path $fixture.Directory 'packages/winget.txt'),
-            [string[]]@('# fixture', 'Test.Current', 'Test.Newer', 'Test.Pinned', 'Test.Unknown', 'Test.Missing', 'Microsoft.WindowsTerminal'))
-        $upgradeCodes = @{ 'Test.Current' = $WingetUpdateNotApplicable; 'Test.Newer' = 0; 'Test.Pinned' = $WingetPackageIsPinned; 'Test.Unknown' = $WingetUpgradeVersionUnknown }
+            [string[]]@('# fixture', 'Test.Current', 'Test.Newer', 'Test.Pinned', 'Test.Blocked', 'Test.Unknown', 'Test.Missing', 'Microsoft.WindowsTerminal'))
+        # Test.Pinned has a plain pin, which winget would let an upgrade by id
+        # through; Test.Blocked has a blocking pin the pin check did not see.
+        $upgradeCodes = @{ 'Test.Current' = $WingetUpdateNotApplicable; 'Test.Newer' = 0; 'Test.Pinned' = 0; 'Test.Blocked' = $WingetPackageIsPinned; 'Test.Unknown' = $WingetUpgradeVersionUnknown }
         $calls = [Collections.Generic.List[string]]::new()
         $report = [Collections.Generic.List[string]]::new()
         function Get-DotfilesCommandPath { param($Name) $Name }
         function Get-DotfilesRunningHostPackages { 'Microsoft.WindowsTerminal' }
+        function Test-DotfilesWingetPinned { param($WingetCommand, $Package) $Package -eq 'Test.Pinned' }
         function Update-DotfilesProcessPath { }
         function Invoke-DotfilesFontInstall { $calls.Add('font') }
         function Write-Host { param($Object) $report.Add([string]$Object) }
@@ -279,10 +282,11 @@ try {
         $calls.Clear(); $report.Clear()
         Invoke-DotfilesPackageInstall $fixture.Directory -Update
         $upgrades = @($calls | Where-Object { $_ -like 'upgrade *' }) -join ','
-        Assert-True ($upgrades -eq 'upgrade Test.Current,upgrade Test.Newer,upgrade Test.Pinned,upgrade Test.Unknown') "Every installed package but the running terminal is upgraded: $upgrades"
+        Assert-True ($upgrades -eq 'upgrade Test.Current,upgrade Test.Newer,upgrade Test.Blocked,upgrade Test.Unknown') "Every installed package but the pinned one and the running terminal is upgraded: $upgrades"
         Assert-True (($calls -contains 'install Test.Missing') -and ($calls[-1] -eq 'font')) 'A missing package is installed and the font check still follows'
         Assert-True (($report -contains '  up to date: Test.Current') -and ($report -contains '  upgraded: Test.Newer')) "Current and upgraded packages are reported: $($report -join ' | ')"
         Assert-True (@($report | Where-Object { $_ -like '  pinned, left alone: Test.Pinned (winget pin remove*' }).Count -eq 1) 'A pinned package is left alone'
+        Assert-True (@($report | Where-Object { $_ -like '  pinned, left alone: Test.Blocked (winget pin remove*' }).Count -eq 1) 'A package winget refuses for its pin is left alone'
         Assert-True (@($report | Where-Object { $_ -like '  left alone: Test.Unknown (*--include-unknown)' }).Count -eq 1) 'A package of unknown version is left alone'
         Assert-True (@($report | Where-Object { $_ -like '  left alone: Microsoft.WindowsTerminal runs this update*' }).Count -eq 1) 'The terminal running the update is left alone'
         $upgradeCodes['Test.Newer'] = 5
@@ -292,6 +296,19 @@ try {
         $upgradeCodes['Test.Newer'] = 0
         Invoke-DotfilesPackageInstall $fixture.Directory -Update
         Assert-True ((Get-DotfilesRunningHostPackages) -eq 'Microsoft.WindowsTerminal') 'The mock stands in for host detection'
+    }
+
+    Invoke-Test 'A winget pin is found by the package id on its row of the pin table' {
+        $pinState = @{ Lines = @(); Arguments = $null }
+        function Invoke-Fake-Winget { $pinState.Arguments = $args -join ' '; $pinState.Lines }
+        $pinState.Lines = @('Name       Id               Version Source Pin type', '-------------------------------------------------', 'PowerShell Microsoft.PowerShell 7.5.0 winget Pinning')
+        Assert-True (Test-DotfilesWingetPinned 'Invoke-Fake-Winget' 'Microsoft.PowerShell') 'A pinned package is found'
+        Assert-True ($pinState.Arguments -eq 'pin list --id Microsoft.PowerShell --exact --accept-source-agreements') "winget is asked for that package's pin: $($pinState.Arguments)"
+        Assert-True (-not (Test-DotfilesWingetPinned 'Invoke-Fake-Winget' 'Microsoft.Power')) 'A longer id does not match a shorter one'
+        $pinState.Lines = @('PowerShell Preview Microsoft.PowerShell.Preview 7.6.0 winget Blocking')
+        Assert-True (-not (Test-DotfilesWingetPinned 'Invoke-Fake-Winget' 'Microsoft.PowerShell')) 'A pin of another package does not count'
+        $pinState.Lines = @('There are no pins configured.')
+        Assert-True (-not (Test-DotfilesWingetPinned 'Invoke-Fake-Winget' 'Microsoft.PowerShell')) 'No pins means not pinned'
     }
 
     Invoke-Test 'The update leaves PowerShell 7 and Windows Terminal to another shell only while they run it' {
@@ -399,7 +416,7 @@ try {
     }
 
     Invoke-Test 'Updating installs a newer gallery version of each module and nothing else' {
-        $moduleState = @{ Exit = @{ 'Terminal-Icons' = 4; 'PSFzf' = 0; 'posh-git' = 4; 'CompletionPredictor' = 4 }; Updates = [Collections.Generic.List[string]]::new() }
+        $moduleState = @{ Exit = @{ 'Terminal-Icons' = 4; 'PSFzf' = 0; 'posh-git' = 4; 'CompletionPredictor' = 4 }; Updates = [Collections.Generic.List[string]]::new(); Script = $null }
         $report = [Collections.Generic.List[string]]::new()
         function Get-DotfilesCommandPath { param($Name) if ($Name -eq 'pwsh.exe') { 'mock-pwsh' } }
         function Write-Host { param($Object) $report.Add([string]$Object) }
@@ -415,6 +432,7 @@ try {
             Assert-True ($script -notmatch '"') 'The update script has no double quotes for native argument passing'
             Assert-True ($script -match "Install-Module -Name '$name' -Scope CurrentUser -Repository PSGallery -Force") 'A newer version is installed for the current user'
             $moduleState.Updates.Add($name)
+            $moduleState.Script = $script
             return $moduleState.Exit[$name]
         }
         Invoke-DotfilesModuleInstall
@@ -426,6 +444,15 @@ try {
         Assert-Throws { Invoke-DotfilesModuleInstall -Update } 'Updating the PSFzf module failed \(exit code 1\)\. Rerun scripts\\update\.ps1'
         $moduleState.Exit['PSFzf'] = 0
         Invoke-DotfilesModuleInstall -Update
+        # The script itself, run in a child shell against stand-ins for the
+        # gallery: an older installed version is replaced, a current one exits 4.
+        $shell = (Get-Process -Id $PID).Path
+        foreach ($case in @(@{ Latest = '2.1.0'; Exit = 0 }, @{ Latest = '2.0.0'; Exit = 4 }, @{ Latest = '1.9.0'; Exit = 4 })) {
+            $stubs = "function Get-Module { [pscustomobject]@{ Version = [version]'1.5.0' }; [pscustomobject]@{ Version = [version]'2.0.0' } }; " +
+                "function Find-Module { [pscustomobject]@{ Version = '$($case.Latest)' } }; function Install-Module { }; "
+            & $shell -NoProfile -NonInteractive -Command ($stubs + $moduleState.Script) | Out-Null
+            Assert-True ($LASTEXITCODE -eq $case.Exit) "Gallery $($case.Latest) against installed 2.0.0 exits $($case.Exit), not $LASTEXITCODE"
+        }
     }
 
     Invoke-Test 'Module installation requires a discoverable PowerShell 7' {

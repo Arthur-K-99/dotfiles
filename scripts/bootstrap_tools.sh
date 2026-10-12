@@ -26,10 +26,12 @@ record_release() {
     printf '%s\n' "$2" > "$record"
 }
 
-# Updating, zinit updates itself and every plugin it has cloned.
+# Updating, zinit updates itself and every plugin it has cloned. Its update
+# returns 0 when a plugin fails and only warns ("update returned <status>"),
+# so the output decides; --no-pager keeps it from waiting in less for a key.
 bootstrap_zinit() {
     local zinit_home="${1:-${XDG_DATA_HOME:-$HOME/.local/share}/zinit/zinit.git}"
-    local update=0
+    local output status
     if [ ! -r "$zinit_home/zinit.zsh" ]; then
         echo "Installing Zinit..."
         mkdir -p "$(dirname "$zinit_home")" || return
@@ -37,10 +39,9 @@ bootstrap_zinit() {
     else
         echo "Zinit already installed"
     fi
-    dotfiles_updating && update=1
 
     echo "Installing Zinit plugins..."
-    ZINIT_HOME="$zinit_home" DOTFILES_ZINIT_UPDATE="$update" zsh -c '
+    ZINIT_HOME="$zinit_home" zsh -c '
         source "$ZINIT_HOME/zinit.zsh" || exit
         zinit light zsh-users/zsh-syntax-highlighting || exit
         zinit light zsh-users/zsh-completions || exit
@@ -48,11 +49,25 @@ bootstrap_zinit() {
         zinit light Aloxaf/fzf-tab || exit
         zinit light olets/zsh-abbr || exit
         zinit light MichaelAquilina/zsh-you-should-use || exit
-        if [ "$DOTFILES_ZINIT_UPDATE" = 1 ]; then
-            print "Updating Zinit and its plugins..."
-            zinit update --all --quiet || exit
-        fi
-    '
+    ' || return
+    dotfiles_updating || return 0
+    echo "Updating Zinit and its plugins..."
+    if output="$(ZINIT_HOME="$zinit_home" zsh -c '
+        source "$ZINIT_HOME/zinit.zsh" || exit
+        zinit update --all --quiet --no-pager
+    ' 2>&1)"; then
+        status=0
+    else
+        status=$?
+    fi
+    printf '%s\n' "$output"
+    [ "$status" -eq 0 ] || return "$status"
+    case "$output" in
+        *"update returned"*)
+            echo "zinit could not update every plugin; see the warnings above." >&2
+            return 1
+            ;;
+    esac
 }
 
 # dotfiles_tmux_plugins <tmux.conf>: each declared plugin, as written after
@@ -68,7 +83,7 @@ bootstrap_tmux() (
     # TPM installs plugins beside itself. With the configuration at
     # ~/.config/tmux/tmux.conf, TPM itself defaults to this directory.
     local tpm_dir="${1:-${XDG_CONFIG_HOME:-$HOME/.config}/tmux/plugins/tpm}"
-    local work_dir socket_path plugin
+    local work_dir socket_path plugin output status
     local names=()
     if [ ! -x "$tpm_dir/bin/install_plugins" ]; then
         echo "Installing TPM..."
@@ -99,9 +114,31 @@ bootstrap_tmux() (
             *) names+=("${plugin##*/}") ;;
         esac
     done < <(dotfiles_tmux_plugins "$DOTFILES_DIR/config/tmux/tmux.conf")
+    [ "${#names[@]}" -gt 0 ] || return 0
     echo "Updating TPM and the tmux plugins..."
-    XDG_CONFIG_HOME="$work_dir/config" TMUX="$socket_path,0,0" "$tpm_dir/bin/update_plugins" "${names[@]}"
+    # TPM updates the plugins in background jobs, so a failed git pull never
+    # reaches its exit status; its "update fail" line does.
+    if output="$(XDG_CONFIG_HOME="$work_dir/config" TMUX="$socket_path,0,0" "$tpm_dir/bin/update_plugins" "${names[@]}" 2>&1)"; then
+        status=0
+    else
+        status=$?
+    fi
+    printf '%s\n' "$output"
+    [ "$status" -eq 0 ] || return "$status"
+    case "$output" in
+        *"update fail"*)
+            echo "TPM could not update every plugin; see above." >&2
+            return 1
+            ;;
+    esac
 )
+
+# bootstrap_owns <path>: a regular executable file. The bootstrap installs
+# plain files into the local bin directory; pipx, uv and npm put links there,
+# so a link with a managed name is not the bootstrap's to replace.
+bootstrap_owns() {
+    [ -x "$1" ] && [ -f "$1" ] && [ ! -L "$1" ]
+}
 
 # install_with_script <command> <owner/repo> <installer> runs
 # `<installer> <bin dir> <tag>` to put the latest release into the local bin
@@ -111,7 +148,7 @@ bootstrap_tmux() (
 # macOS, belongs to whatever installed it and is left alone.
 install_with_script() {
     local name="$1" repo="$2" installer="$3" bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}" path tag recorded
-    if [ -x "$bin_dir/$name" ]; then
+    if bootstrap_owns "$bin_dir/$name"; then
         if ! dotfiles_updating; then
             echo "$name already installed"
             return 0
@@ -217,29 +254,33 @@ install_apt_repository() {
     shift 3
     local package held
     local missing=() upgrades=()
-    for package in "$@"; do
-        command -v "$package" &>/dev/null || missing+=("$package")
-    done
-    if [ "${#missing[@]}" -eq 0 ] && dotfiles_updating; then
+    if dotfiles_updating; then
         held="$(apt-mark showhold)" || return
-        for package in "$@"; do
-            dotfiles_apt_unheld "$held" "$package" && upgrades+=("$package")
-        done
+    fi
+    for package in "$@"; do
+        if ! command -v "$package" &>/dev/null; then
+            missing+=("$package")
+        elif dotfiles_updating && dotfiles_apt_unheld "$held" "$package"; then
+            upgrades+=("$package")
+        fi
+    done
+    if [ "${#missing[@]}" -eq 0 ]; then
+        if ! dotfiles_updating; then
+            echo "$* already installed"
+            return 0
+        fi
         [ "${#upgrades[@]}" -gt 0 ] || return 0
         echo "Upgrading ${upgrades[*]} from the $name repository..."
         sudo apt-get install -y --only-upgrade "${upgrades[@]}"
         return
-    fi
-    if [ "${#missing[@]}" -eq 0 ]; then
-        echo "$* already installed"
-        return 0
     fi
     echo "Installing ${missing[*]} from the $name repository..."
     sudo mkdir -p /etc/apt/keyrings || return
     curl -fsSL --retry 5 "$key_url" | sudo gpg --dearmor --yes -o "/etc/apt/keyrings/$name.gpg" || return
     printf '%s\n' "$sources_line" | sudo tee "/etc/apt/sources.list.d/$name.list" >/dev/null || return
     sudo apt-get update -qq || return
-    sudo apt-get install -y "${missing[@]}" || return
+    # Updating, the installed packages of the repository come along.
+    sudo apt-get install -y "${missing[@]}" ${upgrades[@]+"${upgrades[@]}"} || return
 }
 
 install_eza() {
@@ -288,7 +329,7 @@ install_github_release() {
     local binary tag recorded bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
     local missing=() managed=() elsewhere=()
     for binary in "$@"; do
-        if [ -x "$bin_dir/$binary" ]; then
+        if bootstrap_owns "$bin_dir/$binary"; then
             managed+=("$binary")
         elif command -v "$binary" &>/dev/null; then
             elsewhere+=("$binary")
@@ -376,7 +417,7 @@ download_github_release() (
 # elsewhere on PATH (Homebrew's on macOS) is left alone.
 bootstrap_mise_binary() {
     local bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}" path
-    if [ -x "$bin_dir/mise" ] && dotfiles_updating; then
+    if bootstrap_owns "$bin_dir/mise" && dotfiles_updating; then
         echo "Updating mise..."
         "$bin_dir/mise" self-update --yes
         return
@@ -428,7 +469,7 @@ install_fd_link() {
 install_neovim_release() (
     local opt_dir="${DOTFILES_LOCAL_OPT:-$HOME/.local/opt}/nvim"
     local bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
-    local version tag="" recorded arch_words arch_go asset url work extracted
+    local version tag="" recorded arch_words arch_go asset url work extracted errors
     if version="$(dotfiles_nvim_version)" && dotfiles_version_at_least "$version" "$DOTFILES_NVIM_MINIMUM"; then
         if ! dotfiles_updating; then
             echo "Neovim $version already installed"
@@ -468,6 +509,17 @@ install_neovim_release() (
         echo "$asset does not contain bin/nvim" >&2
         return 1
     fi
+    # The new tree must run before it replaces anything: the current one, which
+    # works, stays when a release does not start here.
+    if ! version="$(dotfiles_nvim_version "$extracted/bin/nvim")"; then
+        errors="$("$extracted/bin/nvim" --version 2>&1)" || :
+        printf 'Neovim from %s %s does not run here:\n%s\n' "$tag" "$asset" "$errors" >&2
+        return 1
+    fi
+    if ! dotfiles_version_at_least "$version" "$DOTFILES_NVIM_MINIMUM"; then
+        echo "The Neovim release $tag ($version) is older than $DOTFILES_NVIM_MINIMUM." >&2
+        return 1
+    fi
     # The previous tree goes only once the new one is complete beside it.
     mkdir -p "$(dirname "$opt_dir")" "$bin_dir" || return
     rm -rf "$opt_dir.new" || return
@@ -475,14 +527,6 @@ install_neovim_release() (
     rm -rf "$opt_dir" || return
     mv "$opt_dir.new" "$opt_dir" || return
     ln -sfn "$opt_dir/bin/nvim" "$bin_dir/nvim" || return
-    if ! version="$(dotfiles_nvim_version "$bin_dir/nvim")"; then
-        echo "$bin_dir/nvim does not run after installing $asset." >&2
-        return 1
-    fi
-    if ! dotfiles_version_at_least "$version" "$DOTFILES_NVIM_MINIMUM"; then
-        echo "The Neovim release $tag ($version) is older than $DOTFILES_NVIM_MINIMUM." >&2
-        return 1
-    fi
     record_release neovim/neovim "$tag" || return
     echo "Installed Neovim $version into $opt_dir"
 )
@@ -533,7 +577,7 @@ install_tree_sitter_cli() {
             echo "tree-sitter $version already installed"
             return 0
         fi
-        if [ ! -x "$bin_dir/tree-sitter" ]; then
+        if ! bootstrap_owns "$bin_dir/tree-sitter"; then
             echo "tree-sitter $version was not installed by the bootstrap; left alone"
             return 0
         fi
@@ -608,15 +652,16 @@ install_tree_sitter_release() (
 # Windows Terminal draws WSL's text with the font install.ps1 installs on
 # Windows.
 #
-# The new copy is assembled in .CaskaydiaCove.new beside the directory:
-# fontconfig skips hidden directories, so a copy cut short never counts as
-# installed, and the rename into place stays on one file system. The marker
+# The new copy is assembled in .CaskaydiaCove.new beside the directory, and
+# the previous one waits in .CaskaydiaCove.old until fontconfig lists the
+# family again: fontconfig skips hidden directories, so a copy cut short never
+# counts as installed, and the renames stay on one file system. The marker
 # file lets a later run replace the directory; one without it belongs to the
 # user and is left alone. Updating, the bootstrap's directory is replaced when
 # the latest Nerd Fonts tag differs from the recorded one.
 install_nerd_font() (
     local fonts_dir="${XDG_DATA_HOME:-$HOME/.local/share}/fonts"
-    local font_dir="$fonts_dir/CaskaydiaCove" staging="$fonts_dir/.CaskaydiaCove.new"
+    local font_dir="$fonts_dir/CaskaydiaCove" staging="$fonts_dir/.CaskaydiaCove.new" previous="$fonts_dir/.CaskaydiaCove.old"
     local marker=.installed-by-dotfiles asset=CascadiaCode.tar.xz tag="" recorded work
     if dotfiles_is_wsl; then
         echo "WSL uses the Windows font; install.ps1 installs $DOTFILES_FONT_FAMILY there"
@@ -627,6 +672,10 @@ install_nerd_font() (
         return 1
     fi
     rm -rf "$staging" || return
+    # A previous directory left aside by an interrupted run is still the font.
+    if [ -e "$previous" ] && [ ! -e "$font_dir" ]; then
+        mv "$previous" "$font_dir" || return
+    fi
     if [ -e "$font_dir/$marker" ] && dotfiles_updating; then
         tag="$(github_latest_tag ryanoasis/nerd-fonts)" || return
         recorded="$(recorded_release ryanoasis/nerd-fonts)"
@@ -662,14 +711,24 @@ install_nerd_font() (
     mkdir -p "$staging" || return
     cp "$work/extract"/CaskaydiaCoveNerdFontMono-*.ttf "$staging/" || return
     : > "$staging/$marker" || return
-    # The previous directory goes only once the new one is complete beside it.
-    rm -rf "$font_dir" || return
+    # The previous directory steps aside, hidden, until fontconfig lists the
+    # family from the new one, and comes back if it does not.
+    rm -rf "$previous" || return
+    if [ -e "$font_dir" ]; then
+        mv "$font_dir" "$previous" || return
+    fi
     mv "$staging" "$font_dir" || return
     fc-cache -f "$font_dir" || return
     if ! dotfiles_linux_font_installed; then
-        echo "fontconfig does not list $DOTFILES_FONT_FAMILY after installing $asset." >&2
+        if [ -e "$previous" ]; then
+            rm -rf "$font_dir" && mv "$previous" "$font_dir" && fc-cache -f "$font_dir"
+            echo "fontconfig does not list $DOTFILES_FONT_FAMILY after installing $asset; the previous fonts are back." >&2
+        else
+            echo "fontconfig does not list $DOTFILES_FONT_FAMILY after installing $asset." >&2
+        fi
         return 1
     fi
+    rm -rf "$previous"
     record_release ryanoasis/nerd-fonts "$tag"
 )
 
@@ -679,7 +738,10 @@ install_nerd_font() (
 # which the link stage placed at ~/.config/mise/config.toml. It replaces nvm.
 # Updating, mise upgrades each runtime to the newest release the file allows
 # ("lts" follows the current LTS line). It runs from the home directory so
-# that a project's own mise file does not decide.
+# that a project's own mise file does not decide; a mise file in the home
+# directory itself, such as ~/.tool-versions, is the user's global choice and
+# counts. (`mise upgrade --global` would skip those, but only recent mise
+# releases have it.)
 bootstrap_runtimes() {
     if ! command -v mise &>/dev/null; then
         echo "mise is not installed; install packages first." >&2

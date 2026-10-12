@@ -98,36 +98,39 @@ case "$status_right" in
 esac
 exit "$status"'
 
-# Sets the first recorded release tag back to one that never existed and
-# prints the record's path, so the update has a release to fetch again, as it
-# would after an upstream release. Prints nothing when there is no record
-# (every tool came from a package manager).
-FRESH_INSTALL_STALE_RECORD='record="$(find "${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/releases" -type f 2>/dev/null | sort | head -n 1)"
-if [ -n "$record" ]; then
+# Sets every recorded release tag back to one that never existed, so the
+# update fetches each release again as it would after upstream releases: the
+# release binaries, Neovim's tree, the tree-sitter CLI, the font and the
+# installer scripts. Records live in the user's state directory.
+FRESH_INSTALL_STALE_RECORDS='find "${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/releases" -type f 2>/dev/null | while IFS= read -r record; do
     echo v0.0.0-fresh-install > "$record"
-    printf "%s\n" "$record"
-fi'
+    printf "%s\n" "${record##*/releases/}"
+done'
+
+# Prints each release record that still holds the fake tag.
+FRESH_INSTALL_STILL_STALE='grep -rlx v0.0.0-fresh-install "${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/releases" 2>/dev/null || :'
 
 # fresh_install_run <checkout>
 fresh_install_run() {
-    local stale
+    local stale left
     echo "==> Installing"
     as_user bash "$1/install.sh" || return
     # A rerun must succeed without changes, as the README promises.
     echo "==> Rerunning the installer"
     as_user bash "$1/install.sh" || return
-    # The update right after an install must succeed and end with the doctor,
-    # and must fetch the release whose record was set back.
+    # The update right after an install must succeed, end with the doctor,
+    # and fetch again every release whose record was set back.
     echo "==> Updating"
-    stale="$(as_user bash -c "$FRESH_INSTALL_STALE_RECORD")" || return
+    stale="$(as_user bash -c "$FRESH_INSTALL_STALE_RECORDS")" || return
     as_user bash "$1/scripts/update.sh" || return
-    if [ -z "$stale" ]; then
-        echo "No release was recorded, so no tag was set back."
-    elif as_user grep -qx v0.0.0-fresh-install "$stale"; then
-        echo "The update did not fetch ${stale##*/releases/} again." >&2
+    left="$(as_user bash -c "$FRESH_INSTALL_STILL_STALE")" || return
+    if [ -n "$left" ]; then
+        printf 'The update did not fetch these releases again:\n%s\n' "$left" >&2
         return 1
+    elif [ -z "$stale" ]; then
+        echo "No release was recorded, so no tag was set back."
     else
-        echo "The update fetched ${stale##*/releases/} again: $(as_user cat "$stale")"
+        printf 'The update fetched these releases again:\n%s\n' "$stale"
     fi
     # Loading ~/.zshrc runs every tool's init script.
     check_quiet_start "an interactive zsh" bash -c "$FRESH_INSTALL_ZSH" || return

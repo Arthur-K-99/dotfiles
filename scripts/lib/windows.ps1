@@ -348,8 +348,22 @@ function Get-DotfilesRunningHostPackages {
     if ($PSVersionTable.PSEdition -eq 'Core') { 'Microsoft.PowerShell' }
 }
 
-# A pinned package, one whose installed version winget cannot tell, or one
-# whose upgrade needs another installer type is left as it is and reported.
+# A plain `winget pin add` only keeps a package out of `winget upgrade --all`;
+# an upgrade by id goes ahead, so the update asks for the package's pin first.
+# The pin table names the package by id on its row; any other answer ("There
+# are no pins configured.", no matching package) does not.
+function Test-DotfilesWingetPinned {
+    param([string]$WingetCommand, [string]$Package)
+    $ErrorActionPreference = 'Continue'
+    $PSNativeCommandUseErrorActionPreference = $false
+    $lines = @(& $WingetCommand pin list --id $Package --exact --accept-source-agreements 2>$null | ForEach-Object { [string]$_ })
+    $pattern = "(^|\s)$([regex]::Escape($Package))(\s|$)"
+    return @($lines | Where-Object { $_ -match $pattern }).Count -gt 0
+}
+
+# A blocking or gating pin that the check above missed, a package whose
+# installed version winget cannot tell, and one whose upgrade needs another
+# installer type are left as they are and reported.
 function Update-DotfilesWingetPackage {
     param([string]$WingetCommand, [string]$Package)
     $code = Invoke-DotfilesNativeCommand $WingetCommand @('upgrade', '--id', $Package, '--exact', '--silent', '--accept-package-agreements', '--accept-source-agreements')
@@ -376,6 +390,7 @@ function Invoke-DotfilesPackageInstall {
         if ($code -eq 0) {
             if (-not $Update) { Write-Host "  already installed: $package" }
             elseif ($hosts -contains $package) { Write-Host "  left alone: $package runs this update (from another shell: winget upgrade --id $package --exact)" }
+            elseif (Test-DotfilesWingetPinned $wingetCommand $package) { Write-Host "  pinned, left alone: $package (winget pin remove --id $package to upgrade it)" }
             else { Update-DotfilesWingetPackage $wingetCommand $package }
             continue
         }

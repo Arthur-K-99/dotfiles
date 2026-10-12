@@ -43,7 +43,7 @@ An install is complete only after setup verification passes, including automated
 
 A rerun of the installer only adds what is missing. The update runs the same stages and also upgrades, then finishes with the same verification:
 
-- **Packages:** the ones `packages/*.txt` declares, after Homebrew refreshes its index. Undeclared packages are not touched.
+- **Packages:** the ones `packages/*.txt` declares, after Homebrew refreshes its index. Homebrew may also upgrade the formulae a declared one depends on and the installed formulae that depend on it; nothing else is touched.
 - **Release tools:** each tool the bootstrap fetched from a GitHub release or an installer script, when a newer tag exists.
 - **Plugins:** zinit and TPM with their plugins, and the yazi flavors.
 - **Runtimes:** mise's runtimes.
@@ -51,10 +51,11 @@ A rerun of the installer only adds what is missing. The update runs the same sta
 
 It leaves some things alone and says so:
 
-- tools it did not install, such as a binary on `PATH` from another source;
+- tools it did not install, such as a binary on `PATH` from another source. In `~/.local/bin` a plain file with a tool's name counts as the bootstrap's, but a link (pipx, uv and npm make links there) does not;
 - whatever you pinned or held (`brew pin`, `apt-mark hold`, `winget pin`, a tmux plugin pinned to a tag);
-- casks that update themselves, such as Ghostty;
 - on Windows, the PowerShell 7 or Windows Terminal that is running it. Upgrade those from another shell with the `winget upgrade` command it prints.
+
+Casks that update themselves, such as Ghostty, are not reported as outdated by Homebrew, so the update leaves them to their own updater without a word.
 
 It does not pull this repository: run `git pull` first to take its changes.
 
@@ -125,7 +126,7 @@ Native Windows installs PowerShell, Windows Terminal, and command-line tools thr
 - **Windows machine-specific config:** Put private or machine-only PowerShell settings in `~/.powershell.local.ps1`.
 - **Verify:** Run `scripts/doctor.sh` on Unix/WSL or `scripts\doctor.ps1` in PowerShell. Both installers also run verification before reporting success. Windows checks both PowerShell editions' actual profile locations, including redirected Documents folders, detects stale copied configurations, and confirms each PowerShell module is installed for PowerShell 7.
 - **Repository checks:** Run `bash scripts/test.sh` before committing installer or configuration changes. The suite checks syntax and uses temporary destinations and mocked installation commands to exercise reruns and failures without installing packages or changing your configuration. Missing optional validation tools are reported as skipped checks. Run `pwsh -NoProfile -NonInteractive -File tests/windows.Tests.ps1` for the Windows behavioral suite alone. CI runs checks on macOS, Linux, and Windows, including Windows PowerShell 5.1 and PowerShell 7.
-- **Fresh install:** `bash tests/fresh_install.sh debian:12` (or `debian:13`, `ubuntu:24.04`, `ubuntu:26.04`) installs the checkout in a new container as a user with sudo, with real downloads, then reruns the installer, runs `scripts/update.sh` (after setting one recorded release tag back, so the update has a release to fetch again), starts an interactive zsh on a pseudo-terminal (which loads every tool's init script) and loads tmux with its plugins, failing on any error they report. It needs Docker and takes several minutes; a Mac runs the arm64 images, and should be told so with `DOCKER_DEFAULT_PLATFORM=linux/arm64`: pulling an image for linux/amd64 retags the local copy, and later runs then emulate x86_64 without saying so. The Fresh install workflow runs it for every image on x86_64, plus a macOS runner, on pull requests that touch the Unix install, every Monday, and on demand from the Actions tab, so upstream changes such as a renamed release asset show up before the next new machine. GitHub pauses the weekly run after 60 days without a commit; the Actions tab turns it back on.
+- **Fresh install:** `bash tests/fresh_install.sh debian:12` (or `debian:13`, `ubuntu:24.04`, `ubuntu:26.04`) installs the checkout in a new container as a user with sudo, with real downloads, then reruns the installer, runs `scripts/update.sh` (after setting every recorded release tag back, so the update fetches each release again), starts an interactive zsh on a pseudo-terminal (which loads every tool's init script) and loads tmux with its plugins, failing on any error they report. It needs Docker and takes several minutes; a Mac runs the arm64 images, and should be told so with `DOCKER_DEFAULT_PLATFORM=linux/arm64`: pulling an image for linux/amd64 retags the local copy, and later runs then emulate x86_64 without saying so. The Fresh install workflow runs it for every image on x86_64, plus a macOS runner, on pull requests that touch the Unix install, every Monday, and on demand from the Actions tab, so upstream changes such as a renamed release asset show up before the next new machine. GitHub pauses the weekly run after 60 days without a commit; the Actions tab turns it back on.
 - **Secrets:** Do not store credentials, private keys, access tokens, or work-only settings in this repository. Restore those through a password manager or another private channel.
 
 ## Structure

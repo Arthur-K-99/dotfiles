@@ -625,6 +625,9 @@ test_apt_held_packages_left_alone() {
     apt-mark() { [ "$1" = showhold ] && cat "$DOTFILES_TEST_FIXTURE/held"; }
     sudo() {
         printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        case "$1" in
+            gpg|tee) cat >/dev/null ;;
+        esac
         case "$*" in
             *--only-upgrade*) [ -f "$DOTFILES_TEST_FIXTURE/retry" ] || return 57 ;;
         esac
@@ -654,6 +657,28 @@ test_apt_held_packages_left_alone() {
     install_charm_tools > "$test_dir/output"
     assert_equal 'apt-get install -y --only-upgrade glow' "$(tail -n 1 "$test_dir/commands")"
     assert_contains "$(cat "$test_dir/output")" 'held, left alone: gum'
+    # With one package missing, the installed one comes along unless held.
+    command() {
+        case "$*" in
+            '-v glow') return 1 ;;
+            '-v gum') return 0 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    curl() { printf 'fixture signing key\n'; }
+    printf '\n' > "$test_dir/held"
+    : > "$test_dir/commands"
+    install_charm_tools > "$test_dir/output"
+    assert_equal 'apt-get install -y glow gum' "$(tail -n 1 "$test_dir/commands")"
+    printf 'gum\n' > "$test_dir/held"
+    install_charm_tools > "$test_dir/output"
+    assert_equal 'apt-get install -y glow' "$(tail -n 1 "$test_dir/commands")"
+    command() {
+        case "$*" in
+            '-v glow'|'-v gum') return 0 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
     # Nothing to upgrade when every package is held; a plain rerun upgrades nothing.
     printf 'glow\ngum\n' > "$test_dir/held"
     : > "$test_dir/commands"
@@ -676,7 +701,15 @@ test_script_installers_install_and_update() {
     printf 'v1.0.0\n' > "$test_dir/latest"
     command() {
         case "$*" in
-            '-v oh-my-posh'|'-v zoxide') [ -f "$DOTFILES_TEST_FIXTURE/elsewhere-$2" ] && printf '/opt/homebrew/bin/%s\n' "$2" ;;
+            '-v oh-my-posh'|'-v zoxide')
+                if [ -e "$DOTFILES_LOCAL_BIN/$2" ]; then
+                    printf '%s/%s\n' "$DOTFILES_LOCAL_BIN" "$2"
+                elif [ -f "$DOTFILES_TEST_FIXTURE/elsewhere-$2" ]; then
+                    printf '/opt/homebrew/bin/%s\n' "$2"
+                else
+                    return 1
+                fi
+                ;;
             *) builtin command "$@" ;;
         esac
     }
@@ -750,6 +783,15 @@ sh -s -- --bin-dir $test_dir/new/bin" "$(cat "$test_dir/installers")"
     bootstrap_zoxide > "$test_dir/output"
     assert_equal "sh -s -- --bin-dir $test_dir/new/bin" "$(tail -n 1 "$test_dir/installers")"
     assert_equal v1.1.0 "$(cat "$records/ajeetdsouza/zoxide")"
+    # A link in the bin directory is not the bootstrap's either.
+    mkdir -p "$test_dir/pipx"
+    mv "$test_dir/new/bin/zoxide" "$test_dir/pipx/zoxide"
+    ln -s "$test_dir/pipx/zoxide" "$test_dir/new/bin/zoxide"
+    rm "$records/ajeetdsouza/zoxide"
+    : > "$test_dir/installers"
+    bootstrap_zoxide > "$test_dir/output"
+    assert_equal '' "$(cat "$test_dir/installers")"
+    [ -L "$test_dir/new/bin/zoxide" ]
     # A copy from elsewhere is not the bootstrap's to replace.
     rm "$test_dir/new/bin/zoxide"
     : > "$test_dir/elsewhere-zoxide"
@@ -786,7 +828,9 @@ TPM
 #!/bin/sh
 [ -n "$TMUX" ] || exit 99
 printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/update-runs"
-[ -f "$DOTFILES_TEST_FIXTURE/update-retry" ] || exit 60
+# Like TPM itself: a failed git pull is reported, and the status stays 0.
+[ -f "$DOTFILES_TEST_FIXTURE/update-retry" ] || echo '  "tmux-yank" update fail' >&2
+exit 0
 TPM
     chmod +x "$test_dir/tpm/bin/update_plugins"
     local conf="$TEST_REPO_DIR/config/tmux/tmux.conf" expected pinned
@@ -796,7 +840,8 @@ TPM
     export DOTFILES_UPDATE=1
     status=0
     bootstrap_tmux "$test_dir/tpm" > "$test_dir/output" 2>&1 || status=$?
-    assert_equal 60 "$status"
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'TPM could not update every plugin'
     assert_equal "${expected% }" "$(cat "$test_dir/update-runs")"
     assert_contains "$(cat "$test_dir/output")" "tmux plugin ${pinned%%#*} is pinned to ${pinned#*#}; left alone"
     assert_contains "$(tail -n 1 "$test_dir/tmux-commands")" 'kill-server'
@@ -816,8 +861,9 @@ test_zinit_plugin_failure_and_retry() {
     cat > "$test_dir/zinit/zinit.zsh" <<'ZINIT'
 zinit() {
     if [[ $1 == update ]]; then
+        # Like zinit itself: a failed plugin update is a warning and status 0.
         print -r -- "$*" >> "$DOTFILES_TEST_FIXTURE/update-runs"
-        [[ -f $DOTFILES_TEST_FIXTURE/update-retry ]] || return 61
+        [[ -f $DOTFILES_TEST_FIXTURE/update-retry ]] || print -r -- "Warning: zsh-users/zsh-completions update returned 1"
         return 0
     fi
     printf '%s\n' "$2" >> "$DOTFILES_TEST_FIXTURE/plugin-runs"
@@ -834,12 +880,14 @@ ZINIT
     assert_equal MichaelAquilina/zsh-you-should-use "$(tail -n 1 "$test_dir/plugin-runs")"
     assert_contains "$(cat "$test_dir/plugin-runs")" olets/zsh-abbr
     [ ! -f "$test_dir/update-runs" ]
-    # Updating, zinit updates itself and every plugin after loading them.
+    # Updating, zinit updates itself and every plugin after loading them,
+    # without a pager; the warning it prints for a failed plugin is a failure.
     export DOTFILES_UPDATE=1
     status=0
     bootstrap_zinit "$test_dir/zinit" > "$test_dir/output" 2>&1 || status=$?
-    assert_equal 61 "$status"
-    assert_equal 'update --all --quiet' "$(cat "$test_dir/update-runs")"
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'zinit could not update every plugin'
+    assert_equal 'update --all --quiet --no-pager' "$(cat "$test_dir/update-runs")"
     assert_equal 13 "$(wc -l < "$test_dir/plugin-runs" | tr -d ' ')"
     : > "$test_dir/update-retry"
     bootstrap_zinit "$test_dir/zinit" > "$test_dir/output"
@@ -1024,6 +1072,14 @@ test_github_release_update() {
     assert_contains "$(cat "$test_dir/output")" 'helper not installed by the bootstrap; left alone'
     assert_equal 'tool v1.0.0' "$("$test_dir/bin/tool")"
     [ ! -e "$test_dir/bin/helper" ]
+    # So is a link in the bin directory, as pipx, uv and npm make, even without a record.
+    ln -s "$test_dir/elsewhere/helper" "$test_dir/bin/helper"
+    rm "$record"
+    install_github_release owner/tool 'tool-{tag}.tar.gz' tool helper > "$test_dir/output"
+    assert_equal 'helper elsewhere' "$("$test_dir/bin/helper")"
+    [ -L "$test_dir/bin/helper" ]
+    assert_equal 'tool v1.0.0' "$("$test_dir/bin/tool")"
+    rm "$test_dir/bin/helper"
     # A missing binary brings its installed sibling along, so the record holds for both.
     printf 'v1.1.0\n' > "$test_dir/latest"
     rm "$test_dir/elsewhere/helper"
@@ -1345,6 +1401,7 @@ test_neovim_release_install() {
     install_neovim_release > "$test_dir/output" 2>&1 || status=$?
     assert_equal 1 "$status"
     assert_contains "$(cat "$test_dir/output")" 'is older than'
+    assert_equal 'NVIM v0.12.6' "$("$test_dir/bin/nvim" --version)"
     printf 'asset.tar.gz\n' > "$test_dir/serve"
     # A real file where the link belongs is reported, never replaced.
     rm "$test_dir/bin/nvim"
@@ -1381,9 +1438,12 @@ test_neovim_release_update() {
     export TMPDIR="$test_dir/tmp"
     local record="$XDG_STATE_HOME/dotfiles/releases/neovim/neovim" tag
     mkdir -p "$TMPDIR"
-    for tag in v0.12.6 v0.12.7; do
+    for tag in v0.12.6 v0.12.7 v0.12.8; do
         mkdir -p "$test_dir/payload-$tag/nvim-linux-x86_64/bin"
         printf '#!/bin/sh\necho "NVIM %s"\n' "$tag" > "$test_dir/payload-$tag/nvim-linux-x86_64/bin/nvim"
+    done
+    printf '#!/bin/sh\necho "nvim: /lib/libc.so.6: version GLIBC_2.41 not found" >&2\nexit 1\n' > "$test_dir/payload-v0.12.8/nvim-linux-x86_64/bin/nvim"
+    for tag in v0.12.6 v0.12.7 v0.12.8; do
         chmod +x "$test_dir/payload-$tag/nvim-linux-x86_64/bin/nvim"
         tar -czf "$test_dir/asset-$tag.tar.gz" -C "$test_dir/payload-$tag" .
     done
@@ -1454,6 +1514,16 @@ test_neovim_release_update() {
     rm "$record"
     install_neovim_release > "$test_dir/output"
     assert_equal v0.12.7 "$(cat "$record")"
+    # A release that does not start here never replaces the one that does.
+    printf 'v0.12.8\n' > "$test_dir/latest"
+    status=0
+    install_neovim_release > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'Neovim from v0.12.8 nvim-linux-x86_64.tar.gz does not run here:'
+    assert_contains "$(cat "$test_dir/output")" 'GLIBC_2.41 not found'
+    assert_equal 'NVIM v0.12.7' "$("$test_dir/bin/nvim")"
+    assert_equal v0.12.7 "$(cat "$record")"
+    printf 'v0.12.7\n' > "$test_dir/latest"
     # Without updating, an installed Neovim is kept whatever the latest release.
     unset DOTFILES_UPDATE
     : > "$test_dir/requests"
@@ -1924,16 +1994,24 @@ test_linux_font_install() {
     assert_equal 1 "$status"
     assert_contains "$(cat "$test_dir/output")" 'does not contain the CaskaydiaCove Nerd Font Mono files'
     [ -f "$font_dir/CaskaydiaCoveNerdFontMono-Regular.ttf" ]
-    # The directory is replaced whole, and a family fontconfig still does not
-    # list afterwards is an error.
+    # A family fontconfig does not list after the swap is an error, and the
+    # previous directory comes back; once it works the directory is replaced whole.
     printf 'asset.tar.xz\n' > "$test_dir/serve"
     printf 'stale\n' > "$font_dir/stale.ttf"
     : > "$test_dir/cache-broken"
     status=0
     install_nerd_font > "$test_dir/output" 2>&1 || status=$?
     assert_equal 1 "$status"
-    assert_contains "$(cat "$test_dir/output")" 'fontconfig does not list CaskaydiaCove Nerd Font Mono'
-    [ ! -e "$font_dir/stale.ttf" ] && [ -f "$font_dir/CaskaydiaCoveNerdFontMono-Bold.ttf" ]
+    assert_contains "$(cat "$test_dir/output")" 'fontconfig does not list CaskaydiaCove Nerd Font Mono after installing CascadiaCode.tar.xz; the previous fonts are back.'
+    [ -f "$font_dir/stale.ttf" ] && [ -f "$font_dir/.installed-by-dotfiles" ] && [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.old" ]
+    rm "$test_dir/cache-broken"
+    install_nerd_font > "$test_dir/output"
+    [ ! -e "$font_dir/stale.ttf" ] && [ -f "$font_dir/CaskaydiaCoveNerdFontMono-Bold.ttf" ] && [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.old" ]
+    # A previous directory an interrupted run left aside is put back.
+    mv "$font_dir" "$test_dir/data/fonts/.CaskaydiaCove.old"
+    install_nerd_font > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" 'already installed'
+    [ -f "$font_dir/CaskaydiaCoveNerdFontMono-Bold.ttf" ] && [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.old" ]
 }
 
 # Updating replaces the bootstrap's font directory (the one with its marker)
@@ -2138,6 +2216,17 @@ test_nvim_config_check() {
     assert_contains "$(cat "$test_dir/output")" "lacks the declared plugin 'new-plugin'"
     assert_contains "$(cat "$test_dir/output")" "pins 'gone.nvim', which no plugin file declares"
     assert_contains "$(cat "$test_dir/output")" "lacks the declared plugin 'catppuccin'"
+}
+
+# update() against stand-ins for mason-registry and nvim-treesitter (see
+# tests/nvim_bootstrap_update.lua): current, newer, failed and retried,
+# missing, and the parser update with and without a compiler.
+test_nvim_bootstrap_update() {
+    if ! nvim -l "$TEST_REPO_DIR/tests/nvim_bootstrap_update.lua" "$TEST_REPO_DIR/config/nvim" > "$test_dir/output" 2>&1; then
+        cat "$test_dir/output" >&2
+        return 1
+    fi
+    assert_contains "$(cat "$test_dir/output")" '6 update cases pass.'
 }
 
 test_doctor_neovim_checks() {
@@ -2626,9 +2715,9 @@ run_tests() {
         echo "  SKIP tmux_config_loads_and_errors_are_reported (tmux is not installed)."
     fi
     if command -v nvim >/dev/null 2>&1; then
-        tests+=(nvim_config_check)
+        tests+=(nvim_config_check nvim_bootstrap_update)
     else
-        echo "  SKIP nvim_config_check (nvim is not installed)."
+        echo "  SKIP nvim_config_check and nvim_bootstrap_update (nvim is not installed)."
     fi
     # The plugin bootstrap runs against local repositories but needs a copy of
     # lazy.nvim, which only a machine that applied the configuration has.
