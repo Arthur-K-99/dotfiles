@@ -98,6 +98,24 @@ dotfiles_version_at_least() {
 # installs the GitHub release when the installed version is below this.
 DOTFILES_TREE_SITTER_MINIMUM="0.26.1"
 
+# The tree-sitter CLI releases for Linux are built against glibc 2.39. On an
+# older glibc, such as Debian 12's 2.36, a release may not start at all (arm64
+# since 0.26) or start with a warning (x86_64 0.27.1), so the bootstrap keeps
+# a release only when it runs; otherwise Neovim skips compiling parsers there,
+# as it does on Windows without a C compiler.
+DOTFILES_TREE_SITTER_GLIBC="2.39"
+
+# dotfiles_glibc_version: the C library version of a glibc system ("2.36");
+# fails on macOS and musl systems.
+dotfiles_glibc_version() {
+    local version
+    version="$(getconf GNU_LIBC_VERSION 2>/dev/null)" || return 1
+    case "$version" in
+        "glibc "?*) printf '%s\n' "${version#glibc }" ;;
+        *) return 1 ;;
+    esac
+}
+
 # dotfiles_tree_sitter_version [tree-sitter]: the version of a tree-sitter CLI
 # binary, from "tree-sitter 0.27.1".
 dotfiles_tree_sitter_version() {

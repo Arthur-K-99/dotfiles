@@ -16,8 +16,9 @@
 --
 -- Compiling a parser needs the tree-sitter CLI and a C compiler. The package
 -- lists install both on macOS and Linux; on Windows the compiler (Visual
--- Studio Build Tools, see the README) is a manual step, so parsers count as
--- skipped rather than missing until one is present.
+-- Studio Build Tools, see the README) is a manual step, and on a Linux whose
+-- glibc is too old for the tree-sitter release the bootstrap leaves the CLI
+-- out, so parsers count as skipped rather than missing there.
 local M = {}
 local tools = require("dotfiles.tools")
 
@@ -128,7 +129,7 @@ end
 -- cannot be built on this machine are listed under `skipped` instead.
 function M.missing()
   local missing = { parsers = {}, packages = {}, skipped = {} }
-  local skip_parsers = vim.fn.has("win32") == 1 and not M.can_compile()
+  local skip_parsers = not M.can_compile()
   for _, lang in ipairs(tools.parsers) do
     if not parser_installed(lang) then
       local list = skip_parsers and missing.skipped or missing.parsers

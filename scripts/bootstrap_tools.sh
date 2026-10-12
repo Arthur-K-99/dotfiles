@@ -360,9 +360,11 @@ install_linux_tools() {
 # DOTFILES_TREE_SITTER_MINIMUM (lib/environment.sh); Debian 13 packages 0.22
 # and Ubuntu 24.04 0.20. A CLI that is too old is left where it is and the
 # release goes into the local bin directory, which precedes /usr/bin on PATH.
-# The zip holds the one binary (the .gz assets hold it bare).
+# The zip holds the one binary (the .gz assets hold it bare). A release that
+# does not start on a glibc older than DOTFILES_TREE_SITTER_GLIBC is removed
+# again, so Neovim skips the parsers instead of compiling with it.
 install_tree_sitter_cli() {
-    local version bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
+    local version glibc errors bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
     if version="$(dotfiles_tree_sitter_version)" && dotfiles_version_at_least "$version" "$DOTFILES_TREE_SITTER_MINIMUM"; then
         echo "tree-sitter $version already installed"
         return 0
@@ -370,7 +372,13 @@ install_tree_sitter_cli() {
     echo "Installing tree-sitter from tree-sitter/tree-sitter${version:+ (found $version, need $DOTFILES_TREE_SITTER_MINIMUM)}..."
     download_github_release tree-sitter/tree-sitter 'tree-sitter-cli-linux-{arch_node}.zip' tree-sitter || return
     if ! version="$(dotfiles_tree_sitter_version "$bin_dir/tree-sitter")"; then
-        echo "$bin_dir/tree-sitter does not report a version after installing." >&2
+        errors="$("$bin_dir/tree-sitter" --version 2>&1)" || :
+        if glibc="$(dotfiles_glibc_version)" && ! dotfiles_version_at_least "$glibc" "$DOTFILES_TREE_SITTER_GLIBC"; then
+            rm -f "$bin_dir/tree-sitter" || return
+            echo "The tree-sitter release does not run on glibc $glibc (it needs $DOTFILES_TREE_SITTER_GLIBC); Neovim will skip compiling parsers and highlight those file types with Vim's syntax files."
+            return 0
+        fi
+        printf '%s does not report a version after installing:\n%s\n' "$bin_dir/tree-sitter" "$errors" >&2
         return 1
     fi
     if ! dotfiles_version_at_least "$version" "$DOTFILES_TREE_SITTER_MINIMUM"; then
