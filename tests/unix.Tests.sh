@@ -540,6 +540,17 @@ test_eza_index_and_download_failures() {
     status=0
     bootstrap_zoxide > "$test_dir/output" 2>&1 || status=$?
     assert_equal 45 "$status"
+    # A new account has no local bin directory yet, and the oh-my-posh
+    # installer refuses a missing one; both installers get the directory.
+    export DOTFILES_LOCAL_BIN="$test_dir/new/bin"
+    curl() { printf 'echo fixture installer\n'; }
+    bash() { cat >/dev/null; printf 'bash %s\n' "$*" >> "$test_dir/installers"; }
+    sh() { cat >/dev/null; printf 'sh %s\n' "$*" >> "$test_dir/installers"; }
+    bootstrap_oh_my_posh > "$test_dir/output"
+    [ -d "$test_dir/new/bin" ]
+    bootstrap_zoxide > "$test_dir/output"
+    assert_equal "bash -s -- -d $test_dir/new/bin
+sh -s -- --bin-dir $test_dir/new/bin" "$(cat "$test_dir/installers")"
 }
 
 test_tmux_plugin_failure_and_retry() {

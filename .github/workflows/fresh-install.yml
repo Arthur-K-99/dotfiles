@@ -1,0 +1,54 @@
+name: Fresh install
+
+# Installs on clean machines with real downloads. The installer checks in
+# test.yml mock every download, so only this catches upstream changes: a
+# renamed release asset, a package a distribution dropped, a plugin that moved.
+# It runs on pull requests that can change the Unix install, every week for
+# upstream drift, and on demand.
+on:
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '**/*.ps1'
+      - 'packages/winget.txt'
+      - 'config/powershell/**'
+      - 'config/windows-terminal/**'
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:12', 'debian:13', 'ubuntu:24.04', 'ubuntu:26.04']
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install in a fresh container, rerun, and start the shells
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: bash tests/fresh_install.sh "$IMAGE"
+
+  # The runner image already carries Homebrew and many tools, so this is less
+  # fresh than a container, but it proves the formula and cask names and the
+  # macOS bootstrap.
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install on the runner, rerun, and start the shells
+        run: bash tests/fresh_install.sh --here

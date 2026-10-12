@@ -55,10 +55,15 @@ bootstrap_tmux() (
     XDG_CONFIG_HOME="$work_dir/config" TMUX="$socket_path,0,0" "$tpm_dir/bin/install_plugins"
 )
 
+# The oh-my-posh and zoxide installers write into the local bin directory like
+# the release installers below. oh-my-posh's refuses a directory that does not
+# exist yet, which is the case on a new Linux account.
 bootstrap_oh_my_posh() {
+    local bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
     if ! command -v oh-my-posh &>/dev/null; then
         echo "Installing oh-my-posh..."
-        curl -fsSL https://ohmyposh.dev/install.sh | bash -s -- -d "$HOME/.local/bin"
+        mkdir -p "$bin_dir" || return
+        curl -fsSL https://ohmyposh.dev/install.sh | bash -s -- -d "$bin_dir"
     else
         echo "oh-my-posh already installed"
     fi
@@ -67,7 +72,8 @@ bootstrap_oh_my_posh() {
 bootstrap_zoxide() {
     if ! command -v zoxide &>/dev/null; then
         echo "Installing zoxide..."
-        curl -sSfL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh
+        curl -sSfL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | \
+            sh -s -- --bin-dir "${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
     else
         echo "zoxide already installed"
     fi
