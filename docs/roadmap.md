@@ -2,7 +2,7 @@
 
 The goal: one terminal experience that looks and behaves the same on macOS, Debian/Ubuntu/WSL and native Windows. Catppuccin Macchiato everywhere, fast shells, strong autocomplete, and every tool declared in this repository so a new machine is one command away.
 
-Work lands in phases. Each phase is one pull request that leaves every platform in a working state, passes `bash scripts/test.sh`, and extends `doctor` so a rebuilt machine proves the phase is installed.
+Work lands in phases. Each phase is one pull request that leaves every platform in a working state, passes `bash scripts/test.sh` and the Fresh install workflow (`bash tests/fresh_install.sh` locally), and extends `doctor` so a rebuilt machine proves the phase is installed.
 
 | Phase | Theme | Status |
 |---|---|---|
@@ -81,6 +81,10 @@ Not tied to a phase; pick up when convenient.
 - Opt-in profiles (`minimal`, `development`, `personal`) as the README already proposes, so GUI apps and OS preferences never change every machine silently.
 - A Brewfile so `brew bundle check` reports drift, if the current parsed lists become limiting.
 - Linux font installation in the bootstrap (download to `~/.local/share/fonts` and run `fc-cache`), which is the one remaining manual step on Linux.
+
+Done:
+
+- **Fresh-install CI.** `tests/fresh_install.sh` installs the checkout in a new Debian or Ubuntu container as a user with sudo, with real downloads, reruns the installer, and starts zsh and tmux, failing on anything they print as an error. The Fresh install workflow runs it on Debian 12 and 13 and Ubuntu 24.04 and 26.04 plus the macOS runner, on pull requests that touch the Unix install, weekly, and on demand. Its first runs found two bugs the mocked suite could not: a new Linux account has no `~/.local/bin`, which the oh-my-posh installer refuses, so the bootstrap stopped there on every distribution; and the tree-sitter CLI releases are built against glibc 2.39, so on Debian 12 arm64 (glibc 2.36) the bootstrap stopped before mise, the yazi flavors and the Neovim plugins. The bootstrap now creates the directory, and a tree-sitter release that does not start on an older glibc is left out, with the CLI and the parsers marked as skipped as on Windows without a compiler. (On x86_64, tree-sitter 0.27.1 starts on glibc 2.36 with a warning; 0.27.0 and 0.26.13 did not.)
 
 ## Ideas parked
 
