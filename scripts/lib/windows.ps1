@@ -388,10 +388,14 @@ function Install-DotfilesYaziFlavors {
 # is offline and fast; the installs are the only steps that reach the network.
 $script:DotfilesNeovimMinimum = [version]'0.12.0'
 
+# The three readers below run native commands whose stderr is discarded or
+# returned as data. Windows PowerShell turns redirected native stderr into a
+# terminating error under Stop, so each relaxes the preference for its own scope.
 function Get-DotfilesNeovimVersion {
     param([string]$Command)
     # The first line reads "NVIM v0.12.6", or "NVIM v0.12.0-dev-123+g..." for a
     # development build, whose suffix is dropped.
+    $ErrorActionPreference = 'Continue'
     $PSNativeCommandUseErrorActionPreference = $false
     $firstLine = [string](@(& $Command --version 2>$null | ForEach-Object { [string]$_ }) | Select-Object -First 1)
     if ($firstLine -match '^NVIM v(\d+(?:\.\d+){1,2})') { return [version]$Matches[1] }
@@ -403,6 +407,7 @@ function Get-DotfilesNeovimVersion {
 # missing or stale.
 function Get-DotfilesNeovimCheck {
     param([string]$Command)
+    $ErrorActionPreference = 'Continue'
     $PSNativeCommandUseErrorActionPreference = $false
     $lines = @(& $Command --headless -c 'lua require("dotfiles.bootstrap").check()' 2>&1 | ForEach-Object { [string]$_ })
     return [pscustomobject]@{ Lines = $lines; ExitCode = $LASTEXITCODE }
@@ -413,6 +418,7 @@ function Get-DotfilesNeovimCheck {
 function Get-DotfilesMiseNodeDirectory {
     $miseCommand = Get-DotfilesCommandPath 'mise'
     if (-not $miseCommand) { return $null }
+    $ErrorActionPreference = 'Continue'
     $PSNativeCommandUseErrorActionPreference = $false
     $nodePath = [string](@(& $miseCommand which node 2>$null | ForEach-Object { [string]$_ }) | Select-Object -First 1)
     if ($LASTEXITCODE -eq 0 -and $nodePath) { return Split-Path -Parent $nodePath }
