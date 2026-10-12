@@ -25,6 +25,25 @@ dotfiles_macos_app_installed() {
     [ -d "/Applications/$1.app" ] || [ -d "$HOME/Applications/$1.app" ]
 }
 
+# The Nerd Font family that Ghostty and the Windows Terminal fragment select.
+DOTFILES_FONT_FAMILY="CaskaydiaCove Nerd Font Mono"
+
+# dotfiles_linux_font_installed: fontconfig finds DOTFILES_FONT_FAMILY in one
+# of its font directories, the user's or the system's.
+dotfiles_linux_font_installed() {
+    fc-list -q "$DOTFILES_FONT_FAMILY" 2>/dev/null
+}
+
+# dotfiles_is_wsl: WSL kernels name themselves in the release, such as
+# 6.6.87.2-microsoft-standard-WSL2 (WSL 1: 4.4.0-19041-Microsoft). Containers
+# share the host's kernel, so Docker on a Windows host counts as WSL too.
+dotfiles_is_wsl() {
+    case "$(uname -r)" in
+        *[Mm]icrosoft*) return 0 ;;
+    esac
+    return 1
+}
+
 dotfiles_init_environment() {
     local brew_path brew_environment
     if [ "$(uname)" = "Darwin" ] && brew_path="$(dotfiles_find_homebrew)"; then

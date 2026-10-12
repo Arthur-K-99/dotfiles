@@ -42,6 +42,19 @@ check_macos_font() {
     fi
 }
 
+# WSL draws its text with the Windows font, which install.ps1 installs.
+check_linux_font() {
+    if dotfiles_is_wsl; then
+        skip "$DOTFILES_FONT_FAMILY (WSL uses the Windows font, which install.ps1 installs)"
+    elif ! command -v fc-list >/dev/null 2>&1; then
+        fail "$DOTFILES_FONT_FAMILY (fontconfig is not installed; rerun: bash scripts/install_packages.sh)"
+    elif dotfiles_linux_font_installed; then
+        ok "$DOTFILES_FONT_FAMILY"
+    else
+        fail "$DOTFILES_FONT_FAMILY (rerun: bash scripts/bootstrap_tools.sh)"
+    fi
+}
+
 check_macos_app() {
     if dotfiles_macos_app_installed "$1"; then
         ok "$1.app"
@@ -279,7 +292,8 @@ doctor_main() {
         check_macos_font
         check_macos_app Ghostty
     else
-        echo "Nerd Font installation is manual on Linux; select it in your terminal after installation."
+        echo "Checking font..."
+        check_linux_font
         echo "Ghostty has no Debian package; its configuration is linked for when it is installed."
     fi
 
