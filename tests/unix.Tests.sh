@@ -482,6 +482,7 @@ test_install_stages_and_failure_reporting() {
 
 test_eza_index_and_download_failures() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    export DOTFILES_LOCAL_BIN="$test_dir/bin"
     command() {
         case "$*" in
             '-v eza'|'-v oh-my-posh'|'-v zoxide') return 1 ;;
@@ -1126,30 +1127,48 @@ test_tree_sitter_cli_install() {
         echo "A version was read from unrelated output." >&2
         return 1
     fi
-    # A release that cannot start on an older glibc is removed again, so
-    # Neovim skips the parsers; with a new enough glibc, or none, the failure
-    # stands and shows why.
-    mkdir -p "$test_dir/broken-payload"
-    printf '#!/bin/sh\necho "version GLIBC_2.39 not found" >&2\nexit 1\n' > "$test_dir/broken-payload/tree-sitter"
-    chmod +x "$test_dir/broken-payload/tree-sitter"
-    (cd "$test_dir/broken-payload" && zip -q "$test_dir/broken-asset.zip" tree-sitter)
-    printf 'broken-asset.zip\n' > "$test_dir/serve"
+    # A release that fails for want of a newer glibc is removed and recorded,
+    # so Neovim skips the parsers and a rerun fetches nothing; any other
+    # failure stands and shows why.
+    export XDG_STATE_HOME="$test_dir/state"
+    local record="$test_dir/state/dotfiles/tree-sitter-unsupported"
+    mkdir -p "$test_dir/glibc-payload" "$test_dir/crash-payload"
+    printf '#!/bin/sh\necho "tree-sitter: /lib/aarch64-linux-gnu/libc.so.6: version \\`GLIBC_2.39'"'"' not found" >&2\nexit 1\n' > "$test_dir/glibc-payload/tree-sitter"
+    printf '#!/bin/sh\necho "Segmentation fault" >&2\nexit 139\n' > "$test_dir/crash-payload/tree-sitter"
+    chmod +x "$test_dir/glibc-payload/tree-sitter" "$test_dir/crash-payload/tree-sitter"
+    (cd "$test_dir/glibc-payload" && zip -q "$test_dir/glibc-asset.zip" tree-sitter)
+    (cd "$test_dir/crash-payload" && zip -q "$test_dir/crash-asset.zip" tree-sitter)
     getconf() { [ "$1" = GNU_LIBC_VERSION ] && [ -f "$DOTFILES_TEST_FIXTURE/glibc" ] && cat "$DOTFILES_TEST_FIXTURE/glibc"; }
     printf 'glibc 2.36\n' > "$test_dir/glibc"
+    rm -f "$test_dir/bin/tree-sitter" "$test_dir/downloads"
+    printf 'glibc-asset.zip\n' > "$test_dir/serve"
     install_tree_sitter_cli > "$test_dir/output"
-    assert_contains "$(cat "$test_dir/output")" 'does not run on glibc 2.36 (it needs 2.39)'
+    assert_contains "$(cat "$test_dir/output")" 'tree-sitter v0.27.1 needs glibc 2.39 and this system has 2.36'
     [ ! -e "$test_dir/bin/tree-sitter" ]
-    printf 'glibc 2.41\n' > "$test_dir/glibc"
+    assert_equal 'v0.27.1 2.36' "$(cat "$record")"
+    install_tree_sitter_cli > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" 'Neovim keeps skipping the parsers'
+    assert_equal 1 "$(wc -l < "$test_dir/downloads" | tr -d ' ')"
+    # A record from another release or another glibc is fetched again.
+    printf 'v0.27.0 2.36\n' > "$record"
+    install_tree_sitter_cli > "$test_dir/output"
+    assert_equal 2 "$(wc -l < "$test_dir/downloads" | tr -d ' ')"
+    assert_equal 'v0.27.1 2.36' "$(cat "$record")"
+    # A crash is no glibc mismatch, whatever the glibc.
+    printf 'crash-asset.zip\n' > "$test_dir/serve"
+    rm "$record"
     status=0
     install_tree_sitter_cli > "$test_dir/output" 2>&1 || status=$?
     assert_equal 1 "$status"
     assert_contains "$(cat "$test_dir/output")" 'does not report a version after installing:'
-    assert_contains "$(cat "$test_dir/output")" 'GLIBC_2.39 not found'
-    rm "$test_dir/glibc"
-    status=0
-    install_tree_sitter_cli > "$test_dir/output" 2>&1 || status=$?
-    assert_equal 1 "$status"
-    printf 'glibc 2.36\n' > "$test_dir/glibc"
+    assert_contains "$(cat "$test_dir/output")" 'Segmentation fault'
+    [ ! -e "$record" ]
+    # A release that runs clears the record.
+    rm "$test_dir/bin/tree-sitter"
+    printf 'v0.27.0 2.36\n' > "$record"
+    printf 'asset.zip\n' > "$test_dir/serve"
+    install_tree_sitter_cli > "$test_dir/output"
+    [ -x "$test_dir/bin/tree-sitter" ] && [ ! -e "$record" ]
     assert_equal 2.36 "$(dotfiles_glibc_version)"
     printf 'NPTL 2.36\n' > "$test_dir/glibc"
     if dotfiles_glibc_version; then
@@ -1358,15 +1377,21 @@ test_doctor_neovim_checks() {
     check_nvim_plugins > "$test_dir/output"
     assert_equal 2 "$failures"
     assert_equal '' "$(cat "$test_dir/nvim-args")"
-    # On a glibc too old for the release, the bootstrap left the CLI out and
-    # Neovim skips the parsers, so the missing CLI is skipped too.
+    # A CLI the bootstrap left out for this glibc is skipped, as Neovim skips
+    # the parsers; without the record, or after a glibc upgrade, it is missing.
+    export XDG_STATE_HOME="$test_dir/state"
     getconf() { [ "$1" = GNU_LIBC_VERSION ] && cat "$DOTFILES_TEST_FIXTURE/glibc"; }
     printf 'glibc 2.36\n' > "$test_dir/glibc"
     failures=0
     check_tree_sitter > "$test_dir/output"
+    assert_equal 1 "$failures"
+    mkdir -p "$test_dir/state/dotfiles"
+    printf 'v0.27.1 2.36\n' > "$test_dir/state/dotfiles/tree-sitter-unsupported"
+    failures=0
+    check_tree_sitter > "$test_dir/output"
     assert_equal 0 "$failures"
-    assert_contains "$(cat "$test_dir/output")" '[skip] tree-sitter CLI (its release needs glibc 2.39 and this system has 2.36'
-    printf 'glibc 2.39\n' > "$test_dir/glibc"
+    assert_contains "$(cat "$test_dir/output")" '[skip] tree-sitter CLI (v0.27.1 needs a newer glibc than 2.36'
+    printf 'glibc 2.41\n' > "$test_dir/glibc"
     check_tree_sitter > "$test_dir/output"
     assert_equal 1 "$failures"
 }

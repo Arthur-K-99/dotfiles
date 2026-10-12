@@ -61,6 +61,26 @@ check_quiet_start() {
     fi
 }
 
+# tmux reports configuration errors to the client that sources the file, and
+# run-shell output, such as a failing plugin manager, to its stdout; both must
+# stay empty. TPM silences the plugins themselves, so the last one,
+# tmux-continuum, must have added its save hook to status-right. -f /dev/null
+# keeps the server from loading the configuration a second time.
+FRESH_INSTALL_TMUX='output="$(tmux -L fresh-install -f /dev/null start-server \; \
+    set-option -g exit-empty off \; source-file "$HOME/.config/tmux/tmux.conf" 2>&1)"
+status=$?
+status_right="$(tmux -L fresh-install show-options -gv status-right 2>&1)"
+tmux -L fresh-install kill-server >/dev/null 2>&1
+if [ -n "$output" ]; then
+    printf "%s\n" "$output" >&2
+    exit 1
+fi
+case "$status_right" in
+    *continuum_save*) ;;
+    *) echo "The tmux plugins did not all load; status-right is: $status_right" >&2; exit 1 ;;
+esac
+exit "$status"'
+
 # fresh_install_run <checkout>
 fresh_install_run() {
     echo "==> Installing"
@@ -68,15 +88,11 @@ fresh_install_run() {
     # A rerun must succeed without changes, as the README promises.
     echo "==> Rerunning the installer"
     as_user bash "$1/install.sh" || return
+    # Loading ~/.zshrc runs every tool's init script. The prompt hooks need a
+    # terminal: run by hand without one, Debian 12's fzf scripts fail to
+    # restore the zle option, which a real terminal never shows.
     check_quiet_start "an interactive zsh" env DOTFILES_FASTFETCH=0 zsh -i -c exit || return
-    # source-file reports configuration and plugin errors to the client; the
-    # private server keeps the check away from any other tmux.
-    check_quiet_start "tmux with its plugins" bash -c '
-        tmux -L fresh-install start-server \; set-option -g exit-empty off \; \
-            source-file "$HOME/.config/tmux/tmux.conf"
-        status=$?
-        tmux -L fresh-install kill-server >/dev/null 2>&1
-        exit "$status"' || return
+    check_quiet_start "tmux with its plugins" bash -c "$FRESH_INSTALL_TMUX" || return
     echo "Fresh install passed."
 }
 

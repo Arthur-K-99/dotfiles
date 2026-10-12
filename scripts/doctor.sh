@@ -105,11 +105,13 @@ check_bat_theme() {
 }
 
 check_tree_sitter() {
-    local version glibc
+    local version glibc record
     if ! command -v tree-sitter >/dev/null 2>&1; then
-        # The bootstrap removes a release that cannot start on an old glibc.
-        if glibc="$(dotfiles_glibc_version)" && ! dotfiles_version_at_least "$glibc" "$DOTFILES_TREE_SITTER_GLIBC"; then
-            skip "tree-sitter CLI (its release needs glibc $DOTFILES_TREE_SITTER_GLIBC and this system has $glibc; Neovim skips compiling parsers)"
+        # The bootstrap leaves out, and records, a release that needs a newer
+        # glibc; the record holds only while this glibc is the one it names.
+        if record="$(cat "$(dotfiles_tree_sitter_record)" 2>/dev/null)" && glibc="$(dotfiles_glibc_version)" && \
+            [ "${record#* }" = "$glibc" ]; then
+            skip "tree-sitter CLI (${record%% *} needs a newer glibc than $glibc; Neovim skips compiling parsers)"
             return
         fi
         fail "tree-sitter CLI $DOTFILES_TREE_SITTER_MINIMUM or newer (tree-sitter is not installed)"

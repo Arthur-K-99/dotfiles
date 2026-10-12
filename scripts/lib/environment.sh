@@ -100,10 +100,14 @@ DOTFILES_TREE_SITTER_MINIMUM="0.26.1"
 
 # The tree-sitter CLI releases for Linux are built against glibc 2.39. On an
 # older glibc, such as Debian 12's 2.36, a release may not start at all (arm64
-# since 0.26) or start with a warning (x86_64 0.27.1), so the bootstrap keeps
-# a release only when it runs; otherwise Neovim skips compiling parsers there,
-# as it does on Windows without a C compiler.
-DOTFILES_TREE_SITTER_GLIBC="2.39"
+# since 0.26) or start with a warning (x86_64 0.27.1). The bootstrap leaves out
+# a release that fails for want of a newer glibc and records "<tag> <glibc>"
+# in this file, so a rerun does not fetch the same release again and the
+# doctor can tell a CLI left out on purpose from a missing one. Neovim then
+# skips compiling parsers, as on Windows without a C compiler.
+dotfiles_tree_sitter_record() {
+    printf '%s\n' "${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/tree-sitter-unsupported"
+}
 
 # dotfiles_glibc_version: the C library version of a glibc system ("2.36");
 # fails on macOS and musl systems.

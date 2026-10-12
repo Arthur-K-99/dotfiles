@@ -361,23 +361,38 @@ install_linux_tools() {
 # and Ubuntu 24.04 0.20. A CLI that is too old is left where it is and the
 # release goes into the local bin directory, which precedes /usr/bin on PATH.
 # The zip holds the one binary (the .gz assets hold it bare). A release that
-# does not start on a glibc older than DOTFILES_TREE_SITTER_GLIBC is removed
-# again, so Neovim skips the parsers instead of compiling with it.
+# fails for want of a newer glibc is removed again and recorded (see
+# dotfiles_tree_sitter_record), so Neovim skips the parsers instead of
+# compiling with it; any other failure stops the bootstrap.
 install_tree_sitter_cli() {
-    local version glibc errors bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
+    local version glibc errors tag needed record bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
+    record="$(dotfiles_tree_sitter_record)"
     if version="$(dotfiles_tree_sitter_version)" && dotfiles_version_at_least "$version" "$DOTFILES_TREE_SITTER_MINIMUM"; then
         echo "tree-sitter $version already installed"
+        return 0
+    fi
+    if [ -r "$record" ] && glibc="$(dotfiles_glibc_version)" && tag="$(github_latest_tag tree-sitter/tree-sitter)" && \
+        [ "$(cat "$record")" = "$tag $glibc" ]; then
+        echo "tree-sitter $tag does not run on glibc $glibc; Neovim keeps skipping the parsers"
         return 0
     fi
     echo "Installing tree-sitter from tree-sitter/tree-sitter${version:+ (found $version, need $DOTFILES_TREE_SITTER_MINIMUM)}..."
     download_github_release tree-sitter/tree-sitter 'tree-sitter-cli-linux-{arch_node}.zip' tree-sitter || return
     if ! version="$(dotfiles_tree_sitter_version "$bin_dir/tree-sitter")"; then
         errors="$("$bin_dir/tree-sitter" --version 2>&1)" || :
-        if glibc="$(dotfiles_glibc_version)" && ! dotfiles_version_at_least "$glibc" "$DOTFILES_TREE_SITTER_GLIBC"; then
-            rm -f "$bin_dir/tree-sitter" || return
-            echo "The tree-sitter release does not run on glibc $glibc (it needs $DOTFILES_TREE_SITTER_GLIBC); Neovim will skip compiling parsers and highlight those file types with Vim's syntax files."
-            return 0
-        fi
+        case "$errors" in
+            *"GLIBC_"*" not found"*)
+                if glibc="$(dotfiles_glibc_version)" && tag="$(github_latest_tag tree-sitter/tree-sitter)"; then
+                    needed="${errors#*GLIBC_}"
+                    needed="${needed%%[!0-9.]*}"
+                    rm -f "$bin_dir/tree-sitter" || return
+                    mkdir -p "$(dirname "$record")" || return
+                    printf '%s %s\n' "$tag" "$glibc" > "$record" || return
+                    echo "tree-sitter $tag needs glibc ${needed:-newer than $glibc} and this system has $glibc; Neovim will skip compiling parsers and highlight those file types with Vim's syntax files."
+                    return 0
+                fi
+                ;;
+        esac
         printf '%s does not report a version after installing:\n%s\n' "$bin_dir/tree-sitter" "$errors" >&2
         return 1
     fi
@@ -385,6 +400,7 @@ install_tree_sitter_cli() {
         echo "The tree-sitter release ($version) is older than $DOTFILES_TREE_SITTER_MINIMUM." >&2
         return 1
     fi
+    rm -f "$record"
 }
 
 # --- Runtimes and themes ------------------------------------------------------
