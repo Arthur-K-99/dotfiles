@@ -42,6 +42,10 @@ jobs:
       - name: Install in a fresh container, rerun, and start the shells
         env:
           IMAGE: ${{ matrix.image }}
+          # Each release download reads its digest from the GitHub API, which
+          # allows 60 requests an hour per address without a token, and
+          # hosted runners share addresses.
+          GITHUB_TOKEN: ${{ github.token }}
         run: bash tests/fresh_install.sh "$IMAGE"
 
   # The runner image already carries Homebrew and many tools, so this is less
@@ -56,4 +60,6 @@ jobs:
         with:
           persist-credentials: false
       - name: Install on the runner, rerun, and start the shells
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: bash tests/fresh_install.sh --here

@@ -44,7 +44,7 @@ An install is complete only after setup verification passes, including automated
 A rerun of the installer only adds what is missing. The update runs the same stages and also upgrades, then finishes with the same verification:
 
 - **Packages:** the ones `packages/*.txt` declares, after Homebrew refreshes its index. Homebrew may also upgrade the formulae a declared one depends on and the installed formulae that depend on it; nothing else is touched.
-- **Release tools:** each tool the bootstrap fetched from a GitHub release or an installer script, when a newer tag exists.
+- **Release tools:** each tool the bootstrap fetched from a GitHub release, when a newer tag exists.
 - **Plugins:** zinit and TPM with their plugins, and the yazi flavors.
 - **Runtimes:** mise's runtimes.
 - **Neovim:** the parsers and the Mason language servers. The plugins stay at the commits `lazy-lock.json` pins.
@@ -58,6 +58,18 @@ It leaves some things alone and says so:
 Casks that update themselves, such as Ghostty, are not reported as outdated by Homebrew, so the update leaves them to their own updater without a word.
 
 It does not pull this repository: run `git pull` first to take its changes.
+
+### Verified downloads
+
+What the Unix bootstrap fetches outside a package manager is checked before it is used:
+
+- **GitHub releases:** the release tools (oh-my-posh, zoxide and mise among them; no installer script is piped into a shell), Neovim, the tree-sitter CLI and the Linux Nerd Font. Each file must match the SHA-256 digest GitHub lists for that asset; a file that does not is deleted before anything is unpacked or replaced.
+- **apt repositories:** eza's and Charm's are added only when the downloaded signing key has the fingerprint pinned in `scripts/bootstrap_tools.sh`.
+- **bat themes:** bat releases older than 0.26 get the Catppuccin theme from a fixed commit of catppuccin/bat.
+
+The digest comes from the same release as the file, so it proves the file is what the release holds, not that the release itself is genuine. Package managers check their own downloads: apt against its signed indexes, Homebrew bottles against the SHA-256 in their formula, and winget each installer against the SHA-256 in its manifest. Two downloads are not checked yet: Homebrew's installer script (from `HEAD`, as Homebrew's instructions say), and on Windows the Nerd Font that `oh-my-posh font install` fetches.
+
+GitHub's API answers 60 requests an hour per address without a token, and a Linux install makes one per release download, about 18. Set `GITHUB_TOKEN` (for example `GITHUB_TOKEN="$(gh auth token)"`) to raise the limit, such as for repeated installs behind one address.
 
 ## Windows and WSL
 
@@ -122,7 +134,7 @@ Native Windows installs PowerShell, Windows Terminal, and command-line tools thr
 - **Font:** Ghostty and the Windows Terminal fragment select `CaskaydiaCove Nerd Font Mono` themselves (some pickers list it as `CaskaydiaCove NFM`); choose it by hand in any other terminal. On Linux the bootstrap installs the Mono family from the latest Nerd Fonts release into `~/.local/share/fonts/CaskaydiaCove` and registers it with fontconfig, unless fontconfig already lists the family from another directory. A rerun keeps the installed copy; `scripts/update.sh` replaces it when Nerd Fonts publishes a newer release (macOS: when Homebrew installed the cask). On Windows the update keeps the installed font. WSL skips it, because Windows Terminal draws WSL's text with the font `install.ps1` installs on Windows.
 - **Machine-specific config:** Add anything that shouldn't be in the repo to `~/.zshrc.local` (sourced automatically).
 - **SSH agent:** The shared configuration preserves `SSH_AUTH_SOCK`. To use Bitwarden on a particular machine, add `export SSH_AUTH_SOCK="$HOME/.bitwarden-ssh-agent.sock"` to that machine's `~/.zshrc.local`.
-- **Tool binaries on Linux:** Tools that Debian and Ubuntu do not package come from signed apt repositories (eza, glow, gum) or from the latest GitHub release into `~/.local/bin` (lazygit, lazydocker, delta, atuin, carapace, yazi, dust, procs, xh, tlrc, sesh, fastfetch, tree-sitter, and Neovim as described above). Set `DOTFILES_LOCAL_BIN` before installing to use another directory; the installers put it on `PATH`. Rerunning the bootstrap keeps them. `scripts/update.sh` fetches a tool again when its project has a newer release than the tag recorded under `~/.local/state/dotfiles/releases/`. A tool installed before those records existed is fetched once. mise in `~/.local/bin` updates itself with `mise self-update`, and a tool found elsewhere on `PATH` is left to whatever installed it.
+- **Tool binaries on Linux:** Tools that Debian and Ubuntu do not package come from signed apt repositories (eza, glow, gum) or from the latest GitHub release into `~/.local/bin` (oh-my-posh, zoxide, mise, lazygit, lazydocker, delta, atuin, carapace, yazi, dust, procs, xh, tlrc, sesh, fastfetch, tree-sitter, and Neovim as described above), each checked against its SHA-256 digest (see Verified downloads). oh-my-posh comes from its release on macOS as well. Set `DOTFILES_LOCAL_BIN` before installing to use another directory; the installers put it on `PATH`. Rerunning the bootstrap keeps them. `scripts/update.sh` fetches a tool again when its project has a newer release than the tag recorded under `~/.local/state/dotfiles/releases/`. A tool installed before those records existed is fetched once. mise in `~/.local/bin` updates itself with `mise self-update`, and a tool found elsewhere on `PATH` is left to whatever installed it.
 - **Windows machine-specific config:** Put private or machine-only PowerShell settings in `~/.powershell.local.ps1`.
 - **Verify:** Run `scripts/doctor.sh` on Unix/WSL or `scripts\doctor.ps1` in PowerShell. Both installers also run verification before reporting success. Windows checks both PowerShell editions' actual profile locations, including redirected Documents folders, detects stale copied configurations, and confirms each PowerShell module is installed for PowerShell 7.
 - **Repository checks:** Run `bash scripts/test.sh` before committing installer or configuration changes. The suite checks syntax and uses temporary destinations and mocked installation commands to exercise reruns and failures without installing packages or changing your configuration. Missing optional validation tools are reported as skipped checks. Run `pwsh -NoProfile -NonInteractive -File tests/windows.Tests.ps1` for the Windows behavioral suite alone. CI runs checks on macOS, Linux, and Windows, including Windows PowerShell 5.1 and PowerShell 7.
