@@ -3,6 +3,9 @@ DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/environment.sh
 source "$DOTFILES_DIR/scripts/lib/environment.sh"
 
+# The command that finishes an interrupted run; scripts/update.sh names itself.
+DOTFILES_RERUN="$DOTFILES_DIR/install.sh"
+
 run_step() {
     local label="$1"
     local script_path="$2"
@@ -13,22 +16,30 @@ run_step() {
     else
         status=$?
         printf '\nSetup stopped during: %s (exit %s).\n' "$label" "$status" >&2
-        printf 'Completed steps and backups have been preserved. Resolve the error above, then rerun:\n  bash %q\n' "$DOTFILES_DIR/install.sh" >&2
+        printf 'Completed steps and backups have been preserved. Resolve the error above, then rerun:\n  bash %q\n' "$DOTFILES_RERUN" >&2
         return "$status"
     fi
 }
 
+# With DOTFILES_UPDATE=1 (scripts/update.sh) the same stages also bring what
+# they installed to the latest release.
 install_main() {
+    local packages="Installing packages" tools="Bootstrapping tools" finished="Done. All setup checks passed."
+    if dotfiles_updating; then
+        packages="Updating packages"
+        tools="Updating tools"
+        finished="Done. Everything is up to date and all setup checks passed."
+    fi
     if ! dotfiles_init_environment; then
-        echo "Could not initialize the tool environment. Check Homebrew, then rerun install.sh." >&2
+        echo "Could not initialize the tool environment. Check Homebrew, then rerun ${DOTFILES_RERUN##*/}." >&2
         return 1
     fi
-    run_step "Installing packages" "$DOTFILES_DIR/scripts/install_packages.sh" || return
+    run_step "$packages" "$DOTFILES_DIR/scripts/install_packages.sh" || return
     run_step "Linking dotfiles" "$DOTFILES_DIR/scripts/link_dotfiles.sh" || return
-    run_step "Bootstrapping tools" "$DOTFILES_DIR/scripts/bootstrap_tools.sh" || return
+    run_step "$tools" "$DOTFILES_DIR/scripts/bootstrap_tools.sh" || return
     run_step "Verifying the setup" "$DOTFILES_DIR/scripts/doctor.sh" || return
     echo ""
-    echo "Done. All setup checks passed."
+    echo "$finished"
     case "${SHELL:-}" in
         */zsh) echo "Open a new zsh session to apply changes." ;;
         *) echo "Your default shell is not zsh. Run 'zsh' to use this configuration." ;;

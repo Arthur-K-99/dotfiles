@@ -4,11 +4,13 @@
 --
 --   nvim --headless -c 'lua require("dotfiles.bootstrap").plugins()'
 --   nvim --headless -c 'lua require("dotfiles.bootstrap").install()'
+--   nvim --headless -c 'lua require("dotfiles.bootstrap").update()'
 --   nvim --headless -c 'lua require("dotfiles.bootstrap").check()'
 --
 -- plugins() clones missing plugins at their locked commits and moves drifted
 -- ones back; install(), in a fresh process so the plugins are loaded, adds the
--- parsers and packages. Every function prints one line per item ("ok",
+-- parsers and packages; update(), for scripts/update.sh, refreshes them.
+-- Every function prints one line per item ("ok",
 -- "missing", "stale" or "skipped", then "plugin", "parser" or "package", then
 -- the name) and exits nonzero when something is missing, so
 -- scripts/bootstrap_tools.sh, install.ps1 and the doctors can rely on the
@@ -185,6 +187,43 @@ function M.install()
     end
   end
   os.exit(report(M.missing()) > 0 and 1 or 0)
+end
+
+-- Brings the installed parsers to the revisions the pinned nvim-treesitter
+-- names (they move only when lazy-lock.json moves the plugin) and every
+-- installed Mason package from tools.lua to the registry's latest version.
+-- The plugins stay where lazy-lock.json pins them. Prints a line per update,
+-- then the report, and exits nonzero when an update failed or an item is
+-- missing.
+function M.update()
+  local failed = 0
+  if M.can_compile() then
+    write("Updating parsers...")
+    if not require("nvim-treesitter").update():wait(10 * 60 * 1000) then
+      write("failed parser update")
+      failed = failed + 1
+    end
+  end
+  local registry = require("mason-registry")
+  registry.refresh()
+  for _, name in ipairs(sorted_packages()) do
+    local pkg = registry.get_package(name)
+    if pkg:is_installed() then
+      local installed, latest = pkg:get_installed_version(), pkg:get_latest_version()
+      if installed ~= latest then
+        write(("Updating package: %s %s -> %s"):format(name, installed or "(unknown)", latest))
+        local handle = pkg:install()
+        vim.wait(10 * 60 * 1000, function()
+          return handle:is_closed()
+        end, 200)
+        if pkg:get_installed_version() ~= latest then
+          write("failed package " .. name)
+          failed = failed + 1
+        end
+      end
+    end
+  end
+  os.exit(failed + report(M.missing()) > 0 and 1 or 0)
 end
 
 return M
