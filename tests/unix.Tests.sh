@@ -19,9 +19,13 @@ assert_contains() {
 }
 
 # Tests of the release installers serve their own fixture files; the digest
-# check is covered by test_release_download_verification.
+# check is covered by test_release_download_verification. Each asset that
+# would be verified is listed in $test_dir/verified.
 trust_release_downloads() {
-    release_asset_digest() { printf 'fixture\n'; }
+    release_asset_digest() {
+        printf '%s\n' "$*" >> "$test_dir/verified"
+        printf 'fixture\n'
+    }
     file_sha256() { printf 'fixture\n'; }
 }
 
@@ -109,7 +113,8 @@ test_link_retires_moved_sources() {
     printf 'user content\n' > "$test_dir/user-file"
     ln -s "$test_dir/elsewhere" "$test_dir/foreign"
     retire_link "$test_dir/old-source" "$test_dir/stale"
-    [ ! -L "$test_dir/stale" ] && [ ! -e "$test_dir/stale" ]
+    [ ! -L "$test_dir/stale" ]
+    [ ! -e "$test_dir/stale" ]
     assert_equal moved "$(cat "$test_dir/old-source")"
     # Only a link to the retired source goes: the user's own files and links stay.
     retire_link "$test_dir/old-source" "$test_dir/user-file"
@@ -126,7 +131,9 @@ test_link_retires_moved_sources() {
     remove_empty_directory "$test_dir/full"
     remove_empty_directory "$test_dir/dir-link"
     remove_empty_directory "$test_dir/no-such-dir"
-    [ ! -e "$test_dir/empty" ] && [ -f "$test_dir/full/file" ] && [ -L "$test_dir/dir-link" ]
+    [ ! -e "$test_dir/empty" ]
+    [ -f "$test_dir/full/file" ]
+    [ -L "$test_dir/dir-link" ]
     ln -s "$test_dir/old-source" "$test_dir/stuck"
     rm() { return 33; }
     if retire_link "$test_dir/old-source" "$test_dir/stuck"; then
@@ -1073,7 +1080,8 @@ test_github_release_install() {
     # Several binaries from one zip; {version} drops the v, Go and Debian spellings differ.
     install_github_release owner/multi 'multi_{version}_linux_{arch_go}_{arch_deb}_{arch_amd64}_{arch_node}.zip' first second
     assert_equal 'https://github.com/owner/multi/releases/download/v1.2.3/multi_1.2.3_linux_x86_64_amd64_amd64_x64.zip' "$(tail -n 1 "$test_dir/downloads")"
-    [ -x "$test_dir/bin/first" ] && [ -x "$test_dir/bin/second" ]
+    [ -x "$test_dir/bin/first" ]
+    [ -x "$test_dir/bin/second" ]
     status=0
     install_github_release owner/multi 'multi_{version}_linux_{arch_go}_{arch_deb}.zip' absent > "$test_dir/output" 2>&1 || status=$?
     assert_equal 1 "$status"
@@ -1391,7 +1399,7 @@ JSON
     assert_contains "$(cat "$test_dir/release-min.json")" '"assets":[{"url":"https://api.github.com/repos/owner/tool/releases/assets/11","id":11,'
     uname() { if [ "${1:-}" = -m ]; then printf 'x86_64\n'; else command uname "$@"; fi; }
     curl() {
-        local output="" url="" write_out=""
+        local output="" url="" write_out="" token=""
         printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/calls"
         while [ "$#" -gt 0 ]; do
             case "$1" in
@@ -1401,6 +1409,7 @@ JSON
                     # A header read from stdin is how a token arrives.
                     if [ "$2" = @- ]; then
                         cat > "$DOTFILES_TEST_FIXTURE/stdin"
+                        token=1
                     fi
                     shift
                     ;;
@@ -1417,6 +1426,7 @@ JSON
                 ;;
             https://api.github.com/repos/owner/tool/releases/tags/v1.2.3)
                 [ ! -f "$DOTFILES_TEST_FIXTURE/api-down" ] || return 22
+                [ -z "$token" ] || [ ! -f "$DOTFILES_TEST_FIXTURE/token-rejected" ] || return 22
                 cat "$DOTFILES_TEST_FIXTURE/release.json"
                 ;;
             https://github.com/owner/tool/releases/download/v1.2.3/tool-v1.2.3.tar.gz)
@@ -1436,12 +1446,17 @@ JSON
         assert_equal "$list_sum" "$(release_asset_digest owner/tool v1.2.3 tool-v1.2.3.tar.gz.sha256)"
         assert_equal "$other_sum" "$(release_asset_digest owner/tool v1.2.3 x-tool-v1.2.3.tar.gz)"
         # A digest in another algorithm cannot be compared either.
-        for asset in nodigest.tar.gz sha512.tar.gz absent.tar.gz; do
+        for asset in nodigest.tar.gz sha512.tar.gz; do
             status=0
             release_asset_digest owner/tool v1.2.3 "$asset" > "$test_dir/output" 2>&1 || status=$?
             assert_equal 1 "$status"
             assert_contains "$(cat "$test_dir/output")" "lists no SHA-256 digest for $asset"
         done
+        # An asset the release lacks, such as one renamed upstream, says so.
+        status=0
+        release_asset_digest owner/tool v1.2.3 absent.tar.gz > "$test_dir/output" 2>&1 || status=$?
+        assert_equal 1 "$status"
+        assert_contains "$(cat "$test_dir/output")" 'Release v1.2.3 of owner/tool has no asset named absent.tar.gz'
     done
     # Without a token curl reads nothing from stdin; with one, the header
     # arrives there and the arguments never hold it.
@@ -1458,6 +1473,19 @@ JSON
     assert_equal "$sum" "$(release_asset_digest owner/tool v1.2.3 tool-v1.2.3.tar.gz)"
     assert_equal 1 "$(grep -c -- '@-' "$test_dir/calls")"
     [ ! -e "$test_dir/stdin" ]
+    # GitHub answers a token it does not accept with 401 instead of answering
+    # anonymously, so one more request goes without it.
+    export GITHUB_TOKEN=fixture-secret-token
+    : > "$test_dir/token-rejected"
+    local calls_before
+    calls_before="$(wc -l < "$test_dir/calls" | tr -d ' ')"
+    assert_equal "$sum" "$(release_asset_digest owner/tool v1.2.3 tool-v1.2.3.tar.gz 2> "$test_dir/output")"
+    assert_contains "$(cat "$test_dir/output")" 'trying once without it'
+    assert_equal "$((calls_before + 2))" "$(wc -l < "$test_dir/calls" | tr -d ' ')"
+    assert_contains "$(tail -n 2 "$test_dir/calls" | head -n 1)" '-H @-'
+    assert_equal 0 "$(tail -n 1 "$test_dir/calls" | grep -c -- '@-' || :)"
+    unset GITHUB_TOKEN
+    rm "$test_dir/token-rejected" "$test_dir/stdin"
     # An unreadable release stops the install before anything is downloaded.
     : > "$test_dir/api-down"
     status=0
@@ -1578,9 +1606,11 @@ test_mise_bootstrap_and_runtimes() {
     bootstrap_mise_binary > "$test_dir/output"
     assert_equal 'https://github.com/jdx/mise/releases/latest
 https://github.com/jdx/mise/releases/download/v2026.10.1/mise-v2026.10.1-linux-x64-musl' "$(cat "$test_dir/requests")"
-    cmp -s "$test_dir/mise-release" "$test_dir/bin/mise" && [ -x "$test_dir/bin/mise" ]
+    cmp -s "$test_dir/mise-release" "$test_dir/bin/mise"
+    [ -x "$test_dir/bin/mise" ]
     # mise updates itself, so no tag is recorded for it.
-    [ ! -e "$XDG_STATE_HOME/dotfiles/releases/jdx/mise" ] && [ ! -e "$test_dir/shells" ]
+    [ ! -e "$XDG_STATE_HOME/dotfiles/releases/jdx/mise" ]
+    [ ! -e "$test_dir/shells" ]
     : > "$test_dir/requests"
     bootstrap_mise_binary > "$test_dir/output"
     assert_contains "$(cat "$test_dir/output")" 'mise already installed'
@@ -1800,11 +1830,13 @@ test_neovim_release_install() {
     install_neovim_release > "$test_dir/output" 2>&1 || status=$?
     assert_equal 56 "$status"
     assert_contains "$(cat "$test_dir/output")" 'found 0.9.5, need'
-    [ ! -e "$test_dir/opt" ] && [ ! -e "$test_dir/bin/nvim" ]
+    [ ! -e "$test_dir/opt" ]
+    [ ! -e "$test_dir/bin/nvim" ]
     assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-nvim.*' | wc -l | tr -d ' ')"
     : > "$test_dir/retry"
     install_neovim_release > "$test_dir/output"
     assert_equal 'https://github.com/neovim/neovim/releases/download/v0.12.6/nvim-linux-x86_64.tar.gz' "$(cat "$test_dir/downloads")"
+    assert_equal 'neovim/neovim v0.12.6 nvim-linux-x86_64.tar.gz' "$(tail -n 1 "$test_dir/verified")"
     assert_equal "$test_dir/opt/nvim/bin/nvim" "$(readlink "$test_dir/bin/nvim")"
     assert_equal 'NVIM v0.12.6' "$("$test_dir/bin/nvim" --version)"
     [ -f "$test_dir/opt/nvim/share/nvim/runtime/filetype.lua" ]
@@ -1816,7 +1848,8 @@ test_neovim_release_install() {
     printf 'stale\n' > "$test_dir/opt/nvim/stale-file"
     install_neovim_release > "$test_dir/output"
     assert_equal 2 "$(wc -l < "$test_dir/downloads" | tr -d ' ')"
-    [ ! -e "$test_dir/opt/nvim/stale-file" ] && [ -x "$test_dir/opt/nvim/bin/nvim" ]
+    [ ! -e "$test_dir/opt/nvim/stale-file" ]
+    [ -x "$test_dir/opt/nvim/bin/nvim" ]
     # An archive without bin/nvim, or with a Neovim that is still too old, is refused and the current tree stays.
     printf 'bad-asset.tar.gz\n' > "$test_dir/serve"
     status=0
@@ -2128,6 +2161,7 @@ test_tree_sitter_cli_install() {
     install_tree_sitter_cli > "$test_dir/output"
     assert_contains "$(cat "$test_dir/output")" 'found 0.22.6, need 0.26.1'
     assert_equal 'https://github.com/tree-sitter/tree-sitter/releases/download/v0.27.1/tree-sitter-cli-linux-x64.zip' "$(cat "$test_dir/downloads")"
+    assert_equal 'tree-sitter/tree-sitter v0.27.1 tree-sitter-cli-linux-x64.zip' "$(cat "$test_dir/verified")"
     assert_equal 'tree-sitter 0.27.1' "$("$test_dir/bin/tree-sitter" --version)"
     # No CLI at all is installed too; a release that is still too old is
     # refused and never replaces the installed one.
@@ -2209,7 +2243,8 @@ test_tree_sitter_cli_install() {
     printf 'v0.27.0 2.36\n' > "$record"
     printf 'asset.zip\n' > "$test_dir/serve"
     install_tree_sitter_cli > "$test_dir/output"
-    [ -x "$test_dir/bin/tree-sitter" ] && [ ! -e "$record" ]
+    [ -x "$test_dir/bin/tree-sitter" ]
+    [ ! -e "$record" ]
     assert_equal 2.36 "$(dotfiles_glibc_version)"
     printf 'NPTL 2.36\n' > "$test_dir/glibc"
     if dotfiles_glibc_version; then
@@ -2405,11 +2440,13 @@ test_linux_font_install() {
     status=0
     install_nerd_font > "$test_dir/output" 2>&1 || status=$?
     assert_equal 56 "$status"
-    [ ! -e "$font_dir" ] && [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.new" ]
+    [ ! -e "$font_dir" ]
+    [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.new" ]
     assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-font.*' | wc -l | tr -d ' ')"
     : > "$test_dir/retry"
     install_nerd_font > "$test_dir/output"
     assert_equal 'https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/CascadiaCode.tar.xz' "$(cat "$test_dir/downloads")"
+    assert_equal 'ryanoasis/nerd-fonts v3.4.0 CascadiaCode.tar.xz' "$(tail -n 1 "$test_dir/verified")"
     assert_equal 'CaskaydiaCoveNerdFontMono-Bold.ttf CaskaydiaCoveNerdFontMono-Regular.ttf' "$(cd "$font_dir" && echo *)"
     [ -f "$font_dir/.installed-by-dotfiles" ]
     assert_equal "fc-cache -f $font_dir" "$(tail -n 1 "$test_dir/commands")"
@@ -2435,15 +2472,20 @@ test_linux_font_install() {
     install_nerd_font > "$test_dir/output" 2>&1 || status=$?
     assert_equal 1 "$status"
     assert_contains "$(cat "$test_dir/output")" 'fontconfig does not list CaskaydiaCove Nerd Font Mono after installing CascadiaCode.tar.xz; the previous fonts are back.'
-    [ -f "$font_dir/stale.ttf" ] && [ -f "$font_dir/.installed-by-dotfiles" ] && [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.old" ]
+    [ -f "$font_dir/stale.ttf" ]
+    [ -f "$font_dir/.installed-by-dotfiles" ]
+    [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.old" ]
     rm "$test_dir/cache-broken"
     install_nerd_font > "$test_dir/output"
-    [ ! -e "$font_dir/stale.ttf" ] && [ -f "$font_dir/CaskaydiaCoveNerdFontMono-Bold.ttf" ] && [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.old" ]
+    [ ! -e "$font_dir/stale.ttf" ]
+    [ -f "$font_dir/CaskaydiaCoveNerdFontMono-Bold.ttf" ]
+    [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.old" ]
     # A previous directory an interrupted run left aside is put back.
     mv "$font_dir" "$test_dir/data/fonts/.CaskaydiaCove.old"
     install_nerd_font > "$test_dir/output"
     assert_contains "$(cat "$test_dir/output")" 'already installed'
-    [ -f "$font_dir/CaskaydiaCoveNerdFontMono-Bold.ttf" ] && [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.old" ]
+    [ -f "$font_dir/CaskaydiaCoveNerdFontMono-Bold.ttf" ]
+    [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.old" ]
 }
 
 # Updating replaces the bootstrap's font directory (the one with its marker)
@@ -2515,7 +2557,8 @@ test_linux_font_update() {
     install_nerd_font > "$test_dir/output"
     assert_contains "$(cat "$test_dir/output")" 'Updating CaskaydiaCove Nerd Font Mono to v3.5.0'
     assert_equal v3.5.0 "$(cat "$font_dir/CaskaydiaCoveNerdFontMono-Regular.ttf")"
-    [ -f "$font_dir/.installed-by-dotfiles" ] && [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.new" ]
+    [ -f "$font_dir/.installed-by-dotfiles" ]
+    [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.new" ]
     assert_equal v3.5.0 "$(cat "$record")"
     # Without updating, the installed fonts are kept.
     unset DOTFILES_UPDATE
@@ -3025,7 +3068,9 @@ MOCK
     assert_equal 'init zsh --disable-up-arrow' "$(cat "$test_dir/atuin-args")"
     assert_equal '_carapace zsh' "$(cat "$test_dir/carapace-args")"
     assert_equal "generate catppuccin-$(cat "$TEST_REPO_DIR/config/catppuccin/flavor")" "$(cat "$test_dir/vivid-args")"
-    [ -s "$test_dir/cache/dotfiles/carapace.zsh" ] && [ -s "$test_dir/cache/dotfiles/atuin.zsh" ] && [ -s "$test_dir/cache/dotfiles/direnv.zsh" ]
+    [ -s "$test_dir/cache/dotfiles/carapace.zsh" ]
+    [ -s "$test_dir/cache/dotfiles/atuin.zsh" ]
+    [ -s "$test_dir/cache/dotfiles/direnv.zsh" ]
     # The second shell sources the cached scripts and does not run the tools again.
     DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
         XDG_DATA_HOME="$test_dir/data" XDG_CACHE_HOME="$test_dir/cache" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/bin:/usr/bin:/bin" \

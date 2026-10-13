@@ -141,8 +141,9 @@ bootstrap_owns() {
 }
 
 # oh-my-posh's binary is the whole tool; the configuration is the repository's
-# own, so the themes its installer script adds are not needed. Static Go
-# builds, the same file on macOS and Linux.
+# own, so the themes its installer script adds are not needed. Its static Go
+# builds are named posh-<os>-<arch> on both, so one template covers macOS and
+# Linux.
 bootstrap_oh_my_posh() {
     install_github_release JanDeDobbeleer/oh-my-posh 'posh-{os}-{arch_deb}' oh-my-posh
 }
@@ -322,41 +323,49 @@ github_latest_tag() {
 # github_api <path>: GET https://api.github.com/<path>. Without a token GitHub
 # answers 60 requests an hour per address, which an install (one request per
 # release download) stays well under. GITHUB_TOKEN raises the limit when set;
-# it goes to curl on stdin, so it never shows in the process list. Over the
-# limit GitHub answers 403 or 429; curl retries a 429 and would wait as long
-# as a Retry-After asks, so --retry-max-time keeps that to two minutes.
+# it goes to curl on stdin, so it never shows in the process list. GitHub
+# answers a token it does not accept (expired, or for another host) with 401
+# instead of answering anonymously, so a failed request is made once more
+# without it. Over the limit GitHub answers 403 or 429. curl retries a 429 and
+# would wait as long as a Retry-After asks; with --retry-max-time, a longer
+# one makes it give up at once instead.
 github_api() {
     local args=(-fsSL --retry 5 --retry-max-time 120 -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28')
     if [ -n "${GITHUB_TOKEN:-}" ]; then
-        printf 'Authorization: Bearer %s\n' "$GITHUB_TOKEN" | curl "${args[@]}" -H @- "https://api.github.com/$1"
-    else
-        curl "${args[@]}" "https://api.github.com/$1"
+        if printf 'Authorization: Bearer %s\n' "$GITHUB_TOKEN" | curl "${args[@]}" -H @- "https://api.github.com/$1"; then
+            return 0
+        fi
+        echo "The GitHub API refused the request with GITHUB_TOKEN; trying once without it." >&2
     fi
+    curl "${args[@]}" "https://api.github.com/$1"
 }
 
 # release_asset_digest <owner/repo> <tag> <asset>: prints the SHA-256 GitHub
-# lists for the asset, without a JSON parser. Cut at commas and brackets,
-# every key of the release arrives on a line of its own; quotes inside string
-# values are escaped, so no value can pass for a key. An asset's digest
+# lists for the asset, without a JSON parser. Split at commas, brackets and
+# braces, every key of the release arrives on a line of its own; quotes inside
+# string values are escaped, so no value can pass for a key. An asset's digest
 # precedes its browser_download_url, and its API url starts the asset, which
-# keeps the digest of one asset from carrying over to the next.
+# keeps the digest of one asset from carrying over to the next. awk reads to
+# the end rather than exiting at the match, which would break the pipe.
 release_asset_digest() {
-    local json digest
+    local json found digest
     if ! json="$(github_api "repos/$1/releases/tags/$2")"; then
-        if [ -n "${GITHUB_TOKEN:-}" ]; then
-            echo "Could not read release $2 of $1 from the GitHub API to verify $3. GitHub refuses a GITHUB_TOKEN it does not accept instead of answering without it; check the token and rerun." >&2
-        else
-            echo "Could not read release $2 of $1 from the GitHub API to verify $3. Without a token GitHub answers 60 requests an hour per address; wait, or set GITHUB_TOKEN, and rerun." >&2
-        fi
+        echo "Could not read release $2 of $1 from the GitHub API to verify $3. Without a token GitHub answers 60 requests an hour per address; wait, or set GITHUB_TOKEN, and rerun." >&2
         return 1
     fi
-    digest="$(printf '%s\n' "$json" | tr ',[{' '\n\n\n' |
+    found="$(printf '%s\n' "$json" | tr ',[{' '\n\n\n' |
         sed -n 's/^[[:space:]]*"\([a-z_]*\)":[[:space:]]*"\([^"]*\)".*/\1 \2/p' |
         awk -v suffix="/$3" '
             $1 == "url" && $2 ~ /\/releases\/assets\// { digest = "" }
             $1 == "digest" { digest = $2 }
-            $1 == "browser_download_url" && length($2) >= length(suffix) &&
-                substr($2, length($2) - length(suffix) + 1) == suffix { print digest; exit }')"
+            $1 == "browser_download_url" && !found && length($2) >= length(suffix) &&
+                substr($2, length($2) - length(suffix) + 1) == suffix { found = 1; result = digest }
+            END { if (found) print "asset " result; else print "missing" }')"
+    if [ "$found" = missing ]; then
+        echo "Release $2 of $1 has no asset named $3; the project may have renamed it, or is still uploading." >&2
+        return 1
+    fi
+    digest="${found#asset }"
     if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
         echo "GitHub lists no SHA-256 digest for $3 in release $2 of $1, so it cannot be verified (assets uploaded before June 2025 have none)." >&2
         return 1
