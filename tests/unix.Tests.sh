@@ -18,6 +18,17 @@ assert_contains() {
     esac
 }
 
+# Tests of the release installers serve their own fixture files; the digest
+# check is covered by test_release_download_verification. Each asset that
+# would be verified is listed in $test_dir/verified.
+trust_release_downloads() {
+    release_asset_digest() {
+        printf '%s\n' "$*" >> "$test_dir/verified"
+        printf 'fixture\n'
+    }
+    file_sha256() { printf 'fixture\n'; }
+}
+
 test_syntax_every_file() {
     source "$TEST_REPO_DIR/scripts/test.sh"
     printf '#!/bin/bash\necho valid\n' > "$test_dir/first.sh"
@@ -102,7 +113,8 @@ test_link_retires_moved_sources() {
     printf 'user content\n' > "$test_dir/user-file"
     ln -s "$test_dir/elsewhere" "$test_dir/foreign"
     retire_link "$test_dir/old-source" "$test_dir/stale"
-    [ ! -L "$test_dir/stale" ] && [ ! -e "$test_dir/stale" ]
+    [ ! -L "$test_dir/stale" ]
+    [ ! -e "$test_dir/stale" ]
     assert_equal moved "$(cat "$test_dir/old-source")"
     # Only a link to the retired source goes: the user's own files and links stay.
     retire_link "$test_dir/old-source" "$test_dir/user-file"
@@ -119,7 +131,9 @@ test_link_retires_moved_sources() {
     remove_empty_directory "$test_dir/full"
     remove_empty_directory "$test_dir/dir-link"
     remove_empty_directory "$test_dir/no-such-dir"
-    [ ! -e "$test_dir/empty" ] && [ -f "$test_dir/full/file" ] && [ -L "$test_dir/dir-link" ]
+    [ ! -e "$test_dir/empty" ]
+    [ -f "$test_dir/full/file" ]
+    [ -L "$test_dir/dir-link" ]
     ln -s "$test_dir/old-source" "$test_dir/stuck"
     rm() { return 33; }
     if retire_link "$test_dir/old-source" "$test_dir/stuck"; then
@@ -566,11 +580,15 @@ test_eza_index_and_download_failures() {
     export DOTFILES_LOCAL_BIN="$test_dir/bin"
     command() {
         case "$*" in
-            '-v eza'|'-v oh-my-posh'|'-v zoxide') return 1 ;;
+            '-v eza') return 1 ;;
             *) builtin command "$@" ;;
         esac
     }
-    curl() { printf 'fixture signing key\n'; }
+    # test_apt_key_pinning covers the key itself.
+    install_apt_key() {
+        printf 'install_apt_key %s\n' "$*" >> "$test_dir/commands"
+        [ ! -f "$test_dir/wrong-key" ] || return 1
+    }
     sudo() {
         printf '%s\n' "$*" >> "$test_dir/commands"
         case "$1" in
@@ -582,7 +600,14 @@ test_eza_index_and_download_failures() {
                 ;;
         esac
     }
+    # A key that is not the pinned one adds no repository.
+    : > "$test_dir/wrong-key"
     local status=0
+    install_eza > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_equal 'install_apt_key gierens https://raw.githubusercontent.com/eza-community/eza/main/deb.asc 1548BC8A4B4D2688F9B0DAF7EC29E2090CE3FD43' "$(cat "$test_dir/commands")"
+    rm "$test_dir/wrong-key"
+    status=0
     install_eza > "$test_dir/output" 2>&1 || status=$?
     assert_equal 44 "$status"
     assert_equal 'apt-get update -qq' "$(tail -n 1 "$test_dir/commands")"
@@ -601,17 +626,115 @@ test_eza_index_and_download_failures() {
     : > "$test_dir/commands"
     install_charm_tools
     assert_equal 'apt-get install -y glow' "$(tail -n 1 "$test_dir/commands")"
-    assert_contains "$(cat "$test_dir/commands")" 'gpg --dearmor --yes -o /etc/apt/keyrings/charm.gpg'
+    assert_contains "$(cat "$test_dir/commands")" 'install_apt_key charm https://repo.charm.sh/apt/gpg.key ED927B38BE981E53CA09153D03BBF595D4DFD35C'
     command() {
         case "$*" in
             '-v glow'|'-v gum') return 0 ;;
-            '-v oh-my-posh'|'-v zoxide') return 1 ;;
             *) builtin command "$@" ;;
         esac
     }
     : > "$test_dir/commands"
     install_charm_tools
     assert_equal '' "$(cat "$test_dir/commands")"
+}
+
+# A repository's signing key is installed only when the downloaded file holds
+# exactly the pinned key. The fingerprints come from gpg --show-keys in a
+# throwaway home, so no ~/.gnupg appears; where gpg is installed, real keys
+# check that, and that a second key or no key at all is refused.
+test_apt_key_pinning() {
+    source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    export TMPDIR="$test_dir/tmp"
+    mkdir -p "$TMPDIR"
+    local pinned=1548BC8A4B4D2688F9B0DAF7EC29E2090CE3FD43
+    curl() {
+        local output="" url=""
+        printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                -o) output="$2"; shift ;;
+                -*) ;;
+                *) url="$1" ;;
+            esac
+            shift
+        done
+        [ ! -f "$DOTFILES_TEST_FIXTURE/offline" ] || return 22
+        printf 'key from %s\n' "$url" > "$output"
+    }
+    sudo() {
+        printf 'sudo %s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        case "$1" in
+            gpg) cat > "$DOTFILES_TEST_FIXTURE/dearmored" ;;
+        esac
+    }
+    gpg() { echo 'gpg runs only through the mocked key_fingerprints here' >&2; return 99; }
+    key_fingerprints() { cat "$DOTFILES_TEST_FIXTURE/fingerprints"; }
+    # The pinned key: dearmored into the repository's keyring from the file checked.
+    printf '%s\n' "$pinned" > "$test_dir/fingerprints"
+    install_apt_key gierens https://example.invalid/deb.asc "$pinned"
+    assert_equal 'key from https://example.invalid/deb.asc' "$(cat "$test_dir/dearmored")"
+    assert_contains "$(cat "$test_dir/commands")" 'sudo gpg --dearmor --yes -o /etc/apt/keyrings/gierens.gpg'
+    assert_contains "$(head -n 1 "$test_dir/commands")" '--retry 5'
+    assert_equal 0 "$(find "$TMPDIR" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+    # Another key, a second key beside the pinned one, or none: nothing reaches apt.
+    local found status
+    for found in 0123456789ABCDEF0123456789ABCDEF01234567 "$pinned"$'\n'0123456789ABCDEF0123456789ABCDEF01234567 ''; do
+        printf '%s' "$found" > "$test_dir/fingerprints"
+        : > "$test_dir/commands"
+        status=0
+        install_apt_key gierens https://example.invalid/deb.asc "$pinned" > "$test_dir/output" 2>&1 || status=$?
+        assert_equal 1 "$status"
+        assert_contains "$(cat "$test_dir/output")" 'is not the one pinned for the gierens repository'
+        assert_contains "$(cat "$test_dir/output")" "expected $pinned"
+        assert_equal 0 "$(grep -c '^sudo' "$test_dir/commands" || :)"
+    done
+    assert_contains "$(cat "$test_dir/output")" 'received no OpenPGP key'
+    # A failed download and a missing gpg stop before sudo as well.
+    printf '%s\n' "$pinned" > "$test_dir/fingerprints"
+    : > "$test_dir/offline"
+    : > "$test_dir/commands"
+    status=0
+    install_apt_key gierens https://example.invalid/deb.asc "$pinned" > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 22 "$status"
+    assert_equal 0 "$(grep -c '^sudo' "$test_dir/commands" || :)"
+    rm "$test_dir/offline"
+    unset -f gpg
+    command() {
+        case "$*" in
+            '-v gpg') return 1 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    status=0
+    install_apt_key gierens https://example.invalid/deb.asc "$pinned" > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'gnupg is not installed'
+    unset -f command
+    # Sourcing again brings back the real key_fingerprints.
+    source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    if ! command -v gpg >/dev/null 2>&1; then
+        echo "  (gpg is not installed; skipped the real-key part)"
+        return 0
+    fi
+    # Real keys: one fingerprint per key, primaries only, and no keyring left behind.
+    local keyring="$test_dir/keyring" fpr_one fpr_two
+    mkdir -m 700 "$keyring"
+    GNUPGHOME="$keyring" gpg --batch --quiet --passphrase '' --quick-gen-key 'Fixture One <one@example.invalid>' ed25519 cert,sign never 2>/dev/null
+    GNUPGHOME="$keyring" gpg --batch --quiet --passphrase '' --quick-gen-key 'Fixture Two <two@example.invalid>' ed25519 cert,sign never 2>/dev/null
+    fpr_one="$(GNUPGHOME="$keyring" gpg --batch --with-colons --list-keys one@example.invalid | awk -F: '$1 == "fpr" { print $10; exit }')"
+    fpr_two="$(GNUPGHOME="$keyring" gpg --batch --with-colons --list-keys two@example.invalid | awk -F: '$1 == "fpr" { print $10; exit }')"
+    GNUPGHOME="$keyring" gpg --batch --armor --export one@example.invalid > "$test_dir/one.asc"
+    GNUPGHOME="$keyring" gpg --batch --armor --export one@example.invalid two@example.invalid > "$test_dir/both.asc"
+    printf 'not a key\n' > "$test_dir/garbage.asc"
+    local home="$test_dir/home"
+    mkdir -p "$home"
+    assert_equal "$fpr_one" "$(HOME="$home" key_fingerprints "$test_dir/one.asc")"
+    assert_equal "$fpr_one"$'\n'"$fpr_two" "$(HOME="$home" key_fingerprints "$test_dir/both.asc")"
+    assert_equal '' "$(HOME="$home" key_fingerprints "$test_dir/garbage.asc" 2>/dev/null || :)"
+    GNUPGHOME="$keyring" gpgconf --kill all 2>/dev/null || :
+    [ ! -e "$home/.gnupg" ]
+    assert_equal 0 "$(find "$TMPDIR" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
 }
 
 # Held packages are left out of every apt-get install: one with an upgrade
@@ -665,7 +788,7 @@ test_apt_held_packages_left_alone() {
             *) builtin command "$@" ;;
         esac
     }
-    curl() { printf 'fixture signing key\n'; }
+    install_apt_key() { :; }
     printf '\n' > "$test_dir/held"
     : > "$test_dir/commands"
     install_charm_tools > "$test_dir/output"
@@ -688,118 +811,107 @@ test_apt_held_packages_left_alone() {
     assert_equal '' "$(cat "$test_dir/commands")"
 }
 
-# oh-my-posh and zoxide come from their installer scripts. A copy in the local
-# bin directory is the bootstrap's, and updating reruns the installer when the
-# latest tag differs from the recorded one; a copy elsewhere is left alone.
+# oh-my-posh and zoxide come from GitHub releases like the other release tools,
+# whose installing and updating test_github_release_install and _update cover:
+# oh-my-posh as a bare binary built for the system, zoxide from an archive
+# whose man pages stay out of the bin directory.
 test_script_installers_install_and_update() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    trust_release_downloads
     export DOTFILES_TEST_FIXTURE="$test_dir"
-    # A new account has no local bin directory yet, and the oh-my-posh
-    # installer refuses a missing one.
+    # A new account has no local bin directory yet.
     export DOTFILES_LOCAL_BIN="$test_dir/new/bin"
+    export TMPDIR="$test_dir/tmp"
     local records="$XDG_STATE_HOME/dotfiles/releases"
+    mkdir -p "$TMPDIR" "$test_dir/payload/man/man1"
+    printf '#!/bin/sh\necho zoxide\n' > "$test_dir/payload/zoxide"
+    printf 'manual\n' > "$test_dir/payload/man/man1/zoxide.1"
+    tar -czf "$test_dir/zoxide.tar.gz" -C "$test_dir/payload" .
     printf 'v1.0.0\n' > "$test_dir/latest"
+    printf 'Linux\n' > "$test_dir/os"
+    printf 'x86_64\n' > "$test_dir/arch"
+    uname() {
+        case "${1:-}" in
+            -m) cat "$DOTFILES_TEST_FIXTURE/arch" ;;
+            -s) cat "$DOTFILES_TEST_FIXTURE/os" ;;
+            *) command uname "$@" ;;
+        esac
+    }
+    # Copies on this machine's PATH must not decide.
     command() {
         case "$*" in
-            '-v oh-my-posh'|'-v zoxide')
-                if [ -e "$DOTFILES_LOCAL_BIN/$2" ]; then
-                    printf '%s/%s\n' "$DOTFILES_LOCAL_BIN" "$2"
-                elif [ -f "$DOTFILES_TEST_FIXTURE/elsewhere-$2" ]; then
-                    printf '/opt/homebrew/bin/%s\n' "$2"
-                else
-                    return 1
-                fi
-                ;;
+            '-v oh-my-posh'|'-v zoxide') [ -f "$DOTFILES_TEST_FIXTURE/elsewhere-$2" ] ;;
             *) builtin command "$@" ;;
         esac
     }
     curl() {
-        local url="" arg
-        for arg in "$@"; do
-            case "$arg" in https://*) url="$arg" ;; esac
+        local output="" url=""
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                -o|-w) output="$2"; shift ;;
+                -*) ;;
+                *) url="$1" ;;
+            esac
+            shift
         done
         printf '%s\n' "$url" >> "$DOTFILES_TEST_FIXTURE/requests"
-        [ ! -f "$DOTFILES_TEST_FIXTURE/offline" ] || return 45
         case "$url" in
             */releases/latest) printf '%s/tag/%s' "${url%/latest}" "$(cat "$DOTFILES_TEST_FIXTURE/latest")" ;;
-            *) printf 'echo fixture installer\n' ;;
+            */releases/download/*.tar.gz) cp "$DOTFILES_TEST_FIXTURE/zoxide.tar.gz" "$output" ;;
+            */releases/download/*) printf '#!/bin/sh\necho oh-my-posh\n' > "$output" ;;
+            *) echo "unexpected URL $url" >&2; return 99 ;;
         esac
     }
-    # Consume only fixture content: never execute downloaded commands in tests.
-    # The mocks put a binary where the real installers would.
-    bash() {
-        cat >/dev/null
-        printf 'bash %s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/installers"
-        [ ! -f "$DOTFILES_TEST_FIXTURE/installer-fails" ] || return 59
-        printf '#!/bin/sh\n' > "$4/oh-my-posh" && chmod +x "$4/oh-my-posh"
-    }
-    sh() {
-        cat >/dev/null
-        printf 'sh %s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/installers"
-        printf '#!/bin/sh\n' > "$4/zoxide" && chmod +x "$4/zoxide"
-    }
-    : > "$test_dir/offline"
-    local status=0
-    bootstrap_oh_my_posh > "$test_dir/output" 2>&1 || status=$?
-    assert_equal 45 "$status"
-    status=0
-    bootstrap_zoxide > "$test_dir/output" 2>&1 || status=$?
-    assert_equal 45 "$status"
-    [ ! -e "$test_dir/installers" ] && [ ! -e "$records" ]
-    rm "$test_dir/offline"
     bootstrap_oh_my_posh > "$test_dir/output"
     bootstrap_zoxide > "$test_dir/output"
-    assert_equal "bash -s -- -d $test_dir/new/bin -v v1.0.0
-sh -s -- --bin-dir $test_dir/new/bin" "$(cat "$test_dir/installers")"
+    assert_equal "https://github.com/JanDeDobbeleer/oh-my-posh/releases/latest
+https://github.com/JanDeDobbeleer/oh-my-posh/releases/download/v1.0.0/posh-linux-amd64
+https://github.com/ajeetdsouza/zoxide/releases/latest
+https://github.com/ajeetdsouza/zoxide/releases/download/v1.0.0/zoxide-1.0.0-x86_64-unknown-linux-musl.tar.gz" "$(cat "$test_dir/requests")"
+    # Only the binaries land in the bin directory, executable.
+    assert_equal $'oh-my-posh\nzoxide' "$(ls "$test_dir/new/bin")"
+    assert_equal oh-my-posh "$("$test_dir/new/bin/oh-my-posh")"
+    assert_equal zoxide "$("$test_dir/new/bin/zoxide")"
+    assert_equal '' "$(find "$test_dir/new" -name zoxide.1)"
     assert_equal v1.0.0 "$(cat "$records/JanDeDobbeleer/oh-my-posh")"
     assert_equal v1.0.0 "$(cat "$records/ajeetdsouza/zoxide")"
-    # A rerun of the installer keeps them without reaching the network.
+    # A plain rerun makes no request; updating while current looks once each.
     : > "$test_dir/requests"
     bootstrap_oh_my_posh > "$test_dir/output"
     bootstrap_zoxide > "$test_dir/output"
     assert_equal '' "$(cat "$test_dir/requests")"
-    # Updating while current: one lookup each and no installer.
     export DOTFILES_UPDATE=1
-    : > "$test_dir/installers"
     bootstrap_oh_my_posh > "$test_dir/output"
     bootstrap_zoxide >> "$test_dir/output"
-    assert_equal 2 "$(wc -l < "$test_dir/requests" | tr -d ' ')"
-    assert_equal '' "$(cat "$test_dir/installers")"
+    assert_equal "https://github.com/JanDeDobbeleer/oh-my-posh/releases/latest
+https://github.com/ajeetdsouza/zoxide/releases/latest" "$(cat "$test_dir/requests")"
     assert_contains "$(cat "$test_dir/output")" 'oh-my-posh v1.0.0 is current'
-    # A newer release: a failed installer keeps the recorded tag, the retry records the new one.
+    # A newer tag is downloaded again.
     printf 'v1.1.0\n' > "$test_dir/latest"
-    : > "$test_dir/installer-fails"
-    status=0
-    bootstrap_oh_my_posh > "$test_dir/output" 2>&1 || status=$?
-    assert_equal 59 "$status"
-    assert_equal v1.0.0 "$(cat "$records/JanDeDobbeleer/oh-my-posh")"
-    rm "$test_dir/installer-fails"
     bootstrap_oh_my_posh > "$test_dir/output"
-    assert_contains "$(cat "$test_dir/output")" 'Updating oh-my-posh to v1.1.0 (installed: v1.0.0)'
-    assert_equal "bash -s -- -d $test_dir/new/bin -v v1.1.0" "$(tail -n 1 "$test_dir/installers")"
+    bootstrap_zoxide > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/requests")" '/oh-my-posh/releases/download/v1.1.0/posh-linux-amd64'
+    assert_contains "$(cat "$test_dir/requests")" '/zoxide/releases/download/v1.1.0/zoxide-1.1.0-x86_64-unknown-linux-musl.tar.gz'
     assert_equal v1.1.0 "$(cat "$records/JanDeDobbeleer/oh-my-posh")"
-    # A copy installed before tags were recorded is fetched once.
-    rm "$records/ajeetdsouza/zoxide"
-    bootstrap_zoxide > "$test_dir/output"
-    assert_equal "sh -s -- --bin-dir $test_dir/new/bin" "$(tail -n 1 "$test_dir/installers")"
     assert_equal v1.1.0 "$(cat "$records/ajeetdsouza/zoxide")"
-    # A link in the bin directory is not the bootstrap's either.
-    mkdir -p "$test_dir/pipx"
-    mv "$test_dir/new/bin/zoxide" "$test_dir/pipx/zoxide"
-    ln -s "$test_dir/pipx/zoxide" "$test_dir/new/bin/zoxide"
-    rm "$records/ajeetdsouza/zoxide"
-    : > "$test_dir/installers"
-    bootstrap_zoxide > "$test_dir/output"
-    assert_equal '' "$(cat "$test_dir/installers")"
-    [ -L "$test_dir/new/bin/zoxide" ]
-    # A copy from elsewhere is not the bootstrap's to replace.
+    # macOS takes the same route with its own build.
+    unset DOTFILES_UPDATE
+    printf 'Darwin\n' > "$test_dir/os"
+    printf 'arm64\n' > "$test_dir/arch"
+    rm "$test_dir/new/bin/oh-my-posh"
+    bootstrap_oh_my_posh > "$test_dir/output"
+    assert_equal 'https://github.com/JanDeDobbeleer/oh-my-posh/releases/download/v1.1.0/posh-darwin-arm64' "$(tail -n 1 "$test_dir/requests")"
+    assert_equal oh-my-posh "$("$test_dir/new/bin/oh-my-posh")"
+    # A copy elsewhere on PATH is left alone.
     rm "$test_dir/new/bin/zoxide"
     : > "$test_dir/elsewhere-zoxide"
-    : > "$test_dir/requests"
     printf 'v1.2.0\n' > "$test_dir/latest"
+    export DOTFILES_UPDATE=1
+    : > "$test_dir/requests"
     bootstrap_zoxide > "$test_dir/output"
-    assert_contains "$(cat "$test_dir/output")" 'zoxide at /opt/homebrew/bin/zoxide was not installed by the bootstrap; left alone'
+    assert_contains "$(cat "$test_dir/output")" 'zoxide not installed by the bootstrap; left alone'
     assert_equal '' "$(cat "$test_dir/requests")"
+    [ ! -e "$test_dir/new/bin/zoxide" ]
 }
 
 test_tmux_plugin_failure_and_retry() {
@@ -896,6 +1008,7 @@ ZINIT
 
 test_github_release_install() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    trust_release_downloads
     export DOTFILES_TEST_FIXTURE="$test_dir"
     export DOTFILES_LOCAL_BIN="$test_dir/bin"
     export TMPDIR="$test_dir/tmp"
@@ -967,7 +1080,8 @@ test_github_release_install() {
     # Several binaries from one zip; {version} drops the v, Go and Debian spellings differ.
     install_github_release owner/multi 'multi_{version}_linux_{arch_go}_{arch_deb}_{arch_amd64}_{arch_node}.zip' first second
     assert_equal 'https://github.com/owner/multi/releases/download/v1.2.3/multi_1.2.3_linux_x86_64_amd64_amd64_x64.zip' "$(tail -n 1 "$test_dir/downloads")"
-    [ -x "$test_dir/bin/first" ] && [ -x "$test_dir/bin/second" ]
+    [ -x "$test_dir/bin/first" ]
+    [ -x "$test_dir/bin/second" ]
     status=0
     install_github_release owner/multi 'multi_{version}_linux_{arch_go}_{arch_deb}.zip' absent > "$test_dir/output" 2>&1 || status=$?
     assert_equal 1 "$status"
@@ -994,6 +1108,7 @@ test_github_release_install() {
 # leaves them and the record alone, and a copy from elsewhere stays.
 test_github_release_update() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    trust_release_downloads
     export DOTFILES_TEST_FIXTURE="$test_dir"
     export DOTFILES_LOCAL_BIN="$test_dir/bin"
     export TMPDIR="$test_dir/tmp"
@@ -1090,6 +1205,318 @@ test_github_release_update() {
     assert_equal v1.1.0 "$(cat "$record")"
 }
 
+# Every release download is checked against the SHA-256 that GitHub's releases
+# API lists for the asset. The digest is read from pretty-printed and minified
+# JSON alike, and never from a neighbouring asset, a nested object or a quoted
+# string. An asset without a digest, an unreadable release or a file that does
+# not match installs and records nothing. A token reaches curl on stdin, never
+# in its arguments. file_sha256 agrees with the standard test vector and with
+# sha256sum and shasum where they exist.
+test_release_download_verification() {
+    source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    export DOTFILES_LOCAL_BIN="$test_dir/bin"
+    export TMPDIR="$test_dir/tmp"
+    unset GITHUB_TOKEN
+    local record="$XDG_STATE_HOME/dotfiles/releases/owner/tool" status sum fixture asset
+    local abc_sum=ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+    local list_sum other_sum fake_sum
+    list_sum="$(printf '%064d' 0 | tr 0 a)"
+    other_sum="$(printf '%064d' 0 | tr 0 b)"
+    fake_sum="$(printf '%064d' 0 | tr 0 f)"
+    mkdir -p "$TMPDIR" "$test_dir/payload"
+    printf '#!/bin/sh\necho verified-release\n' > "$test_dir/payload/tool"
+    chmod +x "$test_dir/payload/tool"
+    tar -czf "$test_dir/asset.tar.gz" -C "$test_dir/payload" .
+    printf abc > "$test_dir/abc"
+    assert_equal "$abc_sum" "$(file_sha256 "$test_dir/abc")"
+    sum="$(file_sha256 "$test_dir/asset.tar.gz")"
+    if command -v sha256sum >/dev/null 2>&1; then
+        assert_equal "$sum" "$(sha256sum "$test_dir/asset.tar.gz" | cut -d ' ' -f 1)"
+    fi
+    if command -v shasum >/dev/null 2>&1; then
+        assert_equal "$sum" "$(shasum -a 256 "$test_dir/asset.tar.gz" | cut -d ' ' -f 1)"
+        # Without sha256sum, file_sha256 falls back to shasum.
+        command() { case "$*" in '-v sha256sum') return 1 ;; *) builtin command "$@" ;; esac; }
+        shasum() { : > "$DOTFILES_TEST_FIXTURE/shasum-used"; builtin command shasum "$@"; }
+        assert_equal "$abc_sum" "$(file_sha256 "$test_dir/abc")"
+        assert_equal "$sum" "$(file_sha256 "$test_dir/asset.tar.gz")"
+        unset -f command shasum
+        [ -f "$test_dir/shasum-used" ]
+    fi
+    # The release as the API lists it. A checksum file and an asset whose name
+    # ends in the same characters come before the tarball; an asset without a
+    # digest follows it, labelled with text that quotes one, as the body does.
+    cat > "$test_dir/release-pretty.json" <<JSON
+{
+  "url": "https://api.github.com/repos/owner/tool/releases/1",
+  "assets_url": "https://api.github.com/repos/owner/tool/releases/1/assets",
+  "upload_url": "https://uploads.github.com/repos/owner/tool/releases/1/assets{?name,label}",
+  "html_url": "https://github.com/owner/tool/releases/tag/v1.2.3",
+  "id": 1,
+  "author": {
+    "login": "someone",
+    "id": 7,
+    "node_id": "U_kgDOAAAABw",
+    "avatar_url": "https://avatars.githubusercontent.com/u/7?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/someone",
+    "html_url": "https://github.com/someone",
+    "type": "User",
+    "site_admin": false
+  },
+  "node_id": "RE_kwDOAAAAAc4AAAAB",
+  "tag_name": "v1.2.3",
+  "target_commitish": "main",
+  "name": "v1.2.3",
+  "draft": false,
+  "immutable": false,
+  "prerelease": false,
+  "created_at": "2026-10-01T12:00:00Z",
+  "updated_at": "2026-10-01T12:10:00Z",
+  "published_at": "2026-10-01T12:10:00Z",
+  "assets": [
+    {
+      "url": "https://api.github.com/repos/owner/tool/releases/assets/11",
+      "id": 11,
+      "node_id": "RA_kwDOAAAAAc4AAAAL",
+      "name": "tool-v1.2.3.tar.gz.sha256",
+      "label": "",
+      "uploader": {
+        "login": "someone",
+        "id": 7,
+        "url": "https://api.github.com/users/someone",
+        "type": "User",
+        "site_admin": false
+      },
+      "content_type": "text/plain",
+      "state": "uploaded",
+      "size": 84,
+      "digest": "sha256:$list_sum",
+      "download_count": 12,
+      "created_at": "2026-10-01T12:05:00Z",
+      "updated_at": "2026-10-01T12:05:00Z",
+      "browser_download_url": "https://github.com/owner/tool/releases/download/v1.2.3/tool-v1.2.3.tar.gz.sha256"
+    },
+    {
+      "url": "https://api.github.com/repos/owner/tool/releases/assets/12",
+      "id": 12,
+      "node_id": "RA_kwDOAAAAAc4AAAAM",
+      "name": "x-tool-v1.2.3.tar.gz",
+      "label": "",
+      "uploader": {
+        "login": "someone",
+        "id": 7,
+        "url": "https://api.github.com/users/someone",
+        "type": "User",
+        "site_admin": false
+      },
+      "content_type": "application/gzip",
+      "state": "uploaded",
+      "size": 4096,
+      "digest": "sha256:$other_sum",
+      "download_count": 5,
+      "created_at": "2026-10-01T12:05:00Z",
+      "updated_at": "2026-10-01T12:05:00Z",
+      "browser_download_url": "https://github.com/owner/tool/releases/download/v1.2.3/x-tool-v1.2.3.tar.gz"
+    },
+    {
+      "url": "https://api.github.com/repos/owner/tool/releases/assets/13",
+      "id": 13,
+      "node_id": "RA_kwDOAAAAAc4AAAAN",
+      "name": "tool-v1.2.3.tar.gz",
+      "label": "",
+      "uploader": {
+        "login": "someone",
+        "id": 7,
+        "url": "https://api.github.com/users/someone",
+        "type": "User",
+        "site_admin": false
+      },
+      "content_type": "application/gzip",
+      "state": "uploaded",
+      "size": 2048,
+      "digest": "sha256:$sum",
+      "download_count": 40,
+      "created_at": "2026-10-01T12:05:00Z",
+      "updated_at": "2026-10-01T12:05:00Z",
+      "browser_download_url": "https://github.com/owner/tool/releases/download/v1.2.3/tool-v1.2.3.tar.gz"
+    },
+    {
+      "url": "https://api.github.com/repos/owner/tool/releases/assets/14",
+      "id": 14,
+      "node_id": "RA_kwDOAAAAAc4AAAAO",
+      "name": "nodigest.tar.gz",
+      "label": "Built,\"digest\":\"sha256:$fake_sum\"",
+      "uploader": {
+        "login": "someone",
+        "id": 7,
+        "url": "https://api.github.com/users/someone",
+        "type": "User",
+        "site_admin": false
+      },
+      "content_type": "application/gzip",
+      "state": "uploaded",
+      "size": 1024,
+      "digest": null,
+      "download_count": 0,
+      "created_at": "2026-10-01T12:05:00Z",
+      "updated_at": "2026-10-01T12:05:00Z",
+      "browser_download_url": "https://github.com/owner/tool/releases/download/v1.2.3/nodigest.tar.gz"
+    },
+    {
+      "url": "https://api.github.com/repos/owner/tool/releases/assets/15",
+      "id": 15,
+      "node_id": "RA_kwDOAAAAAc4AAAAP",
+      "name": "sha512.tar.gz",
+      "label": "",
+      "uploader": {
+        "login": "someone",
+        "id": 7,
+        "url": "https://api.github.com/users/someone",
+        "type": "User",
+        "site_admin": false
+      },
+      "content_type": "application/gzip",
+      "state": "uploaded",
+      "size": 1024,
+      "digest": "sha512:$fake_sum$fake_sum",
+      "download_count": 0,
+      "created_at": "2026-10-01T12:06:00Z",
+      "updated_at": "2026-10-01T12:06:00Z",
+      "browser_download_url": "https://github.com/owner/tool/releases/download/v1.2.3/sha512.tar.gz"
+    }
+  ],
+  "tarball_url": "https://api.github.com/repos/owner/tool/tarball/v1.2.3",
+  "zipball_url": "https://api.github.com/repos/owner/tool/zipball/v1.2.3",
+  "body": "Checksums, see \"digest\": \"sha256:$fake_sum\", below"
+}
+JSON
+    # The same release minified: indentation and the space after each key go,
+    # and so do the line breaks.
+    sed 's/^[[:space:]]*//; s/": /":/' "$test_dir/release-pretty.json" | tr -d '\n' > "$test_dir/release-min.json"
+    assert_equal 0 "$(tr -cd '\n' < "$test_dir/release-min.json" | wc -c | tr -d ' ')"
+    assert_contains "$(cat "$test_dir/release-min.json")" '"assets":[{"url":"https://api.github.com/repos/owner/tool/releases/assets/11","id":11,'
+    uname() { if [ "${1:-}" = -m ]; then printf 'x86_64\n'; else command uname "$@"; fi; }
+    curl() {
+        local output="" url="" write_out="" token=""
+        printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/calls"
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                -o) output="$2"; shift ;;
+                -w) write_out="$2"; shift ;;
+                -H)
+                    # A header read from stdin is how a token arrives.
+                    if [ "$2" = @- ]; then
+                        cat > "$DOTFILES_TEST_FIXTURE/stdin"
+                        token=1
+                    fi
+                    shift
+                    ;;
+                --retry|--retry-max-time) shift ;;
+                -*) ;;
+                *) url="$1" ;;
+            esac
+            shift
+        done
+        case "$url" in
+            https://github.com/owner/tool/releases/latest)
+                [ "$write_out" = '%{url_effective}' ] || return 98
+                printf 'https://github.com/owner/tool/releases/tag/v1.2.3'
+                ;;
+            https://api.github.com/repos/owner/tool/releases/tags/v1.2.3)
+                [ ! -f "$DOTFILES_TEST_FIXTURE/api-down" ] || return 22
+                [ -z "$token" ] || [ ! -f "$DOTFILES_TEST_FIXTURE/token-rejected" ] || return 22
+                cat "$DOTFILES_TEST_FIXTURE/release.json"
+                ;;
+            https://github.com/owner/tool/releases/download/v1.2.3/tool-v1.2.3.tar.gz)
+                printf '%s\n' "$url" >> "$DOTFILES_TEST_FIXTURE/downloads"
+                if [ -f "$DOTFILES_TEST_FIXTURE/corrupt" ]; then
+                    printf 'not the release\n' > "$output"
+                else
+                    cp "$DOTFILES_TEST_FIXTURE/asset.tar.gz" "$output"
+                fi
+                ;;
+            *) echo "unexpected URL $url" >&2; return 99 ;;
+        esac
+    }
+    for fixture in release-pretty.json release-min.json; do
+        cp "$test_dir/$fixture" "$test_dir/release.json"
+        assert_equal "$sum" "$(release_asset_digest owner/tool v1.2.3 tool-v1.2.3.tar.gz)"
+        assert_equal "$list_sum" "$(release_asset_digest owner/tool v1.2.3 tool-v1.2.3.tar.gz.sha256)"
+        assert_equal "$other_sum" "$(release_asset_digest owner/tool v1.2.3 x-tool-v1.2.3.tar.gz)"
+        # A digest in another algorithm cannot be compared either.
+        for asset in nodigest.tar.gz sha512.tar.gz; do
+            status=0
+            release_asset_digest owner/tool v1.2.3 "$asset" > "$test_dir/output" 2>&1 || status=$?
+            assert_equal 1 "$status"
+            assert_contains "$(cat "$test_dir/output")" "lists no SHA-256 digest for $asset"
+        done
+        # An asset the release lacks, such as one renamed upstream, says so.
+        status=0
+        release_asset_digest owner/tool v1.2.3 absent.tar.gz > "$test_dir/output" 2>&1 || status=$?
+        assert_equal 1 "$status"
+        assert_contains "$(cat "$test_dir/output")" 'Release v1.2.3 of owner/tool has no asset named absent.tar.gz'
+    done
+    # Without a token curl reads nothing from stdin; with one, the header
+    # arrives there and the arguments never hold it.
+    assert_equal 0 "$(grep -c -- '@-' "$test_dir/calls")"
+    [ ! -e "$test_dir/stdin" ]
+    export GITHUB_TOKEN=fixture-secret-token
+    assert_equal "$sum" "$(release_asset_digest owner/tool v1.2.3 tool-v1.2.3.tar.gz)"
+    assert_contains "$(tail -n 1 "$test_dir/calls")" 'https://api.github.com/repos/owner/tool/releases/tags/v1.2.3'
+    assert_contains "$(tail -n 1 "$test_dir/calls")" '-H @-'
+    assert_equal 'Authorization: Bearer fixture-secret-token' "$(cat "$test_dir/stdin")"
+    assert_equal 0 "$(grep -c fixture-secret-token "$test_dir/calls")"
+    unset GITHUB_TOKEN
+    rm "$test_dir/stdin"
+    assert_equal "$sum" "$(release_asset_digest owner/tool v1.2.3 tool-v1.2.3.tar.gz)"
+    assert_equal 1 "$(grep -c -- '@-' "$test_dir/calls")"
+    [ ! -e "$test_dir/stdin" ]
+    # GitHub answers a token it does not accept with 401 instead of answering
+    # anonymously, so one more request goes without it.
+    export GITHUB_TOKEN=fixture-secret-token
+    : > "$test_dir/token-rejected"
+    local calls_before
+    calls_before="$(wc -l < "$test_dir/calls" | tr -d ' ')"
+    assert_equal "$sum" "$(release_asset_digest owner/tool v1.2.3 tool-v1.2.3.tar.gz 2> "$test_dir/output")"
+    assert_contains "$(cat "$test_dir/output")" 'trying once without it'
+    assert_equal "$((calls_before + 2))" "$(wc -l < "$test_dir/calls" | tr -d ' ')"
+    assert_contains "$(tail -n 2 "$test_dir/calls" | head -n 1)" '-H @-'
+    assert_equal 0 "$(tail -n 1 "$test_dir/calls" | grep -c -- '@-' || :)"
+    unset GITHUB_TOKEN
+    rm "$test_dir/token-rejected" "$test_dir/stdin"
+    # An unreadable release stops the install before anything is downloaded.
+    : > "$test_dir/api-down"
+    status=0
+    install_github_release owner/tool 'tool-{tag}.tar.gz' tool > "$test_dir/output" 2>&1 || status=$?
+    [ "$status" -ne 0 ]
+    assert_contains "$(cat "$test_dir/output")" 'Could not read release v1.2.3 of owner/tool'
+    [ ! -e "$test_dir/downloads" ]
+    [ ! -e "$DOTFILES_LOCAL_BIN/tool" ]
+    [ ! -e "$record" ]
+    rm "$test_dir/api-down"
+    # A download that differs from the listed digest is deleted before it is
+    # unpacked, and nothing is installed or recorded; the intact file installs.
+    : > "$test_dir/corrupt"
+    status=0
+    install_github_release owner/tool 'tool-{tag}.tar.gz' tool > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'does not match the SHA-256 GitHub lists for it'
+    assert_contains "$(cat "$test_dir/output")" "expected $sum"
+    assert_equal https://github.com/owner/tool/releases/download/v1.2.3/tool-v1.2.3.tar.gz "$(cat "$test_dir/downloads")"
+    [ ! -e "$DOTFILES_LOCAL_BIN/tool" ]
+    [ ! -e "$record" ]
+    assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-release.*' | wc -l | tr -d ' ')"
+    rm "$test_dir/corrupt"
+    install_github_release owner/tool 'tool-{tag}.tar.gz' tool > "$test_dir/output"
+    assert_equal verified-release "$("$DOTFILES_LOCAL_BIN/tool")"
+    assert_equal v1.2.3 "$(cat "$record")"
+    assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-release.*' | wc -l | tr -d ' ')"
+    # Every call, the API's included, retries transient failures.
+    assert_equal 0 "$(grep -c -v -- '--retry 5' "$test_dir/calls")"
+}
+
 test_fd_link_for_debian() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
     export DOTFILES_TEST_FIXTURE="$test_dir"
@@ -1126,55 +1553,85 @@ test_fd_link_for_debian() {
 
 test_mise_bootstrap_and_runtimes() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    trust_release_downloads
     export DOTFILES_TEST_FIXTURE="$test_dir"
     export DOTFILES_LOCAL_BIN="$test_dir/bin"
+    export TMPDIR="$test_dir/tmp"
+    mkdir -p "$TMPDIR"
+    # The local bin directory is on PATH; mise-present stands for Homebrew's copy.
     command() {
         case "$*" in
-            '-v mise') [ -f "$DOTFILES_TEST_FIXTURE/mise-present" ] && printf '/opt/homebrew/bin/mise\n' ;;
+            '-v mise')
+                if [ -x "$DOTFILES_LOCAL_BIN/mise" ]; then
+                    printf '%s/mise\n' "$DOTFILES_LOCAL_BIN"
+                elif [ -f "$DOTFILES_TEST_FIXTURE/mise-present" ]; then
+                    printf '/opt/homebrew/bin/mise\n'
+                else
+                    return 1
+                fi
+                ;;
             *) builtin command "$@" ;;
         esac
     }
+    uname() { if [ "${1:-}" = -m ]; then printf 'x86_64\n'; else command uname "$@"; fi; }
+    # The release binary records its self-updates.
+    printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$DOTFILES_TEST_FIXTURE/self-updates"\n[ -f "$DOTFILES_TEST_FIXTURE/self-update-ok" ] || exit 62\n' > "$test_dir/mise-release"
     curl() {
-        printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        local output="" url=""
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                -o|-w) output="$2"; shift ;;
+                -*) ;;
+                *) url="$1" ;;
+            esac
+            shift
+        done
+        printf '%s\n' "$url" >> "$DOTFILES_TEST_FIXTURE/requests"
         [ -f "$DOTFILES_TEST_FIXTURE/retry" ] || return 45
-        printf 'installer script\n'
+        case "$url" in
+            https://github.com/jdx/mise/releases/latest) printf 'https://github.com/jdx/mise/releases/tag/v2026.10.1' ;;
+            https://github.com/jdx/mise/releases/download/*) cp "$DOTFILES_TEST_FIXTURE/mise-release" "$output" ;;
+            *) echo "unexpected URL $url" >&2; return 99 ;;
+        esac
     }
-    # Consume the fixture only: downloaded content is never executed in tests.
-    sh() {
-        local input
-        input="$(cat)"
-        [ -n "$input" ] || return 0
-        printf '%s\n' "$MISE_INSTALL_PATH" > "$DOTFILES_TEST_FIXTURE/install-path"
-        : > "$DOTFILES_TEST_FIXTURE/mise-present"
-    }
+    # Nothing downloaded may reach a shell.
+    sh() { printf 'sh %s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/shells"; cat >/dev/null; }
+    bash() { printf 'bash %s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/shells"; cat >/dev/null; }
     local status=0
     bootstrap_mise_binary > "$test_dir/output" 2>&1 || status=$?
     assert_equal 45 "$status"
-    [ ! -f "$test_dir/mise-present" ]
+    [ ! -e "$test_dir/bin/mise" ]
     : > "$test_dir/retry"
-    bootstrap_mise_binary
-    assert_equal "$test_dir/bin/mise" "$(cat "$test_dir/install-path")"
-    : > "$test_dir/commands"
-    bootstrap_mise_binary
-    assert_equal '' "$(cat "$test_dir/commands")"
-    # Updating: a mise from elsewhere is left alone; the bootstrap's own copy
-    # updates itself, and a failed self-update can be retried.
-    export DOTFILES_UPDATE=1
+    : > "$test_dir/requests"
     bootstrap_mise_binary > "$test_dir/output"
-    assert_contains "$(cat "$test_dir/output")" 'mise at /opt/homebrew/bin/mise was not installed by the bootstrap; left alone'
-    mkdir -p "$test_dir/bin"
-    printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$DOTFILES_TEST_FIXTURE/self-updates"\n[ -f "$DOTFILES_TEST_FIXTURE/self-update-ok" ] || exit 62\n' > "$test_dir/bin/mise"
-    chmod +x "$test_dir/bin/mise"
+    assert_equal 'https://github.com/jdx/mise/releases/latest
+https://github.com/jdx/mise/releases/download/v2026.10.1/mise-v2026.10.1-linux-x64-musl' "$(cat "$test_dir/requests")"
+    cmp -s "$test_dir/mise-release" "$test_dir/bin/mise"
+    [ -x "$test_dir/bin/mise" ]
+    # mise updates itself, so no tag is recorded for it.
+    [ ! -e "$XDG_STATE_HOME/dotfiles/releases/jdx/mise" ]
+    [ ! -e "$test_dir/shells" ]
+    : > "$test_dir/requests"
+    bootstrap_mise_binary > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" 'mise already installed'
+    assert_equal '' "$(cat "$test_dir/requests")"
+    [ ! -e "$test_dir/self-updates" ]
+    # Updating: the bootstrap's own copy updates itself, a failed self-update
+    # can be retried, and a mise from elsewhere is left alone.
+    export DOTFILES_UPDATE=1
     status=0
     bootstrap_mise_binary > "$test_dir/output" 2>&1 || status=$?
     assert_equal 62 "$status"
     : > "$test_dir/self-update-ok"
     bootstrap_mise_binary > "$test_dir/output"
     assert_equal $'self-update --yes\nself-update --yes' "$(cat "$test_dir/self-updates")"
-    assert_equal '' "$(cat "$test_dir/commands")"
-    unset DOTFILES_UPDATE
+    rm "$test_dir/bin/mise"
+    : > "$test_dir/mise-present"
     bootstrap_mise_binary > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" 'mise at /opt/homebrew/bin/mise was not installed by the bootstrap; left alone'
     assert_equal 2 "$(wc -l < "$test_dir/self-updates" | tr -d ' ')"
+    assert_equal '' "$(cat "$test_dir/requests")"
+    unset DOTFILES_UPDATE
     # Runtimes: a failed install reports, a retry finishes, a missing node is not success.
     mise() {
         printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/mise-commands"
@@ -1316,6 +1773,7 @@ test_yazi_flavors_install_and_retry() {
 
 test_neovim_release_install() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    trust_release_downloads
     export DOTFILES_TEST_FIXTURE="$test_dir"
     export DOTFILES_LOCAL_BIN="$test_dir/bin"
     export DOTFILES_LOCAL_OPT="$test_dir/opt"
@@ -1372,11 +1830,13 @@ test_neovim_release_install() {
     install_neovim_release > "$test_dir/output" 2>&1 || status=$?
     assert_equal 56 "$status"
     assert_contains "$(cat "$test_dir/output")" 'found 0.9.5, need'
-    [ ! -e "$test_dir/opt" ] && [ ! -e "$test_dir/bin/nvim" ]
+    [ ! -e "$test_dir/opt" ]
+    [ ! -e "$test_dir/bin/nvim" ]
     assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-nvim.*' | wc -l | tr -d ' ')"
     : > "$test_dir/retry"
     install_neovim_release > "$test_dir/output"
     assert_equal 'https://github.com/neovim/neovim/releases/download/v0.12.6/nvim-linux-x86_64.tar.gz' "$(cat "$test_dir/downloads")"
+    assert_equal 'neovim/neovim v0.12.6 nvim-linux-x86_64.tar.gz' "$(tail -n 1 "$test_dir/verified")"
     assert_equal "$test_dir/opt/nvim/bin/nvim" "$(readlink "$test_dir/bin/nvim")"
     assert_equal 'NVIM v0.12.6' "$("$test_dir/bin/nvim" --version)"
     [ -f "$test_dir/opt/nvim/share/nvim/runtime/filetype.lua" ]
@@ -1388,7 +1848,8 @@ test_neovim_release_install() {
     printf 'stale\n' > "$test_dir/opt/nvim/stale-file"
     install_neovim_release > "$test_dir/output"
     assert_equal 2 "$(wc -l < "$test_dir/downloads" | tr -d ' ')"
-    [ ! -e "$test_dir/opt/nvim/stale-file" ] && [ -x "$test_dir/opt/nvim/bin/nvim" ]
+    [ ! -e "$test_dir/opt/nvim/stale-file" ]
+    [ -x "$test_dir/opt/nvim/bin/nvim" ]
     # An archive without bin/nvim, or with a Neovim that is still too old, is refused and the current tree stays.
     printf 'bad-asset.tar.gz\n' > "$test_dir/serve"
     status=0
@@ -1432,6 +1893,7 @@ test_neovim_release_install() {
 # from another source alone.
 test_neovim_release_update() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    trust_release_downloads
     export DOTFILES_TEST_FIXTURE="$test_dir"
     export DOTFILES_LOCAL_BIN="$test_dir/bin"
     export DOTFILES_LOCAL_OPT="$test_dir/opt"
@@ -1648,6 +2110,7 @@ test_neovim_plugins_install_and_retry() {
 
 test_tree_sitter_cli_install() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    trust_release_downloads
     export DOTFILES_TEST_FIXTURE="$test_dir"
     export DOTFILES_LOCAL_BIN="$test_dir/bin"
     export TMPDIR="$test_dir/tmp"
@@ -1698,6 +2161,7 @@ test_tree_sitter_cli_install() {
     install_tree_sitter_cli > "$test_dir/output"
     assert_contains "$(cat "$test_dir/output")" 'found 0.22.6, need 0.26.1'
     assert_equal 'https://github.com/tree-sitter/tree-sitter/releases/download/v0.27.1/tree-sitter-cli-linux-x64.zip' "$(cat "$test_dir/downloads")"
+    assert_equal 'tree-sitter/tree-sitter v0.27.1 tree-sitter-cli-linux-x64.zip' "$(cat "$test_dir/verified")"
     assert_equal 'tree-sitter 0.27.1' "$("$test_dir/bin/tree-sitter" --version)"
     # No CLI at all is installed too; a release that is still too old is
     # refused and never replaces the installed one.
@@ -1779,7 +2243,8 @@ test_tree_sitter_cli_install() {
     printf 'v0.27.0 2.36\n' > "$record"
     printf 'asset.zip\n' > "$test_dir/serve"
     install_tree_sitter_cli > "$test_dir/output"
-    [ -x "$test_dir/bin/tree-sitter" ] && [ ! -e "$record" ]
+    [ -x "$test_dir/bin/tree-sitter" ]
+    [ ! -e "$record" ]
     assert_equal 2.36 "$(dotfiles_glibc_version)"
     printf 'NPTL 2.36\n' > "$test_dir/glibc"
     if dotfiles_glibc_version; then
@@ -1793,6 +2258,7 @@ test_tree_sitter_cli_install() {
 # newer one that wants a newer glibc is recorded and the working CLI stays.
 test_tree_sitter_cli_update() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    trust_release_downloads
     export DOTFILES_TEST_FIXTURE="$test_dir"
     export DOTFILES_LOCAL_BIN="$test_dir/bin"
     export TMPDIR="$test_dir/tmp"
@@ -1882,6 +2348,7 @@ test_tree_sitter_cli_update() {
 
 test_linux_font_install() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    trust_release_downloads
     export DOTFILES_TEST_FIXTURE="$test_dir"
     export XDG_DATA_HOME="$test_dir/data"
     export TMPDIR="$test_dir/tmp"
@@ -1973,11 +2440,13 @@ test_linux_font_install() {
     status=0
     install_nerd_font > "$test_dir/output" 2>&1 || status=$?
     assert_equal 56 "$status"
-    [ ! -e "$font_dir" ] && [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.new" ]
+    [ ! -e "$font_dir" ]
+    [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.new" ]
     assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-font.*' | wc -l | tr -d ' ')"
     : > "$test_dir/retry"
     install_nerd_font > "$test_dir/output"
     assert_equal 'https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/CascadiaCode.tar.xz' "$(cat "$test_dir/downloads")"
+    assert_equal 'ryanoasis/nerd-fonts v3.4.0 CascadiaCode.tar.xz' "$(tail -n 1 "$test_dir/verified")"
     assert_equal 'CaskaydiaCoveNerdFontMono-Bold.ttf CaskaydiaCoveNerdFontMono-Regular.ttf' "$(cd "$font_dir" && echo *)"
     [ -f "$font_dir/.installed-by-dotfiles" ]
     assert_equal "fc-cache -f $font_dir" "$(tail -n 1 "$test_dir/commands")"
@@ -2003,15 +2472,20 @@ test_linux_font_install() {
     install_nerd_font > "$test_dir/output" 2>&1 || status=$?
     assert_equal 1 "$status"
     assert_contains "$(cat "$test_dir/output")" 'fontconfig does not list CaskaydiaCove Nerd Font Mono after installing CascadiaCode.tar.xz; the previous fonts are back.'
-    [ -f "$font_dir/stale.ttf" ] && [ -f "$font_dir/.installed-by-dotfiles" ] && [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.old" ]
+    [ -f "$font_dir/stale.ttf" ]
+    [ -f "$font_dir/.installed-by-dotfiles" ]
+    [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.old" ]
     rm "$test_dir/cache-broken"
     install_nerd_font > "$test_dir/output"
-    [ ! -e "$font_dir/stale.ttf" ] && [ -f "$font_dir/CaskaydiaCoveNerdFontMono-Bold.ttf" ] && [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.old" ]
+    [ ! -e "$font_dir/stale.ttf" ]
+    [ -f "$font_dir/CaskaydiaCoveNerdFontMono-Bold.ttf" ]
+    [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.old" ]
     # A previous directory an interrupted run left aside is put back.
     mv "$font_dir" "$test_dir/data/fonts/.CaskaydiaCove.old"
     install_nerd_font > "$test_dir/output"
     assert_contains "$(cat "$test_dir/output")" 'already installed'
-    [ -f "$font_dir/CaskaydiaCoveNerdFontMono-Bold.ttf" ] && [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.old" ]
+    [ -f "$font_dir/CaskaydiaCoveNerdFontMono-Bold.ttf" ]
+    [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.old" ]
 }
 
 # Updating replaces the bootstrap's font directory (the one with its marker)
@@ -2019,6 +2493,7 @@ test_linux_font_install() {
 # means alone.
 test_linux_font_update() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    trust_release_downloads
     export DOTFILES_TEST_FIXTURE="$test_dir"
     export XDG_DATA_HOME="$test_dir/data"
     export TMPDIR="$test_dir/tmp"
@@ -2082,7 +2557,8 @@ test_linux_font_update() {
     install_nerd_font > "$test_dir/output"
     assert_contains "$(cat "$test_dir/output")" 'Updating CaskaydiaCove Nerd Font Mono to v3.5.0'
     assert_equal v3.5.0 "$(cat "$font_dir/CaskaydiaCoveNerdFontMono-Regular.ttf")"
-    [ -f "$font_dir/.installed-by-dotfiles" ] && [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.new" ]
+    [ -f "$font_dir/.installed-by-dotfiles" ]
+    [ ! -e "$test_dir/data/fonts/.CaskaydiaCove.new" ]
     assert_equal v3.5.0 "$(cat "$record")"
     # Without updating, the installed fonts are kept.
     unset DOTFILES_UPDATE
@@ -2592,7 +3068,9 @@ MOCK
     assert_equal 'init zsh --disable-up-arrow' "$(cat "$test_dir/atuin-args")"
     assert_equal '_carapace zsh' "$(cat "$test_dir/carapace-args")"
     assert_equal "generate catppuccin-$(cat "$TEST_REPO_DIR/config/catppuccin/flavor")" "$(cat "$test_dir/vivid-args")"
-    [ -s "$test_dir/cache/dotfiles/carapace.zsh" ] && [ -s "$test_dir/cache/dotfiles/atuin.zsh" ] && [ -s "$test_dir/cache/dotfiles/direnv.zsh" ]
+    [ -s "$test_dir/cache/dotfiles/carapace.zsh" ]
+    [ -s "$test_dir/cache/dotfiles/atuin.zsh" ]
+    [ -s "$test_dir/cache/dotfiles/direnv.zsh" ]
     # The second shell sources the cached scripts and does not run the tools again.
     DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
         XDG_DATA_HOME="$test_dir/data" XDG_CACHE_HOME="$test_dir/cache" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/bin:/usr/bin:/bin" \
@@ -2683,10 +3161,12 @@ run_tests() {
         update_stages_and_failure_reporting
         eza_index_and_download_failures
         apt_held_packages_left_alone
+        apt_key_pinning
         macos_update_upgrades_declared
         script_installers_install_and_update
         github_release_install
         github_release_update
+        release_download_verification
         fd_link_for_debian
         mise_bootstrap_and_runtimes
         yazi_flavors_install_and_retry

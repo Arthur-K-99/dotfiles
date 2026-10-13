@@ -12,7 +12,10 @@
 # The container form needs Docker and network access and takes several
 # minutes. The checkout is mounted read-only and copied into the container
 # user's home, so nothing on the host changes. A Mac runs the arm64 images;
-# CI runs x86_64.
+# CI runs x86_64. An install and its update read about 35 release digests
+# from the GitHub API, which answers 60 requests an hour per address without
+# a token: for several runs in a row, pass one with
+# GITHUB_TOKEN="$(gh auth token)", which reaches the container.
 
 # The user that commands run as; empty runs them as the current user.
 FRESH_INSTALL_USER=""
@@ -36,9 +39,11 @@ fresh_install_prepare() {
 
 # as_user <command>...: runs a command from the home directory of
 # FRESH_INSTALL_USER (or the current user) in a terminal-like environment.
+# GITHUB_TOKEN, when set, reaches the installer, which reads each release's
+# digests from the GitHub API (60 requests an hour without a token).
 as_user() {
     if [ -n "$FRESH_INSTALL_USER" ]; then
-        (cd "/home/$FRESH_INSTALL_USER" && sudo -u "$FRESH_INSTALL_USER" -H \
+        (cd "/home/$FRESH_INSTALL_USER" && sudo -u "$FRESH_INSTALL_USER" -H --preserve-env=GITHUB_TOKEN \
             env LANG="${LANG:-C.UTF-8}" TERM=xterm-256color "$@")
     else
         (cd "$HOME" && env LANG="${LANG:-C.UTF-8}" TERM=xterm-256color "$@")
@@ -99,9 +104,9 @@ esac
 exit "$status"'
 
 # Sets every recorded release tag back to one that never existed, so the
-# update fetches each release again as it would after upstream releases: the
-# release binaries, Neovim's tree, the tree-sitter CLI, the font and the
-# installer scripts. Records live in the user's state directory.
+# update fetches and verifies each release again as it would after upstream
+# releases: the release binaries, Neovim's tree, the tree-sitter CLI and the
+# font. Records live in the user's state directory.
 FRESH_INSTALL_STALE_RECORDS='find "${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/releases" -type f 2>/dev/null | while IFS= read -r record; do
     echo v0.0.0-fresh-install > "$record"
     printf "%s\n" "${record##*/releases/}"
@@ -152,7 +157,7 @@ fresh_install_main() {
             ;;
         *)
             echo "Installing $repo on a fresh ${1:-debian:12} container..."
-            docker run --rm --volume "$repo:/dotfiles-source:ro" "${1:-debian:12}" \
+            docker run --rm --env GITHUB_TOKEN --volume "$repo:/dotfiles-source:ro" "${1:-debian:12}" \
                 bash /dotfiles-source/tests/fresh_install.sh --inside
             ;;
     esac

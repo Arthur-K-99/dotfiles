@@ -5,8 +5,8 @@ DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$DOTFILES_DIR/scripts/lib/environment.sh"
 
 # --- Release records ----------------------------------------------------------
-# The tag each tool from a GitHub release or an installer script was installed
-# at, one file per project: ~/.local/state/dotfiles/releases/<owner>/<repo>.
+# The tag each tool from a GitHub release was installed at, one file per
+# project: ~/.local/state/dotfiles/releases/<owner>/<repo>.
 # The update compares it with the latest tag instead of parsing every tool's
 # --version. A tool installed before records existed has none, so the first
 # update fetches it once.
@@ -140,62 +140,18 @@ bootstrap_owns() {
     [ -x "$1" ] && [ -f "$1" ] && [ ! -L "$1" ]
 }
 
-# install_with_script <command> <owner/repo> <installer> runs
-# `<installer> <bin dir> <tag>` to put the latest release into the local bin
-# directory, then records the tag. A copy in that directory is the
-# bootstrap's: updating, the installer runs again when the latest tag differs
-# from the recorded one. A copy elsewhere on PATH, such as Homebrew's on
-# macOS, belongs to whatever installed it and is left alone.
-install_with_script() {
-    local name="$1" repo="$2" installer="$3" bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}" path tag recorded
-    if bootstrap_owns "$bin_dir/$name"; then
-        if ! dotfiles_updating; then
-            echo "$name already installed"
-            return 0
-        fi
-        tag="$(github_latest_tag "$repo")" || return
-        recorded="$(recorded_release "$repo")"
-        if [ "$recorded" = "$tag" ]; then
-            echo "$name $tag is current"
-            return 0
-        fi
-        echo "Updating $name to $tag${recorded:+ (installed: $recorded)}..."
-    elif path="$(command -v "$name")"; then
-        if dotfiles_updating; then
-            echo "$name at $path was not installed by the bootstrap; left alone"
-        else
-            echo "$name already installed"
-        fi
-        return 0
-    else
-        tag="$(github_latest_tag "$repo")" || return
-        echo "Installing $name $tag..."
-    fi
-    mkdir -p "$bin_dir" || return
-    "$installer" "$bin_dir" "$tag" || return
-    record_release "$repo" "$tag"
-}
-
-# The oh-my-posh installer refuses a directory that does not exist yet, which
-# is the case on a new Linux account; install_with_script creates it. It
-# takes the version to install, so the recorded tag is the installed one.
-run_oh_my_posh_installer() {
-    curl -fsSL --retry 5 https://ohmyposh.dev/install.sh | bash -s -- -d "$1" -v "$2"
-}
-
+# oh-my-posh's binary is the whole tool; the configuration is the repository's
+# own, so the themes its installer script adds are not needed. Its static Go
+# builds are named posh-<os>-<arch> on both, so one template covers macOS and
+# Linux.
 bootstrap_oh_my_posh() {
-    install_with_script oh-my-posh JanDeDobbeleer/oh-my-posh run_oh_my_posh_installer
+    install_github_release JanDeDobbeleer/oh-my-posh 'posh-{os}-{arch_deb}' oh-my-posh
 }
 
-# zoxide's installer takes no version; it installs the latest release, which
-# it looks up the same way a moment later.
-run_zoxide_installer() {
-    curl -sSfL --retry 5 https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh -s -- --bin-dir "$1"
-}
-
-bootstrap_zoxide() {
-    install_with_script zoxide ajeetdsouza/zoxide run_zoxide_installer
-}
+# The Catppuccin themes for bat releases older than 0.26 come from a fixed
+# commit of catppuccin/bat (v3.17.0 of the themes, 2025-06-29), so the file
+# cannot change under the same URL. The repository has no tags.
+DOTFILES_BAT_THEMES_COMMIT=6810349b28055dce54076712fc05fc68da4b8ec0
 
 bootstrap_bat_theme() {
     local bat_command theme_dir theme_file status theme_name theme_url
@@ -204,7 +160,7 @@ bootstrap_bat_theme() {
         echo "config/bat/config names no --theme." >&2
         return 1
     fi
-    theme_url="https://raw.githubusercontent.com/catppuccin/bat/main/themes/${theme_name// /%20}.tmTheme"
+    theme_url="https://raw.githubusercontent.com/catppuccin/bat/$DOTFILES_BAT_THEMES_COMMIT/themes/${theme_name// /%20}.tmTheme"
     if command -v bat &>/dev/null; then
         bat_command=bat
     elif command -v batcat &>/dev/null; then
@@ -236,22 +192,59 @@ bootstrap_bat_theme() {
 }
 
 # --- Linux installers --------------------------------------------------------
-# Debian and Ubuntu lack packages for several tools. Three routes cover them,
+# Debian and Ubuntu lack packages for several tools. Two routes cover them,
 # in order of preference: a signed third-party apt repository (updates arrive
-# with apt), the project's own installer script, and a static binary from the
-# latest GitHub release installed into ~/.local/bin (DOTFILES_LOCAL_BIN).
+# with apt) and a static binary from the latest GitHub release, verified and
+# installed into ~/.local/bin (DOTFILES_LOCAL_BIN). No installer script is
+# piped into a shell: oh-my-posh's and zoxide's verified nothing they fetched.
 # Every curl call here retries timeouts and HTTP 408, 429 and 5xx answers,
 # five times over about 30 seconds (--retry 5): GitHub returns a 500 or 502
 # now and then, at times for several seconds, and an update looks up the
 # latest tag of every release tool.
 
-# install_apt_repository <name> <key url> <sources line> <package>...
+# key_fingerprints <key file>: the primary fingerprint of every OpenPGP key in
+# the file, one per line, read without importing anything. gpg wants a
+# writable home even for --show-keys (it would create ~/.gnupg), so it gets
+# an empty one that goes away afterwards.
+key_fingerprints() (
+    local home
+    home="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-gnupg.XXXXXX")" || return
+    trap 'rm -rf "$home"' EXIT
+    GNUPGHOME="$home" gpg --batch --quiet --show-keys --with-colons -- "$1" |
+        awk -F: '$1 == "pub" { primary = 1; next } primary && $1 == "fpr" { print $10; primary = 0 }'
+)
+
+# install_apt_key <name> <key url> <fingerprint>: installs a repository's
+# signing key as /etc/apt/keyrings/<name>.gpg, only when the file downloaded
+# holds exactly the key whose fingerprint is pinned here. apt then trusts
+# that key for that repository alone (signed-by). Neither project publishes
+# its fingerprint; each pin is the key that signs the repository's InRelease.
+install_apt_key() (
+    local work found
+    if ! command -v gpg >/dev/null 2>&1; then
+        echo "gnupg is not installed; install packages first." >&2
+        return 1
+    fi
+    work="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-key.XXXXXX")" || return
+    trap 'rm -rf "$work"' EXIT
+    curl -fsSL --retry 5 -o "$work/key" "$2" || return
+    found="$(key_fingerprints "$work/key")" || :
+    if [ "$found" != "$3" ]; then
+        printf 'The signing key at %s is not the one pinned for the %s repository:\n  expected %s\n  received %s\n' \
+            "$2" "$1" "$3" "$(printf '%s' "${found:-no OpenPGP key}" | tr '\n' ' ')" >&2
+        return 1
+    fi
+    sudo mkdir -p /etc/apt/keyrings || return
+    sudo gpg --dearmor --yes -o "/etc/apt/keyrings/$1.gpg" < "$work/key"
+)
+
+# install_apt_repository <name> <key url> <key fingerprint> <sources line> <package>...
 # Package names double as command names. The sources line must reference
 # /etc/apt/keyrings/<name>.gpg. Updating, installed packages are upgraded from
 # the index the package stage has just refreshed, except held ones.
 install_apt_repository() {
-    local name="$1" key_url="$2" sources_line="$3"
-    shift 3
+    local name="$1" key_url="$2" fingerprint="$3" sources_line="$4"
+    shift 4
     local package held
     local missing=() upgrades=()
     if dotfiles_updating; then
@@ -275,8 +268,7 @@ install_apt_repository() {
         return
     fi
     echo "Installing ${missing[*]} from the $name repository..."
-    sudo mkdir -p /etc/apt/keyrings || return
-    curl -fsSL --retry 5 "$key_url" | sudo gpg --dearmor --yes -o "/etc/apt/keyrings/$name.gpg" || return
+    install_apt_key "$name" "$key_url" "$fingerprint" || return
     printf '%s\n' "$sources_line" | sudo tee "/etc/apt/sources.list.d/$name.list" >/dev/null || return
     sudo apt-get update -qq || return
     # Updating, the installed packages of the repository come along.
@@ -285,11 +277,14 @@ install_apt_repository() {
 
 install_eza() {
     install_apt_repository gierens https://raw.githubusercontent.com/eza-community/eza/main/deb.asc \
+        1548BC8A4B4D2688F9B0DAF7EC29E2090CE3FD43 \
         "deb [signed-by=/etc/apt/keyrings/gierens.gpg] https://deb.gierens.de stable main" eza
 }
 
+# Charm's key expires on 2027-07-13 (docs/roadmap.md).
 install_charm_tools() {
     install_apt_repository charm https://repo.charm.sh/apt/gpg.key \
+        ED927B38BE981E53CA09153D03BBF595D4DFD35C \
         "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" glow gum
 }
 
@@ -315,14 +310,104 @@ github_latest_tag() {
     esac
 }
 
+# --- Verified release downloads ----------------------------------------------
+# GitHub computes the SHA-256 of every release asset when it is uploaded and
+# lists it as the asset's digest in the releases API. Every download from a
+# release is checked against it before anything is unpacked, so a file that
+# differs from what the release holds (a broken transfer, a proxy or mirror
+# that changed it) is never installed. The digest comes from the same release,
+# so it cannot catch an asset that someone able to publish there replaced.
+# About half of these projects publish checksum files as well; the digest
+# covers every one of them the same way.
+
+# github_api <path>: GET https://api.github.com/<path>. Without a token GitHub
+# answers 60 requests an hour per address, which an install (one request per
+# release download) stays well under. GITHUB_TOKEN raises the limit when set;
+# it goes to curl on stdin, so it never shows in the process list. GitHub
+# answers a token it does not accept (expired, or for another host) with 401
+# instead of answering anonymously, so a failed request is made once more
+# without it. Over the limit GitHub answers 403 or 429. curl retries a 429 and
+# would wait as long as a Retry-After asks; with --retry-max-time, a longer
+# one makes it give up at once instead.
+github_api() {
+    local args=(-fsSL --retry 5 --retry-max-time 120 -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28')
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        if printf 'Authorization: Bearer %s\n' "$GITHUB_TOKEN" | curl "${args[@]}" -H @- "https://api.github.com/$1"; then
+            return 0
+        fi
+        echo "The GitHub API refused the request with GITHUB_TOKEN; trying once without it." >&2
+    fi
+    curl "${args[@]}" "https://api.github.com/$1"
+}
+
+# release_asset_digest <owner/repo> <tag> <asset>: prints the SHA-256 GitHub
+# lists for the asset, without a JSON parser. Split at commas, brackets and
+# braces, every key of the release arrives on a line of its own; quotes inside
+# string values are escaped, so no value can pass for a key. An asset's digest
+# precedes its browser_download_url, and its API url starts the asset, which
+# keeps the digest of one asset from carrying over to the next. awk reads to
+# the end rather than exiting at the match, which would break the pipe.
+release_asset_digest() {
+    local json found digest
+    if ! json="$(github_api "repos/$1/releases/tags/$2")"; then
+        echo "Could not read release $2 of $1 from the GitHub API to verify $3. Without a token GitHub answers 60 requests an hour per address; wait, or set GITHUB_TOKEN, and rerun." >&2
+        return 1
+    fi
+    found="$(printf '%s\n' "$json" | tr ',[{' '\n\n\n' |
+        sed -n 's/^[[:space:]]*"\([a-z_]*\)":[[:space:]]*"\([^"]*\)".*/\1 \2/p' |
+        awk -v suffix="/$3" '
+            $1 == "url" && $2 ~ /\/releases\/assets\// { digest = "" }
+            $1 == "digest" { digest = $2 }
+            $1 == "browser_download_url" && !found && length($2) >= length(suffix) &&
+                substr($2, length($2) - length(suffix) + 1) == suffix { found = 1; result = digest }
+            END { if (found) print "asset " result; else print "missing" }')"
+    if [ "$found" = missing ]; then
+        echo "Release $2 of $1 has no asset named $3; the project may have renamed it, or is still uploading." >&2
+        return 1
+    fi
+    digest="${found#asset }"
+    if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        echo "GitHub lists no SHA-256 digest for $3 in release $2 of $1, so it cannot be verified (assets uploaded before June 2025 have none)." >&2
+        return 1
+    fi
+    printf '%s\n' "${digest#sha256:}"
+}
+
+# file_sha256 <file>: GNU coreutils on Linux; shasum on older macOS releases.
+file_sha256() {
+    local sum
+    if command -v sha256sum >/dev/null 2>&1; then
+        sum="$(sha256sum "$1")" || return
+    else
+        sum="$(shasum -a 256 "$1")" || return
+    fi
+    printf '%s\n' "${sum%% *}"
+}
+
+# download_release_asset <owner/repo> <tag> <asset> <file>: downloads a release
+# asset to <file> and keeps it only when its SHA-256 matches the digest GitHub
+# lists for it. The digest is read first, so an unreachable API costs no download.
+download_release_asset() {
+    local expected actual
+    expected="$(release_asset_digest "$1" "$2" "$3")" || return
+    curl -fsSL --retry 5 -o "$4" "https://github.com/$1/releases/download/$2/$3" || return
+    actual="$(file_sha256 "$4")" || return
+    if [ "$actual" != "$expected" ]; then
+        rm -f "$4"
+        printf '%s from %s %s does not match the SHA-256 GitHub lists for it:\n  expected %s\n  received %s\n' \
+            "$3" "$1" "$2" "$expected" "$actual" >&2
+        return 1
+    fi
+}
+
 # install_github_release <owner/repo> <asset template> <binary>...
 # Installs the named binaries from the latest release asset into the local bin
 # directory when one of them is missing from PATH, and records the tag.
 # Updating, binaries in the local bin directory are fetched again when the
 # latest tag differs from the recorded one; a binary elsewhere on PATH belongs
 # to whatever installed it and is left alone. Templates may use {tag},
-# {version} (the tag without a leading v), {arch}, {arch_go}, {arch_deb},
-# {arch_amd64} and {arch_node}.
+# {version} (the tag without a leading v), {os} (linux|darwin), {arch},
+# {arch_go}, {arch_deb}, {arch_amd64} and {arch_node}.
 install_github_release() {
     local repo="$1" template="$2"
     shift 2
@@ -374,21 +459,22 @@ install_github_release() {
 download_github_release() (
     local repo="$1" tag="$2" template="$3"
     shift 3
-    local binary version arch_words arch arch_go arch_deb arch_amd64 arch_node asset url work extract found bin_dir
+    local binary version os arch_words arch arch_go arch_deb arch_amd64 arch_node asset work extract found bin_dir
     version="${tag#v}"
+    os="$(uname -s | tr '[:upper:]' '[:lower:]')"
     arch_words="$(dotfiles_arch)" || return
     read -r arch arch_go arch_deb arch_amd64 arch_node <<<"$arch_words"
     asset="${template//\{tag\}/$tag}"
     asset="${asset//\{version\}/$version}"
+    asset="${asset//\{os\}/$os}"
     asset="${asset//\{arch\}/$arch}"
     asset="${asset//\{arch_go\}/$arch_go}"
     asset="${asset//\{arch_deb\}/$arch_deb}"
     asset="${asset//\{arch_amd64\}/$arch_amd64}"
     asset="${asset//\{arch_node\}/$arch_node}"
-    url="https://github.com/$repo/releases/download/$tag/$asset"
     work="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-release.XXXXXX")" || return
     trap 'rm -rf "$work"' EXIT
-    curl -fsSL --retry 5 -o "$work/$asset" "$url" || return
+    download_release_asset "$repo" "$tag" "$asset" "$work/$asset" || return
     extract="$work/extract"
     mkdir -p "$extract" || return
     case "$asset" in
@@ -410,13 +496,19 @@ download_github_release() (
     done
 )
 
-# mise.run installs a single binary and does not edit shell files. Updating, a
-# copy in the local bin directory updates itself: `mise self-update` verifies
-# the release's signature and, like mise.run, skips releases younger than a
-# day, so a recorded latest tag would not always be the installed one. A copy
-# elsewhere on PATH (Homebrew's on macOS) is left alone.
+# zoxide's musl build runs on every glibc. Its archive also carries man pages,
+# which the bootstrap leaves out as it does for the other release tools.
+bootstrap_zoxide() {
+    install_github_release ajeetdsouza/zoxide 'zoxide-{version}-{arch}-unknown-linux-musl.tar.gz' zoxide
+}
+
+# mise is a single binary; the musl build runs on every glibc. Updating, a
+# copy in the local bin directory updates itself: `mise self-update` checks
+# the release's signature and skips releases younger than a day, so the
+# bootstrap records no tag for it. A copy elsewhere on PATH (Homebrew's on
+# macOS) is left alone.
 bootstrap_mise_binary() {
-    local bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}" path
+    local bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}" path tag
     if bootstrap_owns "$bin_dir/mise" && dotfiles_updating; then
         echo "Updating mise..."
         "$bin_dir/mise" self-update --yes
@@ -430,8 +522,9 @@ bootstrap_mise_binary() {
         fi
         return 0
     fi
-    echo "Installing mise..."
-    curl -fsSL --retry 5 https://mise.run | MISE_INSTALL_PATH="$bin_dir/mise" sh
+    tag="$(github_latest_tag jdx/mise)" || return
+    echo "Installing mise $tag..."
+    download_github_release jdx/mise "$tag" 'mise-{tag}-linux-{arch_node}-musl' mise
 }
 
 # Debian and Ubuntu install fd as fdfind. The zsh alias covers the shell, but
@@ -469,7 +562,7 @@ install_fd_link() {
 install_neovim_release() (
     local opt_dir="${DOTFILES_LOCAL_OPT:-$HOME/.local/opt}/nvim"
     local bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
-    local version tag="" recorded arch_words arch_go asset url work extracted errors
+    local version tag="" recorded arch_words arch_go asset work extracted errors
     if version="$(dotfiles_nvim_version)" && dotfiles_version_at_least "$version" "$DOTFILES_NVIM_MINIMUM"; then
         if ! dotfiles_updating; then
             echo "Neovim $version already installed"
@@ -498,10 +591,9 @@ install_neovim_release() (
     arch_words="$(dotfiles_arch)" || return
     read -r _ arch_go _ <<<"$arch_words"
     asset="nvim-linux-$arch_go.tar.gz"
-    url="https://github.com/neovim/neovim/releases/download/$tag/$asset"
     work="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-nvim.XXXXXX")" || return
     trap 'rm -rf "$work"' EXIT
-    curl -fsSL --retry 5 -o "$work/$asset" "$url" || return
+    download_release_asset neovim/neovim "$tag" "$asset" "$work/$asset" || return
     mkdir -p "$work/extract" || return
     tar -xzf "$work/$asset" -C "$work/extract" || return
     extracted="$(find "$work/extract" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
@@ -701,7 +793,7 @@ install_nerd_font() (
     fi
     work="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-font.XXXXXX")" || return
     trap 'rm -rf "$work"' EXIT
-    curl -fsSL --retry 5 -o "$work/$asset" "https://github.com/ryanoasis/nerd-fonts/releases/download/$tag/$asset" || return
+    download_release_asset ryanoasis/nerd-fonts "$tag" "$asset" "$work/$asset" || return
     mkdir -p "$work/extract" || return
     tar -xJf "$work/$asset" -C "$work/extract" || return
     if ! compgen -G "$work/extract/CaskaydiaCoveNerdFontMono-*.ttf" >/dev/null; then
