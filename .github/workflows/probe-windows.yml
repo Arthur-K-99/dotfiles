@@ -17,28 +17,30 @@ jobs:
       run:
         shell: powershell -NoLogo -NoProfile -NonInteractive -Command ". '{0}'"
     steps:
-      - name: How winget lists Carapace after installing it
+      - name: How winget upgrades and pins an older Carapace
         continue-on-error: true
         run: |
-          foreach ($id in 'rsteube.Carapace', 'charmbracelet.gum') {
-            winget list --id $id --exact --accept-source-agreements | Out-Host
-            "== before: list $id -> $LASTEXITCODE"
-            winget install --id $id --exact --silent --accept-package-agreements --accept-source-agreements | Out-Host
-            "== install $id -> $LASTEXITCODE"
-            winget list --id $id --exact --accept-source-agreements | Out-Host
-            "== after: list --id $id --exact -> $LASTEXITCODE"
-            winget list --id $id --exact --source winget --accept-source-agreements | Out-Host
-            "== after: list --id $id --exact --source winget -> $LASTEXITCODE"
-            winget list --id $id --accept-source-agreements | Out-Host
-            "== after: list --id $id -> $LASTEXITCODE"
-          }
-          winget list carapace --accept-source-agreements | Out-Host
-          "== list carapace -> $LASTEXITCODE"
-          winget list --name Carapace --accept-source-agreements | Out-Host
-          "== list --name Carapace -> $LASTEXITCODE"
-          winget list --accept-source-agreements | Select-String -Pattern 'carapace|gum' | Out-Host
-          Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' | Where-Object { $_.PSChildName -match 'carapace|gum' } | ForEach-Object { $_.PSChildName; Get-ItemProperty $_.PSPath | Format-List DisplayName, DisplayVersion, Publisher, WinGet* } | Out-Host
-          Get-ChildItem 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall' | Where-Object { (Get-ItemProperty $_.PSPath).DisplayName -match 'carapace' } | ForEach-Object { $_.PSPath; Get-ItemProperty $_.PSPath | Format-List DisplayName, DisplayVersion, Publisher } | Out-Host
-          winget list --id rsteube.Carapace --exact --accept-source-agreements --verbose-logs | Out-Host
-          $logs = "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir"
-          Get-ChildItem $logs | Sort-Object LastWriteTime | Select-Object -Last 1 | Get-Content | Select-Object -Last 80
+          winget install --id rsteube.Carapace --exact --version 1.0.6 --silent --accept-package-agreements --accept-source-agreements | Out-Host
+          "== install 1.0.6 -> $LASTEXITCODE"
+          winget list --id rsteube.Carapace --exact --accept-source-agreements | Out-Host
+          "== list --exact -> $LASTEXITCODE"
+          winget list --id rsteube.Carapace --accept-source-agreements | Out-Host
+          "== list -> $LASTEXITCODE"
+          winget list --id Carapace --accept-source-agreements | Out-Host
+          "== list --id Carapace -> $LASTEXITCODE"
+          winget pin add --id rsteube.Carapace --exact --accept-source-agreements | Out-Host
+          "== pin add --exact -> $LASTEXITCODE"
+          winget pin list --id rsteube.Carapace --exact --accept-source-agreements | Out-Host
+          "== pin list --exact -> $LASTEXITCODE"
+          winget pin remove --id rsteube.Carapace --exact --accept-source-agreements | Out-Host
+          "== pin remove --exact -> $LASTEXITCODE"
+          winget upgrade --id rsteube.Carapace --exact --silent --accept-package-agreements --accept-source-agreements | Out-Host
+          "== upgrade --exact -> $LASTEXITCODE"
+          winget list --id rsteube.Carapace --accept-source-agreements | Out-Host
+          winget upgrade --id rsteube.Carapace --silent --accept-package-agreements --accept-source-agreements | Out-Host
+          "== upgrade -> $LASTEXITCODE"
+          winget list --id rsteube.Carapace --accept-source-agreements | Out-Host
+          winget upgrade --id rsteube.Carapace --silent --accept-package-agreements --accept-source-agreements | Out-Host
+          "== upgrade when current -> $LASTEXITCODE"
+          winget install --id rsteube.Carapace --exact --silent --accept-package-agreements --accept-source-agreements | Out-Host
+          "== install --exact when current -> $LASTEXITCODE"
