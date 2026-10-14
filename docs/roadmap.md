@@ -138,31 +138,43 @@ Done:
   - **tmux's local file** loads after the tracked settings but before TPM runs the plugins, not last as the README said.
   - New to-dos above: btop, the doctor's relative hints, `EDITOR`, an uninstall command, and two Windows link questions under "A fresh install on Windows".
 
-- **A quiet first run** (PR link to follow). A real Debian 13 install, rerun and update printed 2,548 lines. One read as an error (Neovim's), and 40% of the log was git's progress meter. Every remaining line now says something:
+- **A quiet first run** ([#17](https://github.com/Arthur-K-99/dotfiles/pull/17)). On 2026-10-14 (`tests/fresh_install.sh`, arm64), install, rerun and update printed 2,548 lines on Debian 13. One read as an error (Neovim's), and 40% of its 910 KB was git's progress meter. After the changes below, Debian 13 printed 1,722 lines, Debian 12 1,731 (2,561 before) and Ubuntu 24.04 1,784 (2,592 before):
   - **Neovim's first install** printed "Error in .../init.lua: Plugin catppuccin is not installed" (and mason.nvim, nvim-treesitter, nvim-lspconfig) just before cloning them:
     - **Cause:** with `install.missing` off, lazy.nvim's startup still loads every non-lazy plugin and reports each missing one with `vim.notify`, which a headless Neovim prints as an error of `init.lua`.
     - **Fix:** `lua/dotfiles/lazy.lua` drops exactly that message while one of the bootstrap's own headless runs (`require("dotfiles.bootstrap")` in Neovim's arguments) starts. Those runs report missing plugins themselves; the doctor's plain headless start still shows it.
     - **Ruled out:** `--noplugin` leaves `plugins()` without lazy.nvim's configuration, `cond = false` would make the lockfile drop the plugins, and `install.missing = true` rewrites `lazy-lock.json` first.
-  - **lazy.nvim's clone output** was 308 lines and 367 KB: git's progress meter (lazy.nvim always clones with `--progress`), task lines, and git's detached-HEAD advice once per pinned checkout. `headless = { process = false, task = false }` and `advice.detachedHead=false` (through `GIT_CONFIG_COUNT`) bring it to about 100 lines and 10 KB. A failed clone still prints git's `fatal:` line and `missing plugin`.
+  - **lazy.nvim's clone output** was 308 lines and 367 KB: git's progress meter (lazy.nvim always clones with `--progress`), task lines, and git's detached-HEAD advice once per pinned checkout. `headless = { process = false, task = false }` and `advice.detachedHead=false` bring it to about 100 lines and 10 KB. `plugins()` sets the latter itself through `GIT_CONFIG_COUNT`, after any entries of the user's, since lazy.nvim passes its environment to git, so Windows gets it too. A failed clone still prints git's `fatal:` line and `missing plugin`.
   - **Plugin updates:**
     - TPM printed "Already up to date" for each plugin, and zinit each updated plugin's git log even with `--quiet`.
-    - A success now prints one line for TPM and the names zinit gives for updated plugins.
+    - A success now prints one line for TPM, and for zinit the plugins it updated and whether it updated itself. zinit prints a dot per plugin and a carriage return before each "Updating owner/plugin", which the summary strips; its own changelog, about 470 lines in one run, follows "[self-update]".
     - A failure prints everything, as before.
-  - **Homebrew:** a macOS rerun ran `brew install` once per declared formula, about a second and an "already installed" warning each. One `brew list --formula` now finds what is missing, and a single `brew install` adds only that. A rerun therefore no longer upgrades an outdated formula, which the README never promised (the update upgrades first). This was the "faster macOS update" to-do.
-  - **apt:** `wl-clipboard` is installed without its recommended packages. On a fresh Debian 13 its `xdg-utils` brought Mesa, Vulkan, Perl's LWP and a terminal emulator (zutty, which `update-alternatives` made `x-terminal-emulator`): 280 packages with them, 167 without. `--no-install-recommends` for everything (141) was not worth the risk of losing a recommendation another package relies on.
+  - **Homebrew:** a macOS rerun ran `brew install` once per declared formula, about a second and an "already installed" warning each. One `brew list --formula` now finds what is missing, and a single `brew install` adds only that. A rerun, and a first install on a Mac that already has older declared formulae, therefore no longer upgrades them on macOS; the update does that first, and the Neovim minimum is still checked. (On Linux, `apt-get install` still upgrades a listed package with a newer candidate.) This was the "faster macOS update" to-do.
+  - **apt:** `wl-clipboard` is installed without its recommended packages. Its `xdg-utils` brought Mesa, Vulkan, Perl's LWP and a terminal emulator (zutty, which `update-alternatives` made `x-terminal-emulator`) on all three distributions tried. The fresh installs added 241 packages on Debian 12 with them and 129 without (127 in the main call, then wl-clipboard and its Wayland library); on Ubuntu 24.04, 227 and 121. An `apt-get install -s` of the list on a bare debian:13 gave 280, 167 without wl-clipboard's recommends, and 141 with `--no-install-recommends` for everything, which was not worth the risk of losing a recommendation another package relies on.
   - **`tests/fresh_install.sh` checks what a user sees.**
     - zsh runs interactively under `script` with commands typed in. It draws its prompt and runs every prompt hook (oh-my-posh, atuin, direnv) and zoxide's `cd`; a blocked `.envrc` there fails the check.
     - BSD `script` ends the session when its input ends, before zsh reads a line, so the input stays open for three seconds.
     - Each stage fails if it prints a line that reads as an error while passing (`Plugin … is not installed`, `^Error`, `tput:`, `can't change option`, `^fatal:`).
-  - **Two checks that could not fail now can:**
-    - `scripts/test.sh` checked the oh-my-posh configuration with `oh-my-posh config export`, which exports its built-in theme, with status 0, for a file it cannot read. The check now compares the export's palette and segments with the file's.
-    - The parser skip had no test of its own (the to-do since #9): `tests/nvim_bootstrap_missing.lua` runs `missing()` and `install()` with the real `can_compile()` against a `PATH` with and without a tree-sitter CLI.
+  - **A check that could not fail now can:** `scripts/test.sh` checked the oh-my-posh configuration with `oh-my-posh config export`, which exports its built-in theme, with status 0, for a file it cannot read. The check now compares the export's palette and segments with the file's.
+  - **The parser skip has a test** (the to-do since #9): `tests/nvim_bootstrap_missing.lua` runs `missing()` and `install()` with the real `can_compile()` against a `PATH` with and without a tree-sitter CLI.
 
   **Found along the way:**
   - atuin's hooks send their own errors to `/dev/null`, and oh-my-posh 31.8.0 falls back to its default theme when the configuration cannot be read, so neither would show up on stderr; the oh-my-posh check above covers the second.
-  - A container's dbus postinst prints `invoke-rc.d: could not determine current runlevel` against Docker's `policy-rc.d`; it is the container's, not the installer's.
+  - `invoke-rc.d: could not determine current runlevel` came from x11-common's and dbus's postinst scripts against Docker's `policy-rc.d`; both came with wl-clipboard's recommends and are gone with them.
+  - Containers still print `debconf: delaying package configuration, since apt-utils is not installed` four or five times per run: the images lack apt-utils, which a real system has. The harness does not count it as an error.
+  - **A review pass** (two agents) ran the changes against real zinit and lazy.nvim output, BSD and util-linux `script`, oh-my-posh 26.19.1 and 31.8.0, and CI's Neovim 0.9.5. It found, and this PR fixes:
+    - the zinit summary matched nothing in zinit's real output (the test's stand-in printed clean lines);
+    - the parser-skip test used `vim.uv.fs_chmod`, which Neovim 0.9 lacks, so CI's Ubuntu job would have failed;
+    - the git advice setting lived in the bash bootstrap only, and replaced a user's own `GIT_CONFIG_*` entries;
+    - the `vim.notify` restore ran on every start rather than only after the filter;
+    - the oh-my-posh check failed with a Python traceback for a configuration of the wrong shape.
 
-- **First-try fixes** (PR link to follow), from a first-time read of the README against the scripts:
+    Left open:
+    - no test checks that a plain headless start still reports a missing plugin, which the doctor relies on (checked by hand);
+    - a held `wl-clipboard` and `run_stage` itself have no tests;
+    - `script` runs without a timeout, so a prompt hook that reads the terminal would hang the job until its timeout;
+    - neither CI image installs oh-my-posh, so the real configuration check runs only on machines that have it.
+
+- **First-try fixes** ([#16](https://github.com/Arthur-K-99/dotfiles/pull/16)), from a first-time read of the README against the scripts:
   - **An existing `~/.tmux.conf` stopped the install.** The linker retired only its own old link there. A file of the user's stayed, and since tmux would load it as well, the doctor failed and the installer stopped at "Verifying the setup". The linker now backs it up like any file it replaces (`move_aside`) and says why.
   - **A machine-local tmux file.** There was nowhere for such settings but the tracked `config/tmux/tmux.conf`. The configuration now loads `~/.config/tmux/local.conf` last when it exists (`source-file -q`), like `~/.zshrc.local` and Ghostty's `local`.
   - **A replaced `~/.zshrc` left no advice.** The linker now says to move what is still needed into `~/.zshrc.local`, which the new one loads last.

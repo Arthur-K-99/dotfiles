@@ -61,9 +61,8 @@ install_macos() {
         /bin/bash -c "$installer" || return
         dotfiles_init_environment || return
     fi
-    # A plain `brew install` upgrades an outdated formula as well, but not a
-    # pinned one and never a cask the loop below finds in place, so the
-    # update upgrades first and then only adds what is missing.
+    # The update upgrades the declared packages Homebrew reports outdated
+    # first; the steps below only add what is missing.
     if dotfiles_updating; then
         echo "Updating Homebrew..."
         brew update </dev/null || return
@@ -71,14 +70,16 @@ install_macos() {
         brew_upgrade_declared --formula "$DOTFILES_DIR/packages/brew.txt" || return
         echo "Upgrading Homebrew casks..."
         brew_upgrade_declared --cask "$DOTFILES_DIR/packages/brew-casks.txt" || return
+        # A safeguard: brew install upgrades an installed formula it is
+        # named, and the steps below name only missing ones.
         export HOMEBREW_NO_INSTALL_UPGRADE=1
     fi
     # Only the missing formulae go to one `brew install`: naming an installed
     # one costs about a second and prints a warning that it is installed, and
-    # a rerun only adds what is missing (the update has upgraded above).
-    # Names in packages/brew.txt are the ones `brew list` prints, not aliases.
-    # The loops read the package lists from stdin; brew must not inherit that
-    # stream, or an install step that reads input swallows the remaining names.
+    # a rerun only adds what is missing. Names in packages/brew.txt are the
+    # ones `brew list` prints, not aliases. The cask loop reads its list from
+    # stdin; brew must not inherit that stream, or an install step that reads
+    # input swallows the remaining names.
     echo "Installing Homebrew formulae..."
     while IFS= read -r package; do
         declared+=("$package")
@@ -153,9 +154,10 @@ refresh_apt_keys() {
 }
 
 # Listed packages installed without the packages they recommend.
-# wl-clipboard recommends xdg-utils, which on a fresh Debian 13 brings Mesa,
-# Vulkan, Perl's LWP and a terminal emulator that registers itself as
-# x-terminal-emulator: 280 packages with it, 167 without.
+# wl-clipboard recommends xdg-utils, which brings Mesa, Vulkan, Perl's LWP
+# and a terminal emulator that registers itself as x-terminal-emulator: a
+# fresh install of the list added 241 packages on Debian 12 with it, 129
+# without (Ubuntu 24.04: 227 and 121).
 DOTFILES_APT_WITHOUT_RECOMMENDS="wl-clipboard"
 
 # apt-get install upgrades a listed package that is installed and has a newer

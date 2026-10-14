@@ -77,6 +77,12 @@ end
 -- Without the lockfile option a plain install would clone branch heads and
 -- pin those instead.
 function M.plugins()
+  -- Each pinned checkout would print git's detached-HEAD advice; lazy.nvim
+  -- passes this environment to git. An entry is added after the user's own.
+  local count = tonumber(vim.env.GIT_CONFIG_COUNT) or 0
+  vim.env["GIT_CONFIG_KEY_" .. count] = "advice.detachedHead"
+  vim.env["GIT_CONFIG_VALUE_" .. count] = "false"
+  vim.env.GIT_CONFIG_COUNT = tostring(count + 1)
   local lockfile = require("lazy.core.config").options.lockfile
   local original = read_file(lockfile)
   local snapshot = locked()

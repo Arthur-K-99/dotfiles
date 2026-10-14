@@ -32,7 +32,9 @@ record_release() {
 # returns 0 when a plugin fails and only warns ("update returned <status>"),
 # so the output decides; --no-pager keeps it from waiting in less for a key.
 # A failure shows the whole output; a success only the plugins zinit names
-# as updated, since it prints each one's git log even with --quiet.
+# as updated, since it prints each one's git log even with --quiet. zinit
+# prints a dot per plugin and a carriage return before "Updating
+# owner/plugin", and its own changelog after "[self-update]".
 bootstrap_zinit() {
     local zinit_home="${1:-${XDG_DATA_HOME:-$HOME/.local/share}/zinit/zinit.git}"
     local output status
@@ -72,7 +74,11 @@ bootstrap_zinit() {
         echo "zinit could not update every plugin; see the warnings above." >&2
         return "$status"
     fi
-    printf '%s\n' "$output" | sed "s/$(printf '\033')\\[[0-9;]*m//g" | grep -E '^Updating [^/ ]+/[^ ]+$' | sed 's/^/  /' || :
+    printf '%s\n' "$output" | tr -d '\r' |
+        sed -n "s/$(printf '\033')\\[[0-9;]*m//g; s/^\\.*Updating \\([^/ ][^/ ]*\\/[^ ][^ ]*\\)\$/  Updating \\1/p"
+    case "$output" in
+        *"[self-update]"*) echo "  zinit updated itself" ;;
+    esac
 }
 
 # dotfiles_tmux_plugins <tmux.conf>: each declared plugin, as written after
@@ -1154,9 +1160,7 @@ bootstrap_neovim() {
         case "$report" in
             *"missing plugin "*|*"stale plugin "*)
                 echo "Installing Neovim plugins from lazy-lock.json..."
-                # Each pinned checkout would print git's detached-HEAD advice.
-                GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=advice.detachedHead GIT_CONFIG_VALUE_0=false \
-                    nvim --headless -c 'lua require("dotfiles.bootstrap").plugins()' -c 'cquit 1' || return
+                nvim --headless -c 'lua require("dotfiles.bootstrap").plugins()' -c 'cquit 1' || return
                 ;;
         esac
         case "$report" in
