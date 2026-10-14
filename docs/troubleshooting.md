@@ -25,7 +25,7 @@ None of these is a failure.
   - `[ok] charm apt repository key (expires on <date>; scripts/update.sh fetches it again)` within 30 days of the expiry.
 - **`The GitHub API refused the request with GITHUB_TOKEN; trying once without it.`** The token has expired or is for another host; the request goes on without it.
 - **Without a terminal** (cron, some IDE tasks and agent shells), zsh-you-should-use prints `tput: No value for $TERM`, and on Debian 12 fzf 0.38 prints `can't change option: zle`. A real terminal never shows either.
-- **Homebrew's `Warning: The following taps are not trusted:`** during a macOS update names taps of your own. Homebrew 7 skips their formulae until you trust them (`brew trust --formula <tap>/<formula>`); the dotfiles install nothing from a tap.
+- **`Warning: The following taps are not trusted:`** when a macOS update upgrades a Homebrew formula. It names taps you added yourself, such as `hashicorp/tap`. Homebrew 7 ignores their formulae until you trust them (`brew trust --formula <tap>/<formula>`); the dotfiles install nothing from a tap, so the update is unaffected.
 - **In a container,** dbus's package script prints `invoke-rc.d: could not determine current runlevel`; that comes from the container, not the installer.
 - **Backups:** `backing up <file> -> <file>.bak.<timestamp>` (Windows: `backed up: <file> -> <backup>`) and `Your previous ~/.zshrc is in …` are the linker keeping your files. On Windows, `copied (symbolic links unavailable)` means a copy instead of a link ([Windows](windows.md#links-or-copies)).
 
@@ -47,7 +47,7 @@ None of these is a failure.
 - **tmux shows "TPM is missing":** run `bash ~/dotfiles/scripts/bootstrap_tools.sh`, with your clone's path if it is elsewhere.
 - **"Could not initialize the tool environment. Check Homebrew":** `brew shellenv` failed; check that Homebrew runs, then rerun.
 - **Neovim is older than 0.12 on macOS:** `brew upgrade neovim`, then rerun.
-- **An old oh-my-posh stays on macOS:** the update says `oh-my-posh not installed by the bootstrap; left alone` and `oh-my-posh version` prints an old release. A copy from Homebrew's former `jandedobbeleer/oh-my-posh` tap, which Homebrew 7 refuses to load, still sits in `/opt/homebrew/bin`. Remove that file, then `brew uninstall --formula --force oh-my-posh` (without `--force` Homebrew stops at the same refusal), `brew untap jandedobbeleer/oh-my-posh`, and rerun `scripts/update.sh`, which installs the current release into `~/.local/bin`.
+- **An old oh-my-posh stays on macOS:** the update says `oh-my-posh not installed by the bootstrap; left alone` and `oh-my-posh version` prints an old release. A copy from Homebrew's former `jandedobbeleer/oh-my-posh` tap, which Homebrew 7 refuses to load, still sits in `/opt/homebrew/bin`. Remove that file, then `brew uninstall --formula --force oh-my-posh` (plain `brew uninstall oh-my-posh` stops at the same refusal), `brew untap jandedobbeleer/oh-my-posh`, and rerun `bash ~/dotfiles/scripts/update.sh`, which installs the current release into `~/.local/bin`.
 - **git ignores a shared setting:** `~/.gitconfig` is read after `~/.config/git/config`, so an old setting there wins, such as a `core.pager` that hides delta.
 
 ## Undo an install
