@@ -26,7 +26,8 @@ vim.fn.mkdir(with_cli, "p")
 vim.fn.mkdir(without_cli, "p")
 vim.fn.mkdir(site .. "/parser", "p")
 vim.fn.writefile({ "#!/bin/sh", "exit 0" }, with_cli .. "/tree-sitter")
-vim.uv.fs_chmod(with_cli .. "/tree-sitter", tonumber("755", 8))
+-- vim.fn rather than vim.uv, which Neovim 0.9 (CI's apt package) lacks.
+vim.fn.setfperm(with_cli .. "/tree-sitter", "rwxr-xr-x")
 -- An installed parser is any parser/<lang>.* file on 'runtimepath'.
 vim.fn.writefile({}, site .. "/parser/dotfiles_test_built.so")
 vim.opt.runtimepath:append(site)

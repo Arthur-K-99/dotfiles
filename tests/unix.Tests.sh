@@ -247,6 +247,7 @@ test_oh_my_posh_config_check() {
     local status
     printf '{"palette": {"os": "#A5ADCB"}, "blocks": [{"type": "prompt", "segments": [{"type": "os"}, {"type": "path"}]}]}\n' > "$test_dir/config.json"
     oh-my-posh() {
+        [ "$*" = "config export --config $test_dir/config.json --format json" ] || return 98
         # Filled-in defaults, as the real export adds, must not matter.
         printf '{"palette": {"os": "#A5ADCB"}, "version": 3, "blocks": [{"type": "prompt", "alignment": "left", "segments": [{"type": "os", "style": "plain"}, {"type": "path"}]}]}\n'
     }
@@ -1448,10 +1449,14 @@ zinit() {
         # Like zinit itself: a failed plugin update is a warning and status 0.
         print -r -- "$*" >> "$DOTFILES_TEST_FIXTURE/update-runs"
         [[ -f $DOTFILES_TEST_FIXTURE/update-retry ]] || print -r -- "Warning: zsh-users/zsh-completions update returned 1"
-        # An updated plugin's header (colored) and its git log.
+        # Like zinit: a dot per plugin, then an updated plugin's header after a
+        # carriage return, its git log, and its own changelog when it updates.
+        print -rn -- ".."
         print -r -- $'\e[1mUpdating zsh-users/zsh-autosuggestions\e[0m'
-        print -r -- "85919cd Fix a widget"
+        print -r -- "Updating 0e810e5..85919cd"
         print -r -- "Fast-forward"
+        print -r -- $'\r..Updating Aloxaf/fzf-tab'
+        print -r -- "[self-update] updating zinit repository"
         return 0
     fi
     printf '%s\n' "$2" >> "$DOTFILES_TEST_FIXTURE/plugin-runs"
@@ -1482,10 +1487,9 @@ ZINIT
     bootstrap_zinit "$test_dir/zinit" > "$test_dir/output"
     assert_equal 2 "$(wc -l < "$test_dir/update-runs" | tr -d ' ')"
     # A success names the updated plugins and leaves out their git logs.
-    assert_contains "$(cat "$test_dir/output")" '  Updating zsh-users/zsh-autosuggestions'
-    case "$(cat "$test_dir/output")" in
-        *Fast-forward*|*85919cd*) echo "zinit's git log was printed on success." >&2; return 1 ;;
-    esac
+    assert_equal "  Updating zsh-users/zsh-autosuggestions
+  Updating Aloxaf/fzf-tab
+  zinit updated itself" "$(sed -n '/^Updating Zinit and its plugins/,$p' "$test_dir/output" | sed 1d)"
 }
 
 test_github_release_install() {
@@ -2870,7 +2874,6 @@ test_neovim_plugins_install_and_retry() {
                 ;;
             *'bootstrap").plugins()'*)
                 case "$*" in *' -c cquit 1') ;; *) return 99 ;; esac
-                printf '%s=%s %s\n' "${GIT_CONFIG_KEY_0:-}" "${GIT_CONFIG_VALUE_0:-}" "${GIT_CONFIG_COUNT:-}" > "$DOTFILES_TEST_FIXTURE/plugins-git-config"
                 [ -f "$DOTFILES_TEST_FIXTURE/plugins-ok" ] || { echo 'missing plugin catppuccin'; return 1; }
                 : > "$DOTFILES_TEST_FIXTURE/plugins-installed"
                 ;;
@@ -2896,8 +2899,6 @@ test_neovim_plugins_install_and_retry() {
     bootstrap_neovim > "$test_dir/output" 2>&1 || status=$?
     assert_equal 1 "$status"
     assert_equal "$(printf '%s\n' --version "$check" "$plugins")" "$(cat "$test_dir/nvim-args")"
-    # The pinned checkouts run without git's detached-HEAD advice.
-    assert_equal 'advice.detachedHead=false 1' "$(cat "$test_dir/plugins-git-config")"
     assert_contains "$(cat "$test_dir/output")" 'missing plugin catppuccin'
     [ ! -f "$test_dir/plugins-installed" ]
     # The retry installs the plugins; the parsers and servers fail and are retried in turn.
@@ -3609,11 +3610,15 @@ INIT
         XDG_CONFIG_HOME="$fx/config" XDG_DATA_HOME="$fx/data" XDG_STATE_HOME="$fx/state" XDG_CACHE_HOME="$fx/cache" \
             nvim --headless -c 'lua require("dotfiles.bootstrap").plugins()' -c 'cquit 1' > "$fx/output" 2>&1
     }
-    # Both plugins are cloned at the pinned (older) commit, not at the branch head.
+    # Both plugins are cloned at the pinned (older) commit, not at the branch
+    # head, without git's detached-HEAD advice for each checkout.
     run_plugins
     assert_equal "${first[alpha]}" "$(git -C "$fx/data/nvim/lazy/alpha" rev-parse HEAD)"
     assert_equal "${first[beta]}" "$(git -C "$fx/data/nvim/lazy/beta" rev-parse HEAD)"
     assert_contains "$(cat "$fx/output")" 'ok plugin beta'
+    case "$(cat "$fx/output")" in
+        *'detached HEAD'*) echo "git's detached-HEAD advice was printed." >&2; cat "$fx/output" >&2; return 1 ;;
+    esac
     cmp -s "$fx/lock-original.json" "$fx/config/nvim/lazy-lock.json"
     # alpha drifts and beta's clone goes while its repository is unreachable: the
     # run fails, alpha is back on its commit, and beta stays pinned in the lockfile.
@@ -3653,11 +3658,10 @@ test_nvim_config_check() {
     assert_contains "$(cat "$test_dir/output")" "lacks the declared plugin 'catppuccin'"
 }
 
-# update() against stand-ins for mason-registry and nvim-treesitter (see
-# tests/nvim_bootstrap_update.lua): current, newer, failed and retried,
-# missing, and the parser update with and without a compiler.
-# Parsers count as skipped, not missing, exactly when the tree-sitter CLI is
-# not on PATH (as on Debian 12, whose glibc no release supports).
+# missing() and install() against a PATH with and without a tree-sitter CLI
+# (see tests/nvim_bootstrap_missing.lua): on macOS and Linux parsers count as
+# skipped, not missing, exactly when the CLI is not on PATH (as on Debian 12,
+# whose glibc 2.36 the current releases do not run on).
 test_nvim_bootstrap_missing() {
     if ! nvim -l "$TEST_REPO_DIR/tests/nvim_bootstrap_missing.lua" "$TEST_REPO_DIR/config/nvim" > "$test_dir/output" 2>&1; then
         cat "$test_dir/output" >&2
@@ -3666,6 +3670,9 @@ test_nvim_bootstrap_missing() {
     assert_contains "$(cat "$test_dir/output")" '2 parser skip cases pass.'
 }
 
+# update() against stand-ins for mason-registry and nvim-treesitter (see
+# tests/nvim_bootstrap_update.lua): current, newer, failed and retried,
+# missing, and the parser update with and without a compiler.
 test_nvim_bootstrap_update() {
     if ! nvim -l "$TEST_REPO_DIR/tests/nvim_bootstrap_update.lua" "$TEST_REPO_DIR/config/nvim" > "$test_dir/output" 2>&1; then
         cat "$test_dir/output" >&2

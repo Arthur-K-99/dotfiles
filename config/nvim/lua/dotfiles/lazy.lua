@@ -21,9 +21,9 @@ end
 vim.opt.rtp:prepend(lazypath)
 
 -- The bootstrap's own headless runs (nvim --headless -c 'lua
--- require("dotfiles.bootstrap")...') start before the plugins they install
--- exist, and lazy.nvim reports every plugin that loads at startup as "not
--- installed" first. Those runs check the plugins themselves, so the message
+-- require("dotfiles.bootstrap")...') can start before the plugins exist, and
+-- lazy.nvim then reports each missing one that loads at startup as "not
+-- installed". Those runs report missing plugins themselves, so the message
 -- is dropped there; any other start still shows it.
 local bootstrapping = #vim.api.nvim_list_uis() == 0
   and vim.iter(vim.v.argv):any(function(arg)
@@ -57,4 +57,6 @@ require("lazy").setup({
     },
   },
 })
-vim.notify = notify
+if bootstrapping then
+  vim.notify = notify
+end

@@ -64,7 +64,11 @@ try:
     source = json.load(open(sys.argv[1]))
 except (OSError, ValueError) as error:
     sys.exit("Cannot read %s: %s" % (sys.argv[1], error))
-if shape(json.load(sys.stdin)) != shape(source):
+try:
+    same = shape(json.load(sys.stdin)) == shape(source)
+except (AttributeError, TypeError, ValueError):
+    same = False
+if not same:
     sys.exit("oh-my-posh exported another palette or other segments than %s; it cannot read the file." % sys.argv[1])
 ' "$1"
 }
