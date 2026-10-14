@@ -223,6 +223,7 @@ try {
     Invoke-Test 'Package installation uses corrected IDs and refreshes discovery before fonts' {
         $events = [Collections.Generic.List[string]]::new()
         function Get-DotfilesCommandPath { param($Name) $Name }
+        function Get-DotfilesWingetListedVersions { param($WingetCommand, $Package) }
         function Invoke-DotfilesNativeCommand {
             param($Command, $Arguments, [switch]$Quiet)
             $events.Add(($Arguments -join ' '))
@@ -239,6 +240,7 @@ try {
     Invoke-Test 'WinGet failures stop before font setup' {
         function Get-DotfilesCommandPath { param($Name) $Name }
         function Invoke-DotfilesFontInstall { throw 'Unexpected font installation' }
+        function Get-DotfilesWingetListedVersions { param($WingetCommand, $Package) }
         function Invoke-DotfilesNativeCommand { param($Command, $Arguments, [switch]$Quiet) 5 }
         Assert-Throws { Invoke-DotfilesPackageInstall $repository } 'could not check.*exit code 5'
         function Invoke-DotfilesNativeCommand {
@@ -252,6 +254,7 @@ try {
         $report = [Collections.Generic.List[string]]::new()
         $calls = [Collections.Generic.List[string]]::new()
         function Get-DotfilesCommandPath { param($Name) $Name }
+        function Get-DotfilesWingetListedVersions { param($WingetCommand, $Package) }
         function Update-DotfilesProcessPath { }
         function Invoke-DotfilesFontInstall { $calls.Add('font') }
         function Write-Host { param($Object) $report.Add([string]$Object) }
@@ -279,6 +282,7 @@ try {
         $report = [Collections.Generic.List[string]]::new()
         function Get-DotfilesCommandPath { param($Name) $Name }
         function Get-DotfilesRunningHostPackages { 'Microsoft.WindowsTerminal' }
+        function Get-DotfilesWingetListedVersions { param($WingetCommand, $Package) }
         function Test-DotfilesWingetPinned { param($WingetCommand, $Package) $Package -eq 'Test.Pinned' }
         function Update-DotfilesProcessPath { }
         function Invoke-DotfilesFontInstall { $calls.Add('font') }
@@ -328,6 +332,59 @@ try {
         Assert-True (-not (Test-DotfilesWingetPinned 'Invoke-Fake-Winget' 'Microsoft.PowerShell')) 'A pin of another package does not count'
         $pinState.Lines = @('There are no pins configured.')
         Assert-True (-not (Test-DotfilesWingetPinned 'Invoke-Fake-Winget' 'Microsoft.PowerShell')) 'No pins means not pinned'
+    }
+
+    Invoke-Test 'A package winget finds only without --exact counts as installed, and the update installs a newer one again' {
+        $fixture = New-Fixture
+        New-Item -ItemType Directory -Path (Join-Path $fixture.Directory 'packages') | Out-Null
+        [IO.File]::WriteAllLines((Join-Path $fixture.Directory 'packages/winget.txt'), [string[]]@('Test.Portable', 'Test.Missing'))
+        # Like rsteube.Carapace on winget 1.11: listed without --exact only, and unknown to winget upgrade.
+        $state = @{ Listed = @('1.0.6', '1.8.0', 'winget'); InstallCode = 0; Calls = [Collections.Generic.List[string]]::new() }
+        $report = [Collections.Generic.List[string]]::new()
+        function Get-DotfilesCommandPath { param($Name) $Name }
+        function Get-DotfilesRunningHostPackages { }
+        function Test-DotfilesWingetPinned { param($WingetCommand, $Package) $false }
+        function Update-DotfilesProcessPath { }
+        function Invoke-DotfilesFontInstall { }
+        function Write-Host { param($Object) $report.Add([string]$Object) }
+        function Get-DotfilesWingetListedVersions { param($WingetCommand, $Package) if ($Package -eq 'Test.Portable') { $state.Listed } }
+        function Invoke-DotfilesNativeCommand {
+            param($Command, $Arguments, [switch]$Quiet)
+            $state.Calls.Add("$($Arguments[0]) $($Arguments[2])")
+            if ($Arguments[0] -in @('list', 'upgrade')) { return $WingetNoApplicationsFound }
+            Assert-True ($Arguments -contains '--exact') 'The install names the exact package'
+            return $state.InstallCode
+        }
+        Invoke-DotfilesPackageInstall $fixture.Directory
+        Assert-True ($report -contains '  already installed: Test.Portable') "The listing counts as installed: $($report -join ' | ')"
+        Assert-True (($state.Calls -join ',') -eq 'list Test.Portable,list Test.Missing,install Test.Missing') "Only the missing package is installed: $($state.Calls -join ',')"
+        $state.Calls.Clear(); $report.Clear()
+        Invoke-DotfilesPackageInstall $fixture.Directory -Update
+        Assert-True ($report -contains '  upgraded: Test.Portable (installed again: winget upgrade cannot find it)') "A newer version is installed again: $($report -join ' | ')"
+        Assert-True (($state.Calls -join ',') -match '^list Test\.Portable,upgrade Test\.Portable,install Test\.Portable,') "The install follows the failed upgrade: $($state.Calls -join ',')"
+        $state.Listed = @('1.8.0', 'winget')
+        $state.Calls.Clear(); $report.Clear()
+        Invoke-DotfilesPackageInstall $fixture.Directory -Update
+        Assert-True (($report -contains '  up to date: Test.Portable') -and -not ($state.Calls -contains 'install Test.Portable')) "Without a newer version nothing is installed: $($report -join ' | ')"
+        $state.Listed = @('1.0.6', '1.8.0', 'winget')
+        $state.InstallCode = 9
+        Assert-Throws { Invoke-DotfilesPackageInstall $fixture.Directory -Update } 'failed to install the newer Test\.Portable \(exit code 9\)\. Rerun scripts\\update\.ps1'
+    }
+
+    Invoke-Test 'The listing without --exact is read from the row that names the package id' {
+        $listState = @{ Lines = @(); Arguments = $null }
+        function Invoke-Fake-Winget { $listState.Arguments = $args -join ' '; $listState.Lines }
+        # winget draws a spinner before the table, separated by carriage returns.
+        $listState.Lines = @("   - `r   \ `rName     Id               Version Available Source", '-----------------------------------------------------', 'Carapace rsteube.Carapace 1.0.6   1.8.0     winget')
+        $versions = @(Get-DotfilesWingetListedVersions 'Invoke-Fake-Winget' 'rsteube.Carapace')
+        Assert-True (($versions -join ' ') -eq '1.0.6 1.8.0 winget') "The row's installed and available versions and source are read: $versions"
+        Assert-True ($listState.Arguments -eq 'list --id rsteube.Carapace --accept-source-agreements') "winget lists the id without --exact: $($listState.Arguments)"
+        $listState.Lines = @("`r-`rsd - search & displace chmln.sd 1.1.0 winget")
+        Assert-True ((@(Get-DotfilesWingetListedVersions 'Invoke-Fake-Winget' 'chmln.sd') -join ' ') -eq '1.1.0 winget') 'A name with spaces and a spinner before the row do not matter'
+        $listState.Lines = @('Carapace Bin rsteube.CarapaceBin 2.0.0 winget')
+        Assert-True ($null -eq (Get-DotfilesWingetListedVersions 'Invoke-Fake-Winget' 'rsteube.Carapace')) 'A longer id does not match a shorter one'
+        $listState.Lines = @('No installed package found matching input criteria.')
+        Assert-True ($null -eq (Get-DotfilesWingetListedVersions 'Invoke-Fake-Winget' 'rsteube.Carapace')) 'Nothing listed returns nothing'
     }
 
     Invoke-Test 'The update leaves PowerShell 7 and Windows Terminal to another shell only while they run it' {

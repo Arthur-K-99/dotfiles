@@ -367,13 +367,51 @@ function Test-DotfilesWingetPinned {
     return @($lines | Where-Object { $_ -match $pattern }).Count -gt 0
 }
 
+# winget 1.11 cannot find some packages it installed itself by their exact
+# id: rsteube.Carapace, a portable zip, is missing from `winget list --id
+# rsteube.Carapace --exact` and from `winget upgrade --id` with or without
+# --exact, while `winget list --id rsteube.Carapace` lists it under that id.
+# This reads that listing and returns the words after the id on the row that
+# names it (the installed version, an available version when there is a newer
+# one, the source), or nothing when no row does. Column headers are localized,
+# so the row is found by the id alone.
+function Get-DotfilesWingetListedVersions {
+    param([string]$WingetCommand, [string]$Package)
+    $ErrorActionPreference = 'Continue'
+    $PSNativeCommandUseErrorActionPreference = $false
+    $lines = @(& $WingetCommand list --id $Package --accept-source-agreements 2>$null | ForEach-Object { [string]$_ })
+    $pattern = "(^|\s)$([regex]::Escape($Package))\s+(\S.*)$"
+    foreach ($line in $lines) {
+        # The progress spinner precedes the first line, separated by carriage returns.
+        if ((($line -split "`r")[-1]) -match $pattern) { return @($Matches[2].Trim() -split '\s+') }
+    }
+}
+
+# Whether winget lists the package as installed, by its exact id or else by
+# the listing above. Any answer but installed or not found stops the install.
+function Test-DotfilesWingetInstalled {
+    param([string]$WingetCommand, [string]$Package)
+    $code = Invoke-DotfilesNativeCommand $WingetCommand @('list', '--id', $Package, '--exact', '--accept-source-agreements') -Quiet
+    if ($code -eq 0) { return $true }
+    if ($code -ne $script:WingetNoApplicationsFound) { throw "winget could not check $Package (exit code $code). Rerun install.ps1 after correcting the error." }
+    return $null -ne (Get-DotfilesWingetListedVersions $WingetCommand $Package)
+}
+
 # A blocking or gating pin that the check above missed, a package whose
 # installed version winget cannot tell, and one whose upgrade needs another
-# installer type are left as they are and reported.
+# installer type are left as they are and reported. A package that winget
+# upgrade cannot find is installed again by id when the listing shows a
+# newer version, which replaces it.
 function Update-DotfilesWingetPackage {
     param([string]$WingetCommand, [string]$Package)
     $code = Invoke-DotfilesNativeCommand $WingetCommand @('upgrade', '--id', $Package, '--exact', '--silent', '--accept-package-agreements', '--accept-source-agreements')
-    if ($code -eq 0) { Write-Host "  upgraded: $Package" }
+    if ($code -eq $script:WingetNoApplicationsFound) {
+        if (@(Get-DotfilesWingetListedVersions $WingetCommand $Package).Count -lt 3) { Write-Host "  up to date: $Package"; return }
+        $code = Invoke-DotfilesNativeCommand $WingetCommand @('install', '--id', $Package, '--exact', '--silent', '--accept-package-agreements', '--accept-source-agreements')
+        if ($code -eq 0 -or $code -eq $script:WingetRebootRequiredToFinish) { Write-Host "  upgraded: $Package (installed again: winget upgrade cannot find it)" }
+        else { throw "winget failed to install the newer $Package (exit code $code). Rerun scripts\update.ps1 to retry." }
+    }
+    elseif ($code -eq 0) { Write-Host "  upgraded: $Package" }
     elseif ($code -eq $script:WingetUpdateNotApplicable) { Write-Host "  up to date: $Package" }
     elseif ($code -eq $script:WingetRebootRequiredToFinish) { Write-Host "  upgraded: $Package (restart Windows to finish)" }
     elseif ($code -eq $script:WingetPackageIsPinned) { Write-Host "  pinned, left alone: $Package (winget pin remove --id $Package to upgrade it)" }
@@ -392,15 +430,13 @@ function Invoke-DotfilesPackageInstall {
     if ($Update) { $hosts = @(Get-DotfilesRunningHostPackages); Write-Host 'Installing and upgrading packages via winget...' }
     else { Write-Host 'Installing packages via winget...' }
     foreach ($package in $packages) {
-        $code = Invoke-DotfilesNativeCommand $wingetCommand @('list', '--id', $package, '--exact', '--accept-source-agreements') -Quiet
-        if ($code -eq 0) {
+        if (Test-DotfilesWingetInstalled $wingetCommand $package) {
             if (-not $Update) { Write-Host "  already installed: $package" }
             elseif ($hosts -contains $package) { Write-Host "  left alone: $package runs this update (from another shell: winget upgrade --id $package --exact)" }
             elseif (Test-DotfilesWingetPinned $wingetCommand $package) { Write-Host "  pinned, left alone: $package (winget pin remove --id $package to upgrade it)" }
             else { Update-DotfilesWingetPackage $wingetCommand $package }
             continue
         }
-        if ($code -ne $script:WingetNoApplicationsFound) { throw "winget could not check $package (exit code $code). Rerun install.ps1 after correcting the error." }
         Write-Host "  installing: $package"
         $code = Invoke-DotfilesNativeCommand $wingetCommand @('install', '--id', $package, '--exact', '--silent', '--accept-package-agreements', '--accept-source-agreements')
         # The package is in place, as for an upgrade; the doctor finds out whether it already works.
