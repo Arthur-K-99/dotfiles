@@ -72,7 +72,7 @@ The flavors are `latte`, `frappe`, `macchiato` and `mocha`. The script reads the
 
 After switching: review `git diff`, run `bash scripts/test.sh`, then `bash scripts/bootstrap_tools.sh` (installs the new yazi flavor, and the bat theme on old packages), start a new tmux server or press `prefix r`, and open a new shell. On Windows, rerun `install.ps1` or `scripts\install_runtimes.ps1` for the yazi flavor and restart Windows Terminal so the fragment is read again.
 
-Not touched: the README and the other documents under `docs/` (they say "the flavor" rather than naming it, except the roadmap's history), and tools that follow the terminal palette.
+Not touched: the README and the other documents under `docs/` (they say "the flavor" rather than naming it, except the roadmap's goal line and its history, which keep Macchiato as written), and tools that follow the terminal palette.
 
 ## Adding a themed location
 

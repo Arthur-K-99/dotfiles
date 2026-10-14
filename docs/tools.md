@@ -54,7 +54,7 @@ New interactive shells start with a machine summary in Catppuccin colors; tmux p
 - **Configuration:** `config/nvim`, linked whole to `~/.config/nvim` (Windows: every file managed into `%LOCALAPPDATA%\nvim`).
 - **Plugins** are pinned in `lazy-lock.json` and installed by the bootstrap at exactly those commits; nothing is fetched when Neovim starts. After `:Lazy update` commit the lockfile, and run the bootstrap or the update (or `scripts\install_runtimes.ps1`) on other machines to follow it.
 - **Languages** are listed in `config/nvim/lua/dotfiles/tools.lua`; the bootstrap installs them headless through nvim-treesitter and Mason, and the doctor reports each one:
-  - language servers for Lua, Bash, TypeScript and JavaScript, Python, JSON, YAML, TOML, Markdown and PowerShell (the last only where `pwsh` exists);
+  - language servers for Lua, Bash, TypeScript and JavaScript, Python, JSON, YAML, TOML, Markdown and PowerShell (the last installed everywhere, started only where `pwsh` exists);
   - Tree-sitter parsers for bash, diff, dockerfile, the git file types, javascript, json, powershell, python, regex, toml, tsx, typescript and yaml. Neovim bundles c, lua, markdown, markdown_inline, query, vim and vimdoc.
 - **The update** brings the parsers to the revisions the pinned nvim-treesitter names and the language servers to their latest versions.
 - **Keys:** the leader is `Space`. `Space` alone waits, then which-key shows the groups (find, git, search, diagnostics, buffer, code); `Space ?` shows the keys of the current buffer. `Ctrl+h/j/k/l` move between splits and on into tmux panes. The README's [Key bindings](../README.md#key-bindings) table has the rest.

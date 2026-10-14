@@ -26,7 +26,7 @@ None of these is a failure.
 - **`The GitHub API refused the request with GITHUB_TOKEN; trying once without it.`** The token has expired or is for another host; the request goes on without it.
 - **Without a terminal** (cron, some IDE tasks and agent shells), zsh-you-should-use prints `tput: No value for $TERM`, and on Debian 12 fzf 0.38 prints `can't change option: zle`. A real terminal never shows either.
 - **In a container,** dbus's package script prints `invoke-rc.d: could not determine current runlevel`; that comes from the container, not the installer.
-- **Backups:** `backing up <file> -> <file>.bak.<timestamp>` and `Your previous ~/.zshrc is in …` are the linker keeping your files. On Windows, `copied (symbolic links unavailable)` means a copy instead of a link ([Windows](windows.md#links-or-copies)).
+- **Backups:** `backing up <file> -> <file>.bak.<timestamp>` (Windows: `backed up: <file> -> <backup>`) and `Your previous ~/.zshrc is in …` are the linker keeping your files. On Windows, `copied (symbolic links unavailable)` means a copy instead of a link ([Windows](windows.md#links-or-copies)).
 
 ## First-try problems
 
@@ -57,9 +57,12 @@ On a machine you want back as it was. Run the listing commands first and look at
 - **The links and the files they replaced.** Each replaced file sits beside its link as `<name>.bak.<timestamp>`:
 
   ```sh
-  find ~ -maxdepth 3 -type l -lname "$HOME/dotfiles/*"            # the links into the repository
-  find ~ -maxdepth 3 -type l -lname "$HOME/dotfiles/*" -delete    # remove them
-  find ~ -maxdepth 3 -name '*.bak.[0-9]*'                         # then rename each backup back
+  # The links into the repository, then the backups to rename back. Only the
+  # home directory itself and ~/.config are searched: on macOS, reading
+  # Documents or Library triggers privacy prompts.
+  find ~ -maxdepth 1 -type l -lname "$HOME/dotfiles/*"; find ~/.config -maxdepth 2 -type l -lname "$HOME/dotfiles/*"
+  find ~ -maxdepth 1 -type l -lname "$HOME/dotfiles/*" -delete; find ~/.config -maxdepth 2 -type l -lname "$HOME/dotfiles/*" -delete
+  find ~ -maxdepth 1 -name '*.bak.[0-9]*'; find ~/.config -maxdepth 2 -name '*.bak.[0-9]*'
   ```
 
   `~/.gitconfig` was created only if it was missing, with two comment lines.
@@ -67,10 +70,12 @@ On a machine you want back as it was. Run the listing commands first and look at
 
   ```sh
   rm -rf ~/.local/share/zinit ~/.local/share/nvim ~/.local/share/mise ~/.local/share/fonts/CaskaydiaCove \
-      ~/.config/tmux/plugins ~/.config/yazi/flavors ~/.local/opt/nvim ~/.local/state/dotfiles ~/.cache/dotfiles
+      ~/.config/tmux/plugins ~/.config/yazi/flavors ~/.local/opt/nvim ~/.local/state/dotfiles ~/.cache/dotfiles \
+      ~/.local/state/nvim ~/.cache/nvim ~/.local/state/mise ~/.cache/mise ~/.cache/zinit
+  fc-cache -f                    # Linux: forget the removed font
   ```
 
-  Also `~/.config/yazi/package.toml`, which ya wrote, and the tools the bootstrap put in `~/.local/bin`: on Linux `oh-my-posh`, `zoxide`, `mise`, `lazygit`, `lazydocker`, `delta`, `atuin`, `carapace`, `yazi`, `ya`, `dust`, `procs`, `xh`, `tldr`, `sesh`, `fastfetch`, `tree-sitter` and the `nvim` and `fd` links; on macOS `oh-my-posh`. Tools you used keep data of their own, such as atuin's history in `~/.local/share/atuin`.
+  Also `~/.config/yazi/package.toml`, which ya wrote; the bat theme the bootstrap added for bat older than 0.26 (`~/.config/bat/themes/Catppuccin *.tmTheme`, then `bat cache --clear`; Debian and Ubuntu name it `batcat`); `~/.npm`, where Mason's npm installs left a cache, if nothing else of yours uses npm; and the tools the bootstrap put in `~/.local/bin`: on Linux `oh-my-posh`, `zoxide`, `mise`, `lazygit`, `lazydocker`, `delta`, `atuin`, `carapace`, `yazi`, `ya`, `dust`, `procs`, `xh`, `tldr`, `sesh`, `fastfetch`, `tree-sitter` and the `nvim` and `fd` links; on macOS `oh-my-posh`. Tools you used keep data of their own, such as atuin's history in `~/.local/share/atuin`.
 - **Linux, the apt repositories and packages:**
 
   ```sh
@@ -94,7 +99,9 @@ On a machine you want back as it was. Run the listing commands first and look at
 
   Remove the managed files ([Windows](windows.md#links-or-copies) lists them) and rename each backup back.
 - **The Windows Terminal fragment:** the folder `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\dotfiles`.
-- **Neovim:** `%LOCALAPPDATA%\nvim` and `%LOCALAPPDATA%\nvim-data`.
+- **Neovim:** `%LOCALAPPDATA%\nvim-data`, and `%LOCALAPPDATA%\nvim` only if it held nothing of yours before; otherwise remove just the managed files, as above.
+- **yazi and mise:** `~\.config\yazi\flavors` and `~\.config\yazi\package.toml`, and `%LOCALAPPDATA%\mise`.
+- **The font:** CaskaydiaCove Nerd Font, under Settings > Personalization > Fonts.
 - **The modules,** in PowerShell 7: `Uninstall-Module Terminal-Icons, PSFzf, posh-git, CompletionPredictor -AllVersions`.
 - **The packages:** `winget uninstall --id <id> --exact` for those in `packages/winget.txt` that you did not have before.
 

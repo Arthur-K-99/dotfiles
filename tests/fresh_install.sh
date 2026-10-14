@@ -150,7 +150,8 @@ fresh_install_run() {
     local stale left
     echo "==> Installing"
     run_stage bash "$1/install.sh" || return
-    # A rerun must succeed without changes, as the README promises.
+    # A rerun must succeed, as the README says (on Linux it may upgrade the
+    # listed apt packages).
     echo "==> Rerunning the installer"
     run_stage bash "$1/install.sh" || return
     # The update right after an install must succeed, end with the doctor,

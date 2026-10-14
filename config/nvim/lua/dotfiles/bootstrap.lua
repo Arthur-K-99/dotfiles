@@ -158,7 +158,7 @@ local function report(missing)
     if vim.tbl_contains(missing.parsers, lang) then
       write("missing parser " .. lang)
     elseif vim.tbl_contains(missing.skipped, lang) then
-      write("skipped parser " .. lang .. " (no C compiler or tree-sitter CLI; see docs/troubleshooting.md)")
+      write("skipped parser " .. lang .. " (no C compiler or tree-sitter CLI; see docs/troubleshooting.md in the dotfiles repository)")
     else
       write("ok parser " .. lang)
     end

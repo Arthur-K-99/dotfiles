@@ -14,21 +14,22 @@ Where it has been tried:
 The installer replaces your shell and tool configuration and installs packages. To see it without touching your machine:
 
 - **Linux, unattended:** from a clone of this repository, `bash tests/fresh_install.sh ubuntu:24.04` (or `debian:12`, `debian:13`, `ubuntu:26.04`) installs the checkout in a new Docker container, reruns it, runs the update and starts zsh and tmux, then removes the container. On a Mac prefix `DOCKER_DEFAULT_PLATFORM=linux/arm64`; for repeated runs add `GITHUB_TOKEN="$(gh auth token)"` ([development](docs/development.md#fresh-install)).
-- **Linux, to look around:** a container with a user that has sudo, as on a real machine. `docker start -ai dotfiles-try` returns to it and `docker rm -f dotfiles-try` removes it.
+- **Linux, to look around:** a container with a user that has sudo, as on a real machine. `docker start -ai dotfiles-try` returns to it as root (`su - dev` again), and `docker rm -f dotfiles-try` removes it. On a Mac add `--platform linux/arm64` to `docker run`, or an amd64 copy of the image pulled earlier runs emulated. This installs the `main` branch from GitHub; `tests/fresh_install.sh` installs your checkout.
 
   ```sh
   docker run -it --name dotfiles-try ubuntu:24.04
   # inside, as root
   apt-get update && apt-get install -y sudo git ca-certificates
-  echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections   # no time zone question
+  echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
+  echo LANG=C.UTF-8 > /etc/default/locale
   useradd -m -s /bin/bash dev && echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev
   su - dev
-  export LANG=C.UTF-8
   git clone https://github.com/Arthur-K-99/dotfiles.git ~/dotfiles && ~/dotfiles/install.sh
-  exec zsh
+  sudo chsh -s "$(command -v zsh)" dev && exit   # dev has no password for chsh
+  su - dev                                        # back as root: now in zsh
   ```
 
-- **WSL:** a second distribution, copied from yours, which `wsl --unregister dotfiles-try` removes: `wsl --export Ubuntu $env:TEMP\ubuntu.tar`, `wsl --import dotfiles-try $env:LOCALAPPDATA\dotfiles-try $env:TEMP\ubuntu.tar`, then `wsl -d dotfiles-try -u <your user>` and install inside. `wsl -l` lists the distribution names.
+- **WSL:** a second distribution, copied from yours, which `wsl --unregister dotfiles-try` removes: `wsl --export Ubuntu $env:TEMP\ubuntu.tar`, `wsl --import dotfiles-try $env:LOCALAPPDATA\dotfiles-try $env:TEMP\ubuntu.tar`, `Remove-Item $env:TEMP\ubuntu.tar`, then `wsl -d dotfiles-try -u <your user>` and install inside (it too installs GitHub's `main`). An imported distribution starts as root, so keep passing `-u <your user>`. `wsl -l` lists the distribution names.
 - **macOS and Windows:** a virtual machine (UTM, Tart, Parallels, Hyper-V). A second macOS user is not isolated: Homebrew's prefix belongs to the first administrator and `/Applications` is shared. Windows Sandbox has no winget.
 
 [Troubleshooting](docs/troubleshooting.md) says how to [undo an install](docs/troubleshooting.md#undo-an-install) and what to put in a [report](docs/troubleshooting.md#report-a-problem).
@@ -38,9 +39,9 @@ The installer replaces your shell and tool configuration and installs packages. 
 ### Before you start
 
 - **Debian and Ubuntu:** git (and `ca-certificates`, which minimal images lack) and a user with sudo. apt runs through sudo, which may ask again during the long bootstrap stage. Debian, Ubuntu and their derivatives only, on x86_64 or arm64.
-- **WSL:** run the Linux install inside the distribution, not in Windows PowerShell. WSL itself comes from `wsl --install` in an administrator PowerShell and may need a restart. The font is the Windows one, which `install.ps1` installs.
+- **WSL:** run the Linux install inside the distribution, not in Windows PowerShell. WSL itself comes from `wsl --install` in an administrator PowerShell and may need a restart. The font is the Windows one, which `install.ps1` installs (without `install.ps1`, see [Linux and WSL](docs/linux.md#wsl)).
 - **macOS:** an administrator account, for Homebrew's installer, which asks for your password and for RETURN. git comes from the Command Line Tools: on a brand-new Mac run `xcode-select --install` first. They also bring the C compiler for Neovim's parsers.
-- **Windows:** a working winget (App Installer), then Git with `winget install --id Git.Git --exact`, and a new PowerShell before cloning. Elevation is optional: an elevated shell, or Developer Mode with PowerShell 7, gets links; otherwise the installer copies the files, and copies stay stale until the next install ([Windows](docs/windows.md#links-or-copies)).
+- **Windows:** a working winget (App Installer), then Git with `winget install --id Git.Git --exact`, and a new PowerShell before cloning. Elevation is optional. The first run is in Windows PowerShell 5.1, which makes links only when elevated (Developer Mode helps only from PowerShell 7, and reruns keep matching copies); otherwise the installer copies the files, which stay stale until the next install or update ([Windows](docs/windows.md#links-or-copies)).
 - **Existing configuration on Windows:** a `Microsoft.PowerShell_profile.ps1` still runs after the managed profile and can replace its prompt, and extra files in `%LOCALAPPDATA%\nvim` mix with the managed ones ([Windows](docs/windows.md#existing-configurations)).
 
 ### macOS / Debian / Ubuntu / WSL
@@ -63,7 +64,7 @@ Native Windows and WSL are separate environments: `install.ps1` sets up PowerShe
 
 ## First steps after install
 
-- **Login shell:** on Linux and WSL, and wherever the installer prints it, run `chsh -s "$(command -v zsh)"`, then sign out and back in (WSL: open a new tab). New terminals and tmux panes start the login shell, so without this they skip the zsh configuration; `exec zsh` covers one terminal only.
+- **Login shell:** on Linux and WSL, and wherever the installer prints it, run `chsh -s "$(command -v zsh)"`, then sign out and back in (WSL: open a new tab, or `wsl -d <distribution> -u <your user>`). New terminals and tmux panes start the login shell, so without this they skip the zsh configuration; `exec zsh` covers one terminal only.
 - **Terminal:** on macOS open Ghostty, not Terminal.app: it carries the font and the theme. Elsewhere select `CaskaydiaCove Nerd Font Mono` in your terminal, or install Ghostty from [ghostty.org](https://ghostty.org/download), whose configuration is already linked.
 - **Windows Terminal:** restart it. Make PowerShell the default profile, and give each WSL profile the font `CaskaydiaCove Nerd Font Mono` and the scheme `Catppuccin <flavor>`; the fragment cannot ([Windows](docs/windows.md#windows-terminal)).
 - **Git identity:** `git config --global user.name …` and `user.email …` write to `~/.gitconfig`, which the installer creates when it is missing and which stays out of the repository.
@@ -79,7 +80,7 @@ git -C ~/dotfiles pull && ~/dotfiles/scripts/update.sh
 ```
 
 ```powershell
-git -C $HOME\dotfiles pull; ~\dotfiles\scripts\update.ps1
+git -C $HOME\dotfiles pull; if ($LASTEXITCODE -eq 0) { ~\dotfiles\scripts\update.ps1 }
 ```
 
 The update does not pull the repository, so `git pull` first. It runs the install stages again and also upgrades the declared packages, the release tools (once a release is a day old), the PowerShell modules, the zsh and tmux plugins, the yazi flavors, mise's runtimes, and Neovim's parsers and language servers, then runs the doctor. Neovim's plugins stay at the commits `lazy-lock.json` pins. It leaves alone what it did not install and what you pinned or held, and says so. A plain rerun adds what is missing and upgrades nothing but the listed apt packages on Linux. [Updating](docs/updating.md) has the details.

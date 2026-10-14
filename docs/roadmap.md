@@ -106,7 +106,12 @@ Not tied to a phase; pick up when convenient.
 - **Ownership of plain files in `~/.local/bin`.** Any plain file there with a tool's name counts as the bootstrap's, even without a release record (machines installed before records existed have none), so a binary that `cargo install --root ~/.local` or a manual copy put there is replaced by the update. Links are left alone. Refetching only recorded tools would leave older machines un-updated instead.
 - **A font opt-out for headless Linux.** Every Linux machine outside WSL now installs fontconfig and the 33 MB Mono family, including servers reached only over SSH, where the client draws the text, and the doctor fails without the font. Headless machines cannot be detected reliably, so a variable like `DOTFILES_FASTFETCH=0` is the likely shape.
 - **btop in Catppuccin.** btop is installed everywhere but keeps its default colors, which `docs/theming.md` lists as not yet managed. A theme file would need linking on every platform (btop4win on Windows) and a location in `scripts/theme.sh`.
-- **The doctor's hints work only from the repository.** They name scripts by relative path (`rerun: bash scripts/bootstrap_tools.sh`, `scripts\install_runtimes.ps1`), so they fail from any other directory; `docs/troubleshooting.md` says to run them from `~/dotfiles`. The doctor knows `DOTFILES_DIR` and could print absolute paths.
+- **Hints that work only from the repository.** Several messages name a file by its path inside the repository, so they read wrong from any other directory, such as `~`, where the README runs the doctor:
+  - the doctors' `rerun:` hints (`bash scripts/bootstrap_tools.sh`, `scripts\install_runtimes.ps1`);
+  - the skipped-parser pointer to `docs/troubleshooting.md`, which `bootstrap.lua` writes and both doctors, the install and the update print. On Windows that Lua runs from the copy in `%LOCALAPPDATA%\nvim` and cannot know where the repository is;
+  - tmux's `TPM is missing: run bash scripts/bootstrap_tools.sh`, and the Windows stages' `Rerun scripts\update.ps1` and `run scripts/doctor.ps1 again`.
+
+  The Unix doctor knows `DOTFILES_DIR` and the Windows one `-DotfilesDir`, so they could print full paths; the Lua and tmux messages could name the repository in words, as the parser pointer now does ("in the dotfiles repository"). `docs/troubleshooting.md` says to run the hints from `~/dotfiles`. The messages also mix `/` and `\` on Windows.
 - **No `EDITOR`.** zsh's `Ctrl+X Ctrl+E` opens the command line in `$EDITOR`, which nothing sets, so it falls back to `vi`, which a minimal Debian or Ubuntu lacks. `docs/tools.md` suggests `export EDITOR=nvim` in `~/.zshrc.local`; the shared configuration could set it when Neovim is installed. PowerShell also lacks zsh's `c` alias.
 - **An uninstall command.** `docs/troubleshooting.md` lists by hand what to remove: the links and their backups, the downloaded state, the apt repositories, the packages. The linker's list, the release records and the package lists hold enough for a script to do it, except telling packages the user had before.
 
@@ -134,9 +139,18 @@ Done:
 
   **Found along the way:**
   - **Ghostty's local file and macOS's own file:** the README said `~/Library/Application Support/com.mitchellh.ghostty/config` loads after `~/.config/ghostty/local`; see Known issues.
-  - **The interactive container** sets no `LANG`, and zsh needs a UTF-8 locale for the prompt's glyphs, as `tests/fresh_install.sh` knows; "Try it first" exports `LANG=C.UTF-8` after `su - dev`, which would drop one set with `docker run -e`. As in `tests/fresh_install.sh`, debconf is set to noninteractive, or apt asks for a time zone.
+  - **The interactive container:** zsh needs a UTF-8 locale for the prompt's glyphs, as `tests/fresh_install.sh` knows. `su -` reads `/etc/default/locale` through pam_env; ubuntu:24.04 ships one with `C.UTF-8` and Debian images do not, so "Try it first" writes it. debconf is set to noninteractive as in `tests/fresh_install.sh`, although no time zone question came up there: none of the packages pulls in tzdata on ubuntu:24.04 or debian:12.
   - **tmux's local file** loads after the tracked settings but before TPM runs the plugins, not last as the README said.
   - New to-dos above: btop, the doctor's relative hints, `EDITOR`, an uninstall command, and two Windows link questions under "A fresh install on Windows".
+  - **A review pass** (two agents) ran "Try it first" as written in an ubuntu:24.04 container (the install passed), checked every link and anchor, the key bindings against the configurations, the 28 quoted messages against the code, and that every fact of the old README survives. It found, and this PR fixes:
+    - the container and WSL steps install GitHub's `main`, not the checkout, which the README now says;
+    - in the container, `dev` has no password, so the `chsh` the installer prints fails, and `docker start -ai` returns as root: the steps run `sudo chsh` and say so;
+    - the Windows undo said to delete `%LOCALAPPDATA%\nvim` right after restoring a backup into it;
+    - the undo's `find ~ -maxdepth 3` walks into Documents and Library on macOS and triggers privacy prompts;
+    - the undo lists missed the bat theme and cache, Neovim's and mise's state and caches, zinit's cache, Mason's npm cache, `fc-cache`, and on Windows the yazi flavors, `%LOCALAPPDATA%\mise` and the font;
+    - Windows' first run is in Windows PowerShell 5.1, where Developer Mode gives no links, and the PowerShell update ran after a failed `git pull`;
+    - the Ghostty config's comment still stated the unverified load order, the font bullet overstated when the bootstrap stops, the troubleshooting page quoted the Unix backup message for Windows, and `tests/fresh_install.sh` said the README promised a rerun changes nothing;
+    - the skipped-parser pointer named a path relative to the repository (now "in the dotfiles repository"), and the PowerShell language server is installed everywhere, only started where `pwsh` exists.
 
 - **A quiet first run** ([#17](https://github.com/Arthur-K-99/dotfiles/pull/17)). On 2026-10-14 (`tests/fresh_install.sh`, arm64), install, rerun and update printed 2,548 lines on Debian 13. One read as an error (Neovim's), and 40% of its 910 KB was git's progress meter. After the changes below, Debian 13 printed 1,722 lines, Debian 12 1,731 (2,561 before) and Ubuntu 24.04 1,784 (2,592 before):
   - **Neovim's first install** printed "Error in .../init.lua: Plugin catppuccin is not installed" (and mason.nvim, nvim-treesitter, nvim-lspconfig) just before cloning them:

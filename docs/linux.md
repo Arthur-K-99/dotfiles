@@ -37,7 +37,7 @@ The Unix installer accepts Debian, Ubuntu and distributions whose `/etc/os-relea
 The bootstrap installs CaskaydiaCove Nerd Font Mono from the latest Nerd Fonts release old enough into `~/.local/share/fonts/CaskaydiaCove` and registers it with fontconfig, unless fontconfig already lists the family from another directory.
 
 - A rerun keeps the installed copy; `scripts/update.sh` replaces it when Nerd Fonts publishes a newer release and it is old enough.
-- A `CaskaydiaCove` directory without the bootstrap's marker file belongs to you: the bootstrap stops and asks you to move it away, and the update leaves it alone.
+- A `CaskaydiaCove` directory without the bootstrap's marker file belongs to you. When fontconfig lists the family from it, the bootstrap says it is already installed and the update leaves it alone; when it does not, the bootstrap stops and asks you to move the directory away.
 - The doctor fails without the font, also on a server reached only over SSH, where the client draws the text ([roadmap](roadmap.md) to-do).
 - Select the font in your terminal unless it is Ghostty, which selects it itself.
 
