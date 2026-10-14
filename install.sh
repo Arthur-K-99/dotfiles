@@ -34,6 +34,8 @@ install_main() {
         echo "Could not initialize the tool environment. Check Homebrew, then rerun ${DOTFILES_RERUN##*/}." >&2
         return 1
     fi
+    # The bootstrap stage reads it; a wrong value stops the run before any stage.
+    dotfiles_minimum_release_age >/dev/null || return
     run_step "$packages" "$DOTFILES_DIR/scripts/install_packages.sh" || return
     run_step "Linking dotfiles" "$DOTFILES_DIR/scripts/link_dotfiles.sh" || return
     run_step "$tools" "$DOTFILES_DIR/scripts/bootstrap_tools.sh" || return

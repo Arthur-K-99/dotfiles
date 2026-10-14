@@ -19,14 +19,16 @@ assert_contains() {
 }
 
 # Tests of the release installers serve their own fixture files; the digest
-# check is covered by test_release_download_verification. Each asset that
-# would be verified is listed in $test_dir/verified.
+# check is covered by test_release_download_verification and the release age
+# by test_release_age. Each asset that would be verified is listed in
+# $test_dir/verified, and every release is old enough.
 trust_release_downloads() {
     release_asset_digest() {
         printf '%s\n' "$*" >> "$test_dir/verified"
         printf 'fixture\n'
     }
     file_sha256() { printf 'fixture\n'; }
+    release_published() { printf '2020-01-01T00:00:00Z\n'; }
 }
 
 test_syntax_every_file() {
@@ -545,6 +547,13 @@ test_install_stages_and_failure_reporting() {
     failed_stage=''
     install_main > "$test_dir/output" 2>&1
     assert_contains "$(cat "$test_dir/output")" 'All setup checks passed.'
+    # A minimum release age the bootstrap could not read stops every stage.
+    : > "$test_dir/stages"
+    status=0
+    DOTFILES_MINIMUM_RELEASE_AGE=tomorrow install_main > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'DOTFILES_MINIMUM_RELEASE_AGE=tomorrow is not a whole number with a unit'
+    assert_equal '' "$(cat "$test_dir/stages")"
 }
 
 # scripts/update.sh runs the install stages with DOTFILES_UPDATE=1 and names
@@ -1476,8 +1485,18 @@ test_github_release_update() {
     install_github_release owner/tool 'tool-{tag}.tar.gz' tool helper > "$test_dir/output"
     assert_contains "$(cat "$test_dir/requests")" 'releases/download/v1.1.0/tool-v1.1.0.tar.gz'
     assert_equal v1.1.0 "$(cat "$record")"
-    # A helper from elsewhere on PATH is left alone; only the bootstrap's copy is replaced.
+    # A latest release older than the recorded one, as after a project deleted
+    # its newest, replaces nothing.
     printf 'v1.0.0\n' > "$test_dir/latest"
+    : > "$test_dir/requests"
+    install_github_release owner/tool 'tool-{tag}.tar.gz' tool helper > "$test_dir/output" 2>&1
+    assert_contains "$(cat "$test_dir/output")" 'owner/tool v1.1.0 is newer than its latest release, v1.0.0; keeping it.'
+    assert_equal 'https://github.com/owner/tool/releases/latest' "$(cat "$test_dir/requests")"
+    assert_equal 'tool v1.1.0' "$("$test_dir/bin/tool")"
+    assert_equal v1.1.0 "$(cat "$record")"
+    # A helper from elsewhere on PATH is left alone; only the bootstrap's copy
+    # is replaced (without a record, by whatever release is latest).
+    rm "$record"
     rm "$test_dir/bin/helper"
     mkdir -p "$test_dir/elsewhere"
     printf '#!/bin/sh\necho "helper elsewhere"\n' > "$test_dir/elsewhere/helper"
@@ -1817,6 +1836,293 @@ JSON
     assert_equal 0 "$(grep -c -v -- '--retry 5' "$test_dir/calls")"
 }
 
+# A release is installed once it is DOTFILES_MINIMUM_RELEASE_AGE old, a day
+# unless set. Its age is read from the API's release, and an asset updated
+# later counts from then. While the latest release is younger, the highest
+# version among the recent releases that is old enough, no higher than the
+# latest and has the asset is taken instead (never a prerelease, a draft or a
+# tag without a version), unless the installed release is at least as new;
+# no release ever replaces a newer installed one. A release that is old enough
+# costs no request beyond the one its digest needs, and a younger one one
+# more, the list, which also serves the older release's digest.
+test_release_age() {
+    source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    export DOTFILES_LOCAL_BIN="$test_dir/bin"
+    export TMPDIR="$test_dir/tmp"
+    unset GITHUB_TOKEN DOTFILES_MINIMUM_RELEASE_AGE DOTFILES_GITHUB_API_CACHE
+    local record="$XDG_STATE_HOME/dotfiles/releases/owner/tool" status now value sum young old older oldest future
+    mkdir -p "$TMPDIR" "$test_dir/api" "$test_dir/payload"
+    # The setting: a whole number with a unit, or 0; a day when unset or empty.
+    assert_equal 86400 "$(dotfiles_minimum_release_age)"
+    assert_equal 86400 "$(DOTFILES_MINIMUM_RELEASE_AGE='' dotfiles_minimum_release_age)"
+    for value in 0=0 0d=0 45s=45 30m=1800 12h=43200 08h=28800 3d=259200 2w=1209600; do
+        assert_equal "${value#*=}" "$(DOTFILES_MINIMUM_RELEASE_AGE="${value%%=*}" dotfiles_minimum_release_age)"
+    done
+    assert_equal 604799999395200 "$(DOTFILES_MINIMUM_RELEASE_AGE=999999999w dotfiles_minimum_release_age)"
+    for value in 1 d 1.5d -1d 1D 1dd ' 1d' P1D 1000000000w; do
+        status=0
+        DOTFILES_MINIMUM_RELEASE_AGE="$value" dotfiles_minimum_release_age > "$test_dir/output" 2>&1 || status=$?
+        assert_equal 1 "$status"
+        assert_contains "$(cat "$test_dir/output")" "DOTFILES_MINIMUM_RELEASE_AGE=$value is not a whole number with a unit"
+    done
+    # Times as the API writes them, converted without date's parser.
+    assert_equal 0 "$(dotfiles_utc_seconds 1970-01-01T00:00:00Z)"
+    assert_equal 951782400 "$(dotfiles_utc_seconds 2000-02-29T00:00:00Z)"
+    assert_equal 1760000000 "$(dotfiles_utc_seconds 2025-10-09T08:53:20Z)"
+    assert_equal 2025-10-09T08:53:20Z "$(dotfiles_utc_time 1760000000)"
+    now="$(date -u +%s)"
+    assert_equal "$now" "$(dotfiles_utc_seconds "$(dotfiles_utc_time "$now")")"
+    for value in '' null - 2025-10-09 '2025-10-09 08:53:20' 2025-10-09T08:53:20+02:00; do
+        if dotfiles_utc_seconds "$value" >/dev/null; then
+            echo "dotfiles_utc_seconds accepted <$value>" >&2
+            return 1
+        fi
+    done
+    young="$(dotfiles_utc_time $((now - 3600)))"
+    old="$(dotfiles_utc_time $((now - 2 * 86400)))"
+    older="$(dotfiles_utc_time $((now - 3 * 86400)))"
+    oldest="$(dotfiles_utc_time $((now - 10 * 86400)))"
+    future="$(dotfiles_utc_time $((now + 7 * 86400)))"
+    printf '#!/bin/sh\necho aged-release\n' > "$test_dir/payload/tool"
+    chmod +x "$test_dir/payload/tool"
+    tar -czf "$test_dir/asset.tar.gz" -C "$test_dir/payload" .
+    sum="$(file_sha256 "$test_dir/asset.tar.gz")"
+    # release_fixture <id> <tag> <published> <asset updated> <prerelease> <draft>
+    # [asset]: a release as the API pretty-prints it. The release itself was
+    # edited just now, which must not count; its one asset, tool-<tag>.tar.gz
+    # unless named, has the digest $sum.
+    release_fixture() {
+        local published="\"$3\""
+        [ "$3" != null ] || published=null
+        cat <<JSON
+{
+  "url": "https://api.github.com/repos/owner/tool/releases/$1",
+  "html_url": "https://github.com/owner/tool/releases/tag/$2",
+  "id": $1,
+  "author": {
+    "login": "someone",
+    "url": "https://api.github.com/users/someone",
+    "type": "User"
+  },
+  "tag_name": "$2",
+  "draft": $6,
+  "prerelease": $5,
+  "created_at": "$oldest",
+  "updated_at": "$young",
+  "published_at": $published,
+  "assets": [
+    {
+      "url": "https://api.github.com/repos/owner/tool/releases/assets/${1}1",
+      "name": "${7:-tool-$2.tar.gz}",
+      "uploader": {
+        "login": "someone",
+        "url": "https://api.github.com/users/someone"
+      },
+      "digest": "sha256:$sum",
+      "created_at": "$oldest",
+      "updated_at": "$4",
+      "browser_download_url": "https://github.com/owner/tool/releases/download/$2/${7:-tool-$2.tar.gz}"
+    }
+  ],
+  "body": "Fixes, see \"published_at\": \"$oldest\""
+}
+JSON
+    }
+    # Newest first, as the API lists them: a nightly prerelease rebuilt just
+    # now, a draft, a release the project did not mark latest, the latest
+    # release (an hour old), a backport of an older line, Neovim-style
+    # "stable", a release whose builds failed, then the releases before.
+    write_release_fixtures() {
+        release_fixture 11 nightly 2024-08-07T00:43:43Z "$young" true false > "$test_dir/api/nightly.json"
+        release_fixture 10 v2.2.0 null "$young" false true > "$test_dir/api/v2.2.0.json"
+        release_fixture 9 v3.0.0 "$old" "$old" false false > "$test_dir/api/v3.0.0.json"
+        release_fixture 8 v2.1.0 "$young" "$young" false false > "$test_dir/api/v2.1.0.json"
+        release_fixture 7 v1.9.5 "$old" "$old" false false > "$test_dir/api/v1.9.5.json"
+        release_fixture 6 stable "$old" "$old" false false > "$test_dir/api/stable.json"
+        release_fixture 5 v2.0.2 "$old" "$old" false false checksums.txt > "$test_dir/api/v2.0.2.json"
+        release_fixture 4 v2.0.1 "$older" "${1:-$older}" false false > "$test_dir/api/v2.0.1.json"
+        release_fixture 3 v2.0.0 "$oldest" "$oldest" false false > "$test_dir/api/v2.0.0.json"
+        {
+            printf '[\n'
+            for value in nightly v2.2.0 v3.0.0 v2.1.0 v1.9.5 stable v2.0.2 v2.0.1; do
+                cat "$test_dir/api/$value.json"
+                printf ',\n'
+            done
+            cat "$test_dir/api/v2.0.0.json"
+            printf ']\n'
+        } > "$test_dir/api/list.json"
+    }
+    write_release_fixtures
+    # Records come from pretty-printed and minified JSON alike.
+    assert_equal "nightly false true $young
+v2.2.0 true false -
+v3.0.0 false false $old
+v2.1.0 false false $young
+v1.9.5 false false $old
+stable false false $old
+v2.0.2 false false $old
+v2.0.1 false false $older
+v2.0.0 false false $oldest" "$(release_records < "$test_dir/api/list.json")"
+    # Each asset of the list, keyed by tag and name, with its digest.
+    assert_equal "v2.0.2/checksums.txt sha256:$sum" "$(release_asset_digests < "$test_dir/api/list.json" | grep '^v2.0.2/')"
+    assert_equal 9 "$(release_asset_digests < "$test_dir/api/list.json" | wc -l | tr -d ' ')"
+    assert_equal "$(release_records < "$test_dir/api/list.json")" \
+        "$(sed 's/^[[:space:]]*//; s/": /":/' "$test_dir/api/list.json" | tr -d '\n' | release_records)"
+    uname() { if [ "${1:-}" = -m ]; then printf 'x86_64\n'; else command uname "$@"; fi; }
+    curl() {
+        local output="" url=""
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                -o) output="$2"; shift ;;
+                -w|-H|--retry|--retry-max-time) shift ;;
+                -*) ;;
+                *) url="$1" ;;
+            esac
+            shift
+        done
+        printf '%s\n' "$url" >> "$DOTFILES_TEST_FIXTURE/requests"
+        case "$url" in
+            https://github.com/owner/tool/releases/latest)
+                printf 'https://github.com/owner/tool/releases/tag/%s' "$(cat "$DOTFILES_TEST_FIXTURE/latest")"
+                ;;
+            https://api.github.com/repos/owner/tool/releases/tags/*)
+                [ -f "$DOTFILES_TEST_FIXTURE/api/${url##*/}.json" ] || return 22
+                cat "$DOTFILES_TEST_FIXTURE/api/${url##*/}.json"
+                ;;
+            'https://api.github.com/repos/owner/tool/releases?per_page=30')
+                [ ! -f "$DOTFILES_TEST_FIXTURE/list-down" ] || return 22
+                cat "$DOTFILES_TEST_FIXTURE/api/list.json"
+                ;;
+            https://github.com/owner/tool/releases/download/*) cp "$DOTFILES_TEST_FIXTURE/asset.tar.gz" "$output" ;;
+            *) echo "unexpected URL $url" >&2; return 99 ;;
+        esac
+    }
+    local template='tool-{tag}.tar.gz'
+    printf 'v2.1.0\n' > "$test_dir/latest"
+    # Turned off, the latest release is taken without asking the API.
+    assert_equal v2.1.0 "$(DOTFILES_MINIMUM_RELEASE_AGE=0 release_tag owner/tool "$template")"
+    assert_equal https://github.com/owner/tool/releases/latest "$(cat "$test_dir/requests")"
+    # A latest release that is old enough costs one request.
+    printf 'v2.0.1\n' > "$test_dir/latest"
+    : > "$test_dir/requests"
+    assert_equal v2.0.1 "$(release_tag owner/tool "$template" 2> "$test_dir/output")"
+    assert_equal "https://github.com/owner/tool/releases/latest
+https://api.github.com/repos/owner/tool/releases/tags/v2.0.1" "$(cat "$test_dir/requests")"
+    assert_equal '' "$(cat "$test_dir/output")"
+    # A younger one: the highest version old enough that has the asset, which
+    # is neither the release above the latest, nor the backport listed before
+    # it, nor "stable", nor v2.0.2 without builds. It says so.
+    printf 'v2.1.0\n' > "$test_dir/latest"
+    : > "$test_dir/requests"
+    assert_equal v2.0.1 "$(release_tag owner/tool "$template" 2> "$test_dir/output")"
+    assert_equal "https://github.com/owner/tool/releases/latest
+https://api.github.com/repos/owner/tool/releases/tags/v2.1.0
+https://api.github.com/repos/owner/tool/releases?per_page=30" "$(cat "$test_dir/requests")"
+    assert_equal "owner/tool v2.1.0 was published at $young, less than 1d ago; taking v2.0.1." "$(cat "$test_dir/output")"
+    # A template that v2.0.2 does have takes it.
+    assert_equal v2.0.2 "$(release_tag owner/tool checksums.txt 2>/dev/null)"
+    assert_equal v2.0.0 "$(DOTFILES_MINIMUM_RELEASE_AGE=4d release_tag owner/tool "$template" 2>/dev/null)"
+    assert_equal v2.0.0 "$(DOTFILES_MINIMUM_RELEASE_AGE=73h release_tag owner/tool "$template" 2>/dev/null)"
+    # Exactly as old as the setting is old enough.
+    assert_equal v2.0.1 "$(DOTFILES_MINIMUM_RELEASE_AGE=72h release_tag owner/tool "$template" 2>/dev/null)"
+    # The installed release decides when it is at least as new; the latest
+    # release itself, once installed, is never looked up again.
+    : > "$test_dir/requests"
+    assert_equal v2.1.0 "$(release_tag owner/tool "$template" v2.1.0)"
+    assert_equal https://github.com/owner/tool/releases/latest "$(cat "$test_dir/requests")"
+    assert_equal v2.0.1 "$(release_tag owner/tool "$template" v2.0.0 2>/dev/null)"
+    assert_equal v2.0.1 "$(release_tag owner/tool "$template" custom-build 2>/dev/null)"
+    assert_equal v2.0.1 "$(release_tag owner/tool "$template" v2.0.1 2> "$test_dir/output")"
+    assert_equal "owner/tool v2.1.0 was published at $young, less than 1d ago; keeping v2.0.1." "$(cat "$test_dir/output")"
+    assert_equal v2.0.5 "$(release_tag owner/tool "$template" v2.0.5 2>/dev/null)"
+    # No release replaces a newer installed one, as when a project deletes
+    # its newest releases, whatever the setting and without a request.
+    : > "$test_dir/requests"
+    assert_equal v2.4.0 "$(DOTFILES_MINIMUM_RELEASE_AGE=0 release_tag owner/tool "$template" v2.4.0 2> "$test_dir/output")"
+    assert_equal 'owner/tool v2.4.0 is newer than its latest release, v2.1.0; keeping it.' "$(cat "$test_dir/output")"
+    assert_equal https://github.com/owner/tool/releases/latest "$(cat "$test_dir/requests")"
+    printf 'v2.0.0\n' > "$test_dir/latest"
+    assert_equal v2.0.1 "$(release_tag owner/tool "$template" v2.0.1 2>/dev/null)"
+    printf 'v2.1.0\n' > "$test_dir/latest"
+    # Nothing old enough: a first install stops and says how to go ahead; an
+    # installed release stays.
+    status=0
+    DOTFILES_MINIMUM_RELEASE_AGE=2w release_tag owner/tool "$template" > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" "No release of owner/tool among the 30 most recent is older than 2w and has tool-v2.1.0.tar.gz; the latest, v2.1.0, was published at $young."
+    assert_contains "$(cat "$test_dir/output")" 'Rerun with DOTFILES_MINIMUM_RELEASE_AGE=0 to install v2.1.0 anyway.'
+    case "$(cat "$test_dir/output")" in
+        *'system time'*) echo "A release in the past blamed the clock." >&2; return 1 ;;
+    esac
+    assert_equal v2.0.0 "$(DOTFILES_MINIMUM_RELEASE_AGE=2w release_tag owner/tool "$template" v2.0.0 2>/dev/null)"
+    # A release dated after this machine's clock points at the clock.
+    release_fixture 8 v2.1.0 "$future" "$future" false false > "$test_dir/api/v2.1.0.json"
+    status=0
+    DOTFILES_MINIMUM_RELEASE_AGE=2w release_tag owner/tool "$template" > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" "That is later than this machine's clock"
+    # An asset updated after its release was published (a replaced file)
+    # makes the release that young.
+    write_release_fixtures "$young"
+    assert_equal "$young" "$(release_published owner/tool v2.0.1)"
+    assert_equal v2.0.0 "$(release_tag owner/tool "$template" 2>/dev/null)"
+    write_release_fixtures
+    # A wrong setting stops before the API is asked; so does an unreadable
+    # release or list, saying which.
+    : > "$test_dir/requests"
+    status=0
+    DOTFILES_MINIMUM_RELEASE_AGE=soon release_tag owner/tool "$template" > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'DOTFILES_MINIMUM_RELEASE_AGE=soon is not'
+    assert_equal https://github.com/owner/tool/releases/latest "$(cat "$test_dir/requests")"
+    mv "$test_dir/api/v2.1.0.json" "$test_dir/api/v2.1.0.away"
+    status=0
+    release_tag owner/tool "$template" > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'Could not read release v2.1.0 of owner/tool from the GitHub API to check its age.'
+    mv "$test_dir/api/v2.1.0.away" "$test_dir/api/v2.1.0.json"
+    : > "$test_dir/list-down"
+    status=0
+    release_tag owner/tool "$template" > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'Could not list the releases of owner/tool from the GitHub API to find one older than 1d.'
+    rm "$test_dir/list-down"
+    # A run keeps each answer: the age check and the digest check share a
+    # request, and a young latest release costs the list, which also holds
+    # the older release's digest.
+    export DOTFILES_GITHUB_API_CACHE="$test_dir/cache"
+    mkdir -p "$DOTFILES_GITHUB_API_CACHE"
+    : > "$test_dir/requests"
+    install_github_release owner/tool "$template" tool > "$test_dir/output" 2>&1
+    assert_equal "https://github.com/owner/tool/releases/latest
+https://api.github.com/repos/owner/tool/releases/tags/v2.1.0
+https://api.github.com/repos/owner/tool/releases?per_page=30
+https://github.com/owner/tool/releases/download/v2.0.1/tool-v2.0.1.tar.gz" "$(cat "$test_dir/requests")"
+    assert_contains "$(cat "$test_dir/output")" 'taking v2.0.1'
+    assert_contains "$(cat "$test_dir/output")" 'Installing tool from owner/tool v2.0.1...'
+    assert_equal aged-release "$("$DOTFILES_LOCAL_BIN/tool")"
+    assert_equal v2.0.1 "$(cat "$record")"
+    # Updating keeps it while the latest release is young...
+    export DOTFILES_UPDATE=1
+    : > "$test_dir/requests"
+    install_github_release owner/tool "$template" tool > "$test_dir/output" 2>&1
+    assert_contains "$(cat "$test_dir/output")" 'keeping v2.0.1'
+    assert_contains "$(cat "$test_dir/output")" 'tool v2.0.1 is current'
+    assert_equal 0 "$(grep -c /releases/download/ "$test_dir/requests" || :)"
+    # ...and takes it once it is old enough, with one request in a new run.
+    release_fixture 8 v2.1.0 "$old" "$old" false false > "$test_dir/api/v2.1.0.json"
+    rm -rf "$DOTFILES_GITHUB_API_CACHE"
+    mkdir -p "$DOTFILES_GITHUB_API_CACHE"
+    : > "$test_dir/requests"
+    install_github_release owner/tool "$template" tool > "$test_dir/output" 2>&1
+    assert_equal "https://github.com/owner/tool/releases/latest
+https://api.github.com/repos/owner/tool/releases/tags/v2.1.0
+https://github.com/owner/tool/releases/download/v2.1.0/tool-v2.1.0.tar.gz" "$(cat "$test_dir/requests")"
+    assert_contains "$(cat "$test_dir/output")" 'Updating tool from owner/tool v2.0.1 to v2.1.0...'
+    assert_equal v2.1.0 "$(cat "$record")"
+}
+
 test_fd_link_for_debian() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
     export DOTFILES_TEST_FIXTURE="$test_dir"
@@ -1874,8 +2180,9 @@ test_mise_bootstrap_and_runtimes() {
         esac
     }
     uname() { if [ "${1:-}" = -m ]; then printf 'x86_64\n'; else command uname "$@"; fi; }
-    # The release binary records its self-updates.
-    printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$DOTFILES_TEST_FIXTURE/self-updates"\n[ -f "$DOTFILES_TEST_FIXTURE/self-update-ok" ] || exit 62\n' > "$test_dir/mise-release"
+    # The release binary records its self-updates and the minimum release age
+    # they were given.
+    printf '#!/bin/sh\nprintf "%%s %%s\\n" "$MISE_MINIMUM_RELEASE_AGE" "$*" >> "$DOTFILES_TEST_FIXTURE/self-updates"\n[ -f "$DOTFILES_TEST_FIXTURE/self-update-ok" ] || exit 62\n' > "$test_dir/mise-release"
     curl() {
         local output="" url=""
         while [ "$#" -gt 0 ]; do
@@ -1924,12 +2231,20 @@ https://github.com/jdx/mise/releases/download/v2026.10.1/mise-v2026.10.1-linux-x
     assert_equal 62 "$status"
     : > "$test_dir/self-update-ok"
     bootstrap_mise_binary > "$test_dir/output"
-    assert_equal $'self-update --yes\nself-update --yes' "$(cat "$test_dir/self-updates")"
+    assert_equal $'86400s self-update --yes\n86400s self-update --yes' "$(cat "$test_dir/self-updates")"
+    # It waits as long as DOTFILES_MINIMUM_RELEASE_AGE says, unless mise's own
+    # setting is given; a wrong setting stops it.
+    DOTFILES_MINIMUM_RELEASE_AGE=0 bootstrap_mise_binary > "$test_dir/output"
+    MISE_MINIMUM_RELEASE_AGE=3d DOTFILES_MINIMUM_RELEASE_AGE=12h bootstrap_mise_binary > "$test_dir/output"
+    status=0
+    DOTFILES_MINIMUM_RELEASE_AGE=1 bootstrap_mise_binary > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_equal $'0s self-update --yes\n3d self-update --yes' "$(tail -n 2 "$test_dir/self-updates")"
     rm "$test_dir/bin/mise"
     : > "$test_dir/mise-present"
     bootstrap_mise_binary > "$test_dir/output"
     assert_contains "$(cat "$test_dir/output")" 'mise at /opt/homebrew/bin/mise was not installed by the bootstrap; left alone'
-    assert_equal 2 "$(wc -l < "$test_dir/self-updates" | tr -d ' ')"
+    assert_equal 4 "$(wc -l < "$test_dir/self-updates" | tr -d ' ')"
     assert_equal '' "$(cat "$test_dir/requests")"
     unset DOTFILES_UPDATE
     # Runtimes: a failed install reports, a retry finishes, a missing node is not success.
@@ -1961,7 +2276,7 @@ https://github.com/jdx/mise/releases/download/v2026.10.1/mise-v2026.10.1-linux-x
     # project's mise file does not decide; a failed upgrade can be retried.
     : > "$test_dir/node-installed"
     mise() {
-        printf '%s in %s\n' "$*" "$PWD" >> "$DOTFILES_TEST_FIXTURE/mise-commands"
+        printf '%s in %s%s\n' "$*" "$PWD" "${MISE_MINIMUM_RELEASE_AGE:+ after $MISE_MINIMUM_RELEASE_AGE}" >> "$DOTFILES_TEST_FIXTURE/mise-commands"
         case "$1" in
             upgrade) [ -f "$DOTFILES_TEST_FIXTURE/upgrade-retry" ] || return 63 ;;
             which) printf '%s/node\n' "$DOTFILES_TEST_FIXTURE" ;;
@@ -1974,9 +2289,12 @@ https://github.com/jdx/mise/releases/download/v2026.10.1/mise-v2026.10.1-linux-x
     assert_equal 63 "$status"
     : > "$test_dir/upgrade-retry"
     bootstrap_runtimes > "$test_dir/output"
-    assert_equal "install --yes in $PWD
-upgrade --yes in $HOME
+    assert_equal "install --yes in $PWD after 86400s
+upgrade --yes in $HOME after 86400s
 which node in $PWD" "$(tail -n 3 "$test_dir/mise-commands")"
+    DOTFILES_MINIMUM_RELEASE_AGE=2w bootstrap_runtimes > "$test_dir/output"
+    assert_equal "install --yes in $PWD after 1209600s
+upgrade --yes in $HOME after 1209600s" "$(tail -n 3 "$test_dir/mise-commands" | head -n 2)"
     unset DOTFILES_UPDATE
     rm "$test_dir/mise-present"
     status=0
@@ -3564,6 +3882,7 @@ run_tests() {
         github_release_install
         github_release_update
         release_download_verification
+        release_age
         fd_link_for_debian
         mise_bootstrap_and_runtimes
         yazi_flavors_install_and_retry

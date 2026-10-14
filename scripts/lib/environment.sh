@@ -51,6 +51,71 @@ dotfiles_updating() {
     [ "${DOTFILES_UPDATE:-0}" = 1 ]
 }
 
+# DOTFILES_MINIMUM_RELEASE_AGE: how long a GitHub release must have been
+# public before the bootstrap installs it (see release_tag in
+# bootstrap_tools.sh). A whole number with a unit, s, m, h, d or w, such as
+# 12h or 3d; 0 turns the delay off. Unset or empty, it is a day.
+DOTFILES_MINIMUM_RELEASE_AGE_DEFAULT=1d
+
+# dotfiles_minimum_release_age_label: the setting in effect, as written.
+dotfiles_minimum_release_age_label() {
+    printf '%s\n' "${DOTFILES_MINIMUM_RELEASE_AGE:-$DOTFILES_MINIMUM_RELEASE_AGE_DEFAULT}"
+}
+
+# dotfiles_minimum_release_age: the setting in seconds; fails, saying what is
+# accepted, on anything else.
+dotfiles_minimum_release_age() {
+    local value number unit
+    value="$(dotfiles_minimum_release_age_label)"
+    number="${value%[smhdw]}"
+    unit="${value#"$number"}"
+    # Up to nine digits, which no unit can overflow.
+    case "$number" in
+        ''|*[!0-9]*|??????????*) number="" ;;
+    esac
+    if [ "$value" = 0 ]; then
+        echo 0
+        return 0
+    elif [ -z "$number" ] || [ -z "$unit" ]; then
+        echo "DOTFILES_MINIMUM_RELEASE_AGE=$value is not a whole number with a unit (s, m, h, d or w), such as 12h or 3d; 0 turns the delay off." >&2
+        return 1
+    fi
+    case "$unit" in
+        s) echo $((10#$number)) ;;
+        m) echo $((10#$number * 60)) ;;
+        h) echo $((10#$number * 3600)) ;;
+        d) echo $((10#$number * 86400)) ;;
+        w) echo $((10#$number * 604800)) ;;
+    esac
+}
+
+# dotfiles_utc_seconds <2026-10-14T08:00:00Z>: seconds since the epoch for a
+# UTC time as the GitHub API writes it. Pure arithmetic (Howard Hinnant's
+# days-from-civil), since GNU and BSD date parse dates differently, and
+# numbers rather than strings are compared, which no locale can reorder.
+dotfiles_utc_seconds() {
+    local year month day era year_of_era day_of_year day_of_era
+    case "$1" in
+        [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) ;;
+        *) return 1 ;;
+    esac
+    year=$((10#${1:0:4}))
+    month=$((10#${1:5:2}))
+    day=$((10#${1:8:2}))
+    [ "$month" -gt 2 ] || year=$((year - 1))
+    era=$((year / 400))
+    year_of_era=$((year - era * 400))
+    day_of_year=$(((153 * ((month + 9) % 12) + 2) / 5 + day - 1))
+    day_of_era=$((year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year))
+    echo $(((era * 146097 + day_of_era - 719468) * 86400 + 10#${1:11:2} * 3600 + 10#${1:14:2} * 60 + 10#${1:17:2}))
+}
+
+# dotfiles_utc_time <seconds since the epoch>: the UTC time in the API's form,
+# with GNU or BSD date.
+dotfiles_utc_time() {
+    date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ
+}
+
 # dotfiles_apt_unheld <held packages> <package>: fails, saying so, when the
 # package is in the list `apt-mark showhold` printed. apt-get install -y stops
 # with "Held packages were changed" when a held package has an upgrade, so the

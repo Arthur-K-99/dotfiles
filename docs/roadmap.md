@@ -88,7 +88,13 @@ Not tied to a phase; pick up when convenient.
   - **atuin, tlrc, tree-sitter and mise** publish SLSA build provenance. `gh attestation verify --bundle <file> -R <repo>` checks a bundle fetched from the API without a login, but every distribution's gh predates 2.49, which added the command.
   - **Nothing signed** comes from delta, yazi, dust, procs, xh, zoxide, Neovim, fastfetch, the Nerd Fonts, lazygit, lazydocker, carapace-bin or sesh (the last four publish unsigned goreleaser checksums).
   - **Immutable releases** already close the gap where a project turns them on: oh-my-posh's v31.8.0, mise's v2026.10.9 and Homebrew's 7.0.9 are marked `immutable`, so their assets cannot be replaced after publishing, and each carries a GitHub release attestation (`gh release verify-asset`). The API's `immutable` field could be shown, or required, per tool.
-- **A minimum release age.** mise.run installed the newest mise release at least a day old, and `mise self-update` still waits a day; every other release tool takes a release minutes after it is published, before anyone has had time to notice a bad one. The API's `published_at` would allow a delay such as a day for all of them.
+- **The release age beyond GitHub releases.** `DOTFILES_MINIMUM_RELEASE_AGE` covers the Unix bootstrap's GitHub release downloads and reaches mise. Everything else takes a release as soon as its channel offers it:
+  - the eza and Charm apt repositories, which publish what each project builds (Debian's and Ubuntu's own archives freeze versions per release);
+  - Homebrew formulae and casks (Homebrew waits a day only when its maintainers bump npm, PyPI and gem packages) and winget;
+  - zinit's and TPM's plugins and the yazi flavors, at their branch heads;
+  - the language servers Mason installs, at their latest versions (Mason has no age setting; its npm packages could get npm's `min-release-age`, in days, from npm 11.10);
+  - on Windows, the Nerd Font from `oh-my-posh font install`; `install.ps1` reads no age setting, and mise there waits its own default day.
+- **Cheaper release lookups.** `github_latest_tag` follows the `releases/latest` redirect with `-L`, so it downloads each release page (200 to 235 KB, about 4 MB per install) and throws it away; `-w '%{redirect_url}'` without `-L` reads the tag from the redirect alone. And while a latest release is too young, every update run asks for it and for the list again (two requests per tool); a note of the held-back tag and its publication time under `~/.local/state/dotfiles/` would let runs skip both until it is old enough.
 - **A fresh install on Windows.** No job runs `install.ps1` or `scripts/update.ps1` on a clean machine; only the mocked suite covers them. Check winget's support on the hosted runners first. The Windows update's winget exit codes come from winget's `returnCodes.md`, and its pin check reads the row `winget pin list --id <id> --exact` prints for a pinned package; neither was seen on a machine. Leaving the PowerShell 7 and Windows Terminal that run the update alone is a precaution, not something observed: an MSIX upgrade of Windows Terminal is expected to close it, and the PowerShell MSI to meet files in use.
 - **oh-my-posh from Homebrew on macOS.** On macOS oh-my-posh comes from its GitHub release into `~/.local/bin`, while every other macOS tool comes from Homebrew, and homebrew-core carries it (31.8.0 on 2026-10-12). Adding it to `packages/brew.txt` needs care on machines that still have the old `jandedobbeleer/oh-my-posh` tap: its formula of the same name shadows core's, and Homebrew 7 refuses to load it (see Known issues).
 - **The Nerd Font on Windows: updates and verification.** One fix covers both: fetching the font from its release the way Linux does.
@@ -102,6 +108,47 @@ Not tied to a phase; pick up when convenient.
 - **A test for the parser skip on macOS and Linux.** Since #9, `lua/dotfiles/bootstrap.lua` counts parsers as skipped whenever the tree-sitter CLI is absent on any platform (previously only on Windows). Only the doctors' parsing of `skipped parser` lines is tested, not `M.missing()` itself.
 
 Done:
+
+- **A minimum release age** (PR link to follow). mise.run installed the newest mise release at least a day old and `mise self-update` waits a day, while every other release tool took a release minutes after it was published. Now every GitHub release download of the Unix bootstrap waits.
+  - **The setting.** `DOTFILES_MINIMUM_RELEASE_AGE` is a whole number with a unit, `s`, `m`, `h`, `d` or `w` (the grammar of mise's installer, `^[0-9]+[smhdw]$`), plus a bare `0` for off. It is a day when unset or empty. `install.sh`, `scripts/update.sh` and the bootstrap stop before their first stage on anything else.
+  - **Which release** (`release_tag` in `scripts/bootstrap_tools.sh`), for the release tools, oh-my-posh, zoxide, mise's first install, Neovim, the tree-sitter CLI and the Linux font, on a first install and in the update:
+    - **The latest release once it is old enough.** "Latest" stays what the `releases/latest` redirect names: the release the project marks so.
+    - **While it is younger, the highest version that qualifies** among the 30 most recent releases. It must be old enough, no higher than the latest, and carry the asset with a SHA-256 digest. Drafts, prereleases and tags without a version number (Neovim's `stable`, every `nightly`) never count.
+    - **The installed release when it is at least as new.** The update moves on once a newer release is old enough.
+    - **Never an older release than the installed one,** whatever the setting. A project, or someone with its rights, deleting its newest releases makes "latest" go back, and that would otherwise roll machines back.
+    - **No release old enough:** a first install stops, saying how to override; the update keeps what is installed.
+  - **A release's age** is the later of its `published_at` and the newest `updated_at` among its assets. A release's `created_at` is its tag's date (the commit's, or the tagger's), months before publishing at times; its own `updated_at` moves whenever the notes are edited. A file replaced after publishing makes the release that young again.
+  - **The API cost.**
+    - One request per download, as before, when the latest release is old enough: each run keeps every API answer in a temporary directory, so the age check and the digest check share the release's.
+    - One more, the list, for each release held back, which also serves the older release's digest.
+    - API answers are now requested compressed: a page of 30 releases runs to megabytes.
+    - Measured anonymously with the `rate_limit` endpoint (which costs nothing): a Debian 13 fresh install with its update took 37 requests on 2026-10-14 with the first version, which spent two on mise's held-back release (18 + 2 + 17). Before, it took 35.
+  - **mise** gets the setting as its own `MISE_MINIMUM_RELEASE_AGE` (in seconds, such as `86400s`) unless that is set. Its self-update and its runtime installs honour it; both wait a day on their own without it.
+  - **The doctor says nothing about release ages.** It checks what is installed, offline, and a release held back is a correct install. The installers already reject a bad setting before anything changes and print every release they pass over.
+
+  **Found along the way:**
+  - **How others do it.**
+    - **mise:**
+      - `mise.run` picks the highest version from `https://mise.jdx.dev/releases.tsv` (tag and `published_at`, written on each release with no delay of its own) published before `MISE_SELF_UPDATE_MINIMUM_RELEASE_AGE`, `MISE_MINIMUM_RELEASE_AGE` or 24h. It keeps a newer installed binary and fails when nothing qualifies.
+      - `mise self-update` does the same, never downgrades, and also requires the release's transparency-log time to be old enough.
+      - mise's tool installs have the same setting (24h by default since v2026.6.2), measured from `published_at` since mise found that `created_at` let fresh releases through.
+    - **Elsewhere:** pnpm `minimumReleaseAge` (minutes, 1440 by default since v11), npm `min-release-age` (days, since 11.10), uv `exclude-newer` (dates or durations), Renovate `minimumReleaseAge`, Dependabot's cooldown (3 days by default since 2026-07), bun and yarn.
+    - **What they do when the newest is too young:** every one takes the newest version that qualifies rather than waiting. mise never downgrades, and Renovate proposes no rollback unless told to (`rollbackPrs`).
+  - **Why take an older release rather than wait.** The 100 most recent releases of the 18 projects, replayed hour by hour over the past year:
+    - At least one tool's latest release was younger than a day in 58% of hours (89% at 3 days, 96% at 7). mise and oh-my-posh, which release every day or two, account for about 22 to 24% each.
+    - Waiting for the latest to age would have stalled mise's updates for up to 4, 23 or 104 days in a row (1, 3 or 7 days' delay), and oh-my-posh's for up to 5, 22 or 71.
+  - **What a day would have caught.** The bad versions of Trivy v0.69.4 (a GitHub release with backdoored binaries, about 3 hours in 2026-03), axios on npm (about 3 hours), Nx "s1ngularity" (4 to 5 hours), chalk/debug (about 2 hours) and Ultralytics on PyPI (1 to 12 hours) were all pulled within a day. Amazon Q's 1.84.0 stayed up for about 31 hours, and xz's tarballs for weeks; GitHub's own review of 21 incidents found most bad versions "pulled within hours".
+  - **Releases that are not what they seem:**
+    - **Late uploads:** 8 of the 18 latest releases had assets uploaded after publishing (carapace's 18 minutes later), and Nerd Fonts replaced v3.4.0's assets a month after publishing it (and v3.0.2's seven weeks after).
+    - **Moving prereleases:** yazi's `nightly` keeps a 2024 `published_at` while its assets are replaced daily; Neovim and tree-sitter recreate theirs daily.
+    - **Duplicates:** Neovim publishes a non-prerelease `stable` beside every version.
+    - **Releases without builds:** carapace v1.7.2, sesh v2.30.0 and three mise releases carry no assets, and fastfetch 2.66.1, a bugfix of an older line without binaries, sits above 2.67.x in the list.
+  - **API facts:**
+    - The list is ordered by tag date, not by publication.
+    - "Latest" is the project's `make_latest` flag, not the newest release.
+    - A page costs one request whatever `per_page` is. At a day's delay ten releases always sufficed over the past year, but atuin's betas fill five, and at seven days oh-my-posh needed fourteen, hence 30.
+    - A `304` from a conditional request counts against the anonymous limit; only authenticated ones are free.
+    - `releases.atom` lists plain tags as well as releases, has no prerelease flag, and dates entries by their last edit, so it cannot replace the API.
 
 - **apt keyrings kept current and checked** ([#14](https://github.com/Arthur-K-99/dotfiles/pull/14)). [#13](https://github.com/Arthur-K-99/dotfiles/pull/13) pinned the repository keys but fetched one only while a package of its repository was missing, so a keyring a machine got before the pins was never checked, and an expiry the project extends would never reach it.
   - **A shared table.** The repositories, their key URLs, pins and sources lines live in `scripts/lib/apt_repositories.sh`, which the package stage, the bootstrap and the doctor all read.
@@ -148,7 +195,7 @@ Done:
   - **What the installer scripts did.**
     - **oh-my-posh:** downloaded from its own CDN (`cdn.ohmyposh.dev`) and checked nothing. It ran the unchecked binary, always unpacked the latest `themes.zip` into its cache (even when given a version), and made the themes world-writable (`chmod a+rwX`).
     - **zoxide:** checked nothing either. It copied man pages into `~/.local/share/man/man1`; the release download leaves them out, as it does for every release tool, and pages an earlier install copied stay where they are.
-    - **mise.run:** checked SHA-256 against hashes embedded in the script, or against the release's `SHASUMS256.txt` without checking its signature. It installed the newest release at least a day old, which the first install no longer does (see "A minimum release age" above).
+    - **mise.run:** checked SHA-256 against hashes embedded in the script, or against the release's `SHASUMS256.txt` without checking its signature. It installed the newest release at least a day old, which the first install stopped doing until the minimum release age (above) brought it back for every release.
   - **Neither apt key's fingerprint is published by its project.** Not by eza's INSTALL.md, not by Charm's READMEs, and not on keys.openpgp.org. The pins are the keys that sign each repository's `InRelease`, checked with `gpgv`. Charm's key is also on keyserver.ubuntu.com and identical to its yum key.
   - **A review pass** (two agents) checked the parser against all 501 assets of the 18 current releases, compared with a real JSON parser, under macOS's bash 3.2 and BSD tools, Debian 12 and Ubuntu 26.04 (mawk and uutils `tr`). It found the token, missing-asset and SIGPIPE problems fixed above (awk no longer exits at the match, which printed "Broken pipe" where SIGPIPE is ignored), several overstatements in these notes, and test assertions written as `a && b`, of which errexit only enforces the last; those were split.
   - **The API pretty-prints for some clients only.** It indents JSON for a curl or Wget User-Agent and sends one line to others, whatever the Accept header. GitHub answers a token it does not accept with 401 rather than falling back to anonymous access, and an exhausted limit with 403 or 429. curl retries a 429 and honours any Retry-After, however long; with `--retry-max-time 120` on the API call, a longer Retry-After makes curl give up at once instead.
@@ -232,4 +279,5 @@ Considered and not scheduled, kept so they are not rediscovered.
 - pay-respects: no Homebrew core, apt or winget package and an installer that edits shell files. Revisit when one package manager carries it.
 - tokei: upstream has shipped no binaries since 12.1.2, so Linux would need cargo. `cargo install tokei` by hand if wanted.
 - Pulling the repository from the update: `scripts/update.sh` would have to settle local changes and diverged branches, and which commit a machine runs is a decision to make by hand. `git pull`, then update.
+- The API's `Date` header as the clock for the release age, instead of the machine's. A clock behind makes releases look young (a first install stops with a hint, the update keeps what it has) and one ahead shortens the delay, but mise, pnpm, npm and uv all use the local clock, and the header would need parsing of its own.
 - Parsing each tool's `--version` to decide on updates: every tool formats it differently, and recorded release tags answer the same question without running anything.

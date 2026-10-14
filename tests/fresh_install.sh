@@ -12,10 +12,11 @@
 # The container form needs Docker and network access and takes several
 # minutes. The checkout is mounted read-only and copied into the container
 # user's home, so nothing on the host changes. A Mac runs the arm64 images;
-# CI runs x86_64. An install and its update read about 35 release digests
-# from the GitHub API, which answers 60 requests an hour per address without
-# a token: for several runs in a row, pass one with
-# GITHUB_TOKEN="$(gh auth token)", which reaches the container.
+# CI runs x86_64. An install and its update make about 35 requests to the
+# GitHub API, one per release download plus one per release held back by the
+# minimum release age, and it answers 60 an hour per address without a token:
+# for several runs in a row, pass one with GITHUB_TOKEN="$(gh auth token)",
+# which reaches the container.
 
 # The user that commands run as; empty runs them as the current user.
 FRESH_INSTALL_USER=""
