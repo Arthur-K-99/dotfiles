@@ -7,13 +7,13 @@ Windows and WSL share one repository but are separate environments:
 | Native Windows | `install.ps1` | PowerShell |
 | WSL Debian/Ubuntu | `install.sh` inside WSL | zsh |
 
-WSL is a Linux install; [Linux and WSL](linux.md#wsl) covers it, and the [Windows Terminal](#windows-terminal) section below covers its profile. `install.ps1` has not been run on a clean machine yet: CI runs the mocked installer tests under Windows PowerShell 5.1 and PowerShell 7 ([roadmap](roadmap.md) to-do).
+WSL is a Linux install; [Linux and WSL](linux.md#wsl) covers it, and the [Windows Terminal](#windows-terminal) section below covers its profile. `install.ps1` is installed for real every week on a clean Windows Server 2025 machine in CI, with a rerun, the update and the doctor ([development](development.md#fresh-install)); a desktop Windows 11 has not been tried yet.
 
 ## What install.ps1 does
 
 Native Windows installs PowerShell, Windows Terminal and the command-line tools through winget, PowerShell modules from the PowerShell Gallery, and Node.js through mise. It manages the PowerShell profile, oh-my-posh, git, the tool configurations and a Windows Terminal settings fragment. It prints one `==>` line per stage:
 
-1. **Installing packages:** each package in `packages/winget.txt` that `winget list` does not find, then the Nerd Font with `oh-my-posh font install CascadiaCode`.
+1. **Installing packages:** each package in `packages/winget.txt` that `winget list` does not find, then the Nerd Font: `oh-my-posh font install` with the archive's download URL from the latest Nerd Fonts release (a font name would make oh-my-posh ask GitHub's API, without a token).
 2. **Installing PowerShell modules:** Terminal-Icons, PSFzf, posh-git and CompletionPredictor, for the current user and for PowerShell 7 only.
 3. **Linking dotfiles:** the managed files below.
 4. **Installing runtimes:** mise's runtimes (Node.js LTS), the yazi flavors, and Neovim's plugins, parsers and language servers.
@@ -67,6 +67,8 @@ The fragment adds the Catppuccin scheme of the current flavor and applies it, th
 - **Aliases** as in zsh: `cd` is zoxide, `ls` is eza and `la`, `ll` and `tree` call it, `cat` is bat, `vim` is nvim, and `y` opens yazi and changes to the directory you quit in. There is no `c`; `cls` clears.
 - **Completion:** carapace through the Tab menu.
 - **mise:** PowerShell runs `mise activate`, so a project's `[env]` section applies here, unlike in zsh.
+- **direnv** loads in PowerShell 7.2 and newer only; its hook throws in Windows PowerShell. Windows sets no `HOME`, which direnv needs for its own directories, so the profile sets it to your home directory when it is unset, and points `DIRENV_BASH` at Git for Windows' bash, which runs `.envrc` files and is not on `PATH` by default.
+- **Non-interactive shells** (`pwsh -Command`, `pwsh -File`, editor tasks) skip the PSReadLine setup: keys, colors, predictions, carapace, atuin and PSFzf. In such a shell CompletionPredictor would deadlock PowerShell 7 as the command finishes, and oh-my-posh's init loads PSReadLine even there, so the profile notes before anything else whether the shell loaded PSReadLine itself.
 - **Machine-local settings** go in `~\.powershell.local.ps1`, which the profile loads after its own settings.
 - **fastfetch** greets the console host only, and not shells started with `-Command`, `-File`, `-EncodedCommand` or `-NonInteractive`. `$env:DOTFILES_FASTFETCH = '0'` in `~\.powershell.local.ps1` turns it off.
 - One profile serves both editions and loads every tool and module only when it is present. It stays ASCII (glyphs as code points) because Windows PowerShell reads scripts without a byte-order mark as ANSI.
@@ -83,4 +85,4 @@ The fragment adds the Catppuccin scheme of the current flavor and applies it, th
 
 ## Font
 
-`oh-my-posh font install` installs the whole CaskaydiaCove family. The update keeps it, since nothing records which release it came from, and nothing checks its download ([downloads](downloads.md#verified-downloads)); the [roadmap](roadmap.md) tracks both.
+`oh-my-posh font install` installs the whole CaskaydiaCove family, per user, from the latest Nerd Fonts release's `CascadiaCode.zip`. The update keeps it, since nothing records which release it came from, and nothing checks its download against a digest ([downloads](downloads.md#verified-downloads)); the [roadmap](roadmap.md) tracks both.
