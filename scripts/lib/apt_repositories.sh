@@ -33,16 +33,38 @@ dotfiles_apt_repository_added() {
     [ -e "$DOTFILES_APT_ETC/sources.list.d/$1.list" ]
 }
 
+# gpg wants a writable home even for --show-keys (it would create ~/.gnupg),
+# and starts an agent in it, so each use gets an empty, throwaway one.
+# Without /run/user/<uid> (macOS, containers, su, cron) the agent's sockets
+# go inside the home, and a socket path may not exceed about 104 bytes, so
+# the homes live under /tmp rather than a possibly long TMPDIR
+# (DOTFILES_GPG_TMPDIR in tests).
+
+# dotfiles_gpg_home: creates a throwaway gpg home and prints its path.
+dotfiles_gpg_home() {
+    mktemp -d "${DOTFILES_GPG_TMPDIR:-/tmp}/dotfiles-gpg.XXXXXX"
+}
+
+# dotfiles_gpg_home_remove <home>...: stops the agent (or keyboxd) gpg started
+# in each home, removes the socket directory gpg made for it under
+# /run/user/<uid>, and deletes the home.
+dotfiles_gpg_home_remove() {
+    local home
+    for home in "$@"; do
+        [ -n "$home" ] && [ -d "$home" ] || continue
+        GNUPGHOME="$home" gpgconf --kill all >/dev/null 2>&1 || :
+        GNUPGHOME="$home" gpgconf --remove-socketdir >/dev/null 2>&1 || :
+        rm -rf "$home"
+    done
+}
+
 # key_details <key file>: one line per OpenPGP key in the file, armored or a
 # binary keyring: its primary fingerprint, then its expiry in seconds since
-# the epoch when it has one. Nothing is imported. gpg wants a writable home
-# even for --show-keys (it would create ~/.gnupg), so it gets an empty one
-# that goes away afterwards, after gpgconf stops the agent gpg 2.4 starts in
-# it.
+# the epoch when it has one. Nothing is imported.
 key_details() (
     local home
-    home="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-gnupg.XXXXXX")" || return
-    trap 'GNUPGHOME="$home" gpgconf --kill all >/dev/null 2>&1; rm -rf "$home"' EXIT
+    home="$(dotfiles_gpg_home)" || return
+    trap 'dotfiles_gpg_home_remove "$home"' EXIT
     GNUPGHOME="$home" gpg --batch --quiet --show-keys --with-colons -- "$1" |
         awk -F: '$1 == "pub" { expiry = $7; primary = 1; next }
             primary && $1 == "fpr" { print $10 (expiry == "" ? "" : " " expiry); primary = 0 }'
@@ -73,34 +95,47 @@ dotfiles_date() {
 #
 # The keyring is left alone when the download adds nothing to it. One that
 # holds any other key, such as one from before the pins existed, is replaced.
-# The gpg homes are throwaway, and gpgconf stops any agent or keyboxd that
-# gpg 2.4 starts in them.
+#
+# With "refresh" as the second argument, as the update passes, a key that
+# cannot be downloaded (an outage, a proxy, no curl) leaves an existing
+# keyring in place with a warning instead of stopping: the keyring is still
+# what it was, and the doctor checks it. A key that does not match its pin
+# stops either way.
 install_apt_key() (
-    local name="$1" fields key_url fingerprint work found keyring
+    local name="$1" mode="${2:-}" fields key_url fingerprint work found keyring before="" after="" status
     fields="$(dotfiles_apt_repository "$name")" || return
     read -r key_url fingerprint _ <<<"$fields"
+    keyring="$DOTFILES_APT_ETC/keyrings/$name.gpg"
     if ! command -v gpg >/dev/null 2>&1; then
         echo "gnupg is not installed; install packages first." >&2
         return 1
     fi
     work="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-key.XXXXXX")" || return
-    trap 'GNUPGHOME="$work/before" gpgconf --kill all >/dev/null 2>&1; GNUPGHOME="$work/after" gpgconf --kill all >/dev/null 2>&1; rm -rf "$work"' EXIT
-    curl -fsSL --retry 5 -o "$work/key" "$key_url" || return
+    trap 'dotfiles_gpg_home_remove "$before" "$after"; rm -rf "$work"' EXIT
+    status=0
+    curl -fsSL --retry 5 -o "$work/key" "$key_url" || status=$?
+    if [ "$status" -ne 0 ]; then
+        if [ "$mode" = refresh ] && [ -e "$keyring" ]; then
+            echo "Could not fetch the $name repository's key from $key_url; its keyring stays as it is." >&2
+            return 0
+        fi
+        return "$status"
+    fi
     found="$(key_fingerprints "$work/key")" || :
     if [ "$found" != "$fingerprint" ]; then
         printf 'The signing key at %s is not the one pinned for the %s repository:\n  expected %s\n  received %s\n' \
             "$key_url" "$name" "$fingerprint" "$(printf '%s' "${found:-no OpenPGP key}" | tr '\n' ' ')" >&2
         return 1
     fi
-    keyring="$DOTFILES_APT_ETC/keyrings/$name.gpg"
-    mkdir -m 700 "$work/before" "$work/after" || return
+    before="$(dotfiles_gpg_home)" || return
+    after="$(dotfiles_gpg_home)" || return
     if [ -r "$keyring" ] && [ "$(key_fingerprints "$keyring" 2>/dev/null)" = "$fingerprint" ]; then
-        GNUPGHOME="$work/before" gpg --batch --quiet --import -- "$keyring" 2>/dev/null || return
-        GNUPGHOME="$work/before" gpg --batch --export "$fingerprint" > "$work/before.gpg" || return
-        GNUPGHOME="$work/after" gpg --batch --quiet --import -- "$keyring" 2>/dev/null || return
+        dotfiles_gpg_import "$before" "$keyring" || return
+        GNUPGHOME="$before" gpg --batch --export "$fingerprint" > "$work/before.gpg" || return
+        dotfiles_gpg_import "$after" "$keyring" || return
     fi
-    GNUPGHOME="$work/after" gpg --batch --quiet --import -- "$work/key" 2>/dev/null || return
-    GNUPGHOME="$work/after" gpg --batch --export "$fingerprint" > "$work/keyring" || return
+    dotfiles_gpg_import "$after" "$work/key" || return
+    GNUPGHOME="$after" gpg --batch --export "$fingerprint" > "$work/keyring" || return
     if [ "$(key_fingerprints "$work/keyring")" != "$fingerprint" ]; then
         echo "gpg did not export the $name repository's key $fingerprint." >&2
         return 1
@@ -116,6 +151,18 @@ install_apt_key() (
     else
         echo "Installing the $name repository's signing key from $key_url..."
     fi
-    sudo mkdir -p "$DOTFILES_APT_ETC/keyrings" || return
+    # apt's _apt user reads the keyrings, whatever umask sudo inherits.
+    sudo install -d -m 755 "$DOTFILES_APT_ETC/keyrings" || return
     sudo install -m 644 "$work/keyring" "$keyring"
 )
+
+# dotfiles_gpg_import <home> <file>: imports the file into the home. --quiet
+# keeps a successful import silent, so whatever gpg prints is shown only when
+# the import fails.
+dotfiles_gpg_import() {
+    local errors
+    if ! errors="$(GNUPGHOME="$1" gpg --batch --quiet --import -- "$2" 2>&1)"; then
+        printf 'gpg could not import %s:\n%s\n' "$2" "$errors" >&2
+        return 1
+    fi
+}

@@ -58,8 +58,10 @@ check_linux_font() {
 }
 
 # Each apt repository the bootstrap added must have its pinned key in its
-# keyring, and that key must not have expired: apt-get update fails on an
-# expired key. A key expiring within 30 days is still fine, and named.
+# keyring, and that key must not have expired: an expired key makes apt-get
+# update fail on fresh lists, and otherwise apt warns and keeps the old index,
+# so nothing else would notice. A key expiring within 30 days passes, with its
+# date shown.
 check_apt_keys() {
     local name fingerprint keyring details expiry now soon
     now="$(date +%s)"
@@ -73,7 +75,9 @@ check_apt_keys() {
             continue
         fi
         details="$(key_details "$keyring" 2>/dev/null)" || :
-        if [ -z "$details" ]; then
+        if [ -e "$keyring" ] && [ ! -r "$keyring" ]; then
+            fail "$name apt repository key ($keyring is not readable, so apt cannot read it either; run: bash scripts/update.sh)"
+        elif [ -z "$details" ]; then
             fail "$name apt repository key ($keyring is missing or holds no key; run: bash scripts/update.sh)"
         elif [ "$(printf '%s\n' "$details" | cut -d ' ' -f 1)" != "$fingerprint" ]; then
             stale "$name apt repository key ($keyring does not hold exactly the pinned key $fingerprint; run: bash scripts/update.sh)"

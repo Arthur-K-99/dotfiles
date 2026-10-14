@@ -111,10 +111,12 @@ check_linux_distribution() {
 
 # refresh_apt_keys: fetches the signing key of every repository in
 # lib/apt_repositories.sh that the bootstrap added and checks it against its
-# pin, before apt reads the repositories. apt-get update fails on a key that
-# has expired, so a key whose expiry the project extended has to reach the
-# keyring first; a keyring from before the pins existed is replaced by the
-# pinned key. A key that no longer matches its pin stops the update. Without
+# pin, before apt reads the repositories. An expired key makes apt-get update
+# fail on fresh lists, and otherwise apt warns and keeps the old index, so a
+# key whose expiry the project extended has to reach the keyring first; a
+# keyring holding any other key, such as one from before the pins existed, is
+# replaced. A key that no longer matches its pin stops the update; one that
+# cannot be downloaded leaves the keyring as it is, with a warning. Without
 # gnupg the keys cannot be checked, and the apt install below brings it back
 # (packages/apt.txt), so the update goes on and checks them next time.
 refresh_apt_keys() {
@@ -125,7 +127,7 @@ refresh_apt_keys() {
             echo "gnupg is not installed, so the apt repository keys are checked on the next update, after apt installs it."
             return 0
         fi
-        install_apt_key "$name" || return
+        install_apt_key "$name" refresh || return
     done
 }
 
