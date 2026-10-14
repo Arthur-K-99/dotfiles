@@ -117,7 +117,7 @@ Not tied to a phase; pick up when convenient.
 
 Done:
 
-- **A shorter README** (PR link to follow). The README went from 175 lines and 4,172 words to 156 and about 1,900: intro with what has been tried where, "Try it first", the install with per-platform prerequisites, first steps, the update, the tool table and one key-binding table. Everything else moved under `docs/`; only false statements were dropped:
+- **A shorter README** ([#18](https://github.com/Arthur-K-99/dotfiles/pull/18)). The README went from 175 lines and 4,172 words to 156 and about 1,900: intro with what has been tried where, "Try it first", the install with per-platform prerequisites, first steps, the update, the tool table and one key-binding table. Everything else moved under `docs/`; only false statements were dropped:
   - **`docs/tools.md`:** the "After install" bullets per tool (zsh, fastfetch, Ghostty, tmux, Neovim, mise, git, theme, font).
   - **`docs/linux.md`** and **`docs/windows.md`:** what differs by platform: sudo, the release binaries, Neovim and the tree-sitter CLI, the font, vivid, the clipboard and WSL; the stages of `install.ps1`, links or copies, existing configurations, the Windows Terminal fragment, PowerShell, the C compiler.
   - **`docs/updating.md`:** the update section, plus what a plain rerun upgrades on each platform.
