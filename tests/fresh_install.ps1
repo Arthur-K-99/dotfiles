@@ -92,18 +92,74 @@ try {
     if ($code -ne 0) { throw "$Name failed in $Shell (exit code $code); see $transcript" }
 }
 
-# Runs a command the way a terminal would start it and returns its exit code
-# and its stdout and stderr lines apart; the shells must print nothing on stderr.
+# One argument as CommandLineToArgvW reads it back: .NET Framework's
+# ProcessStartInfo takes a single command line.
+function ConvertTo-FreshInstallArgument {
+    param([string]$Value)
+    if ($Value -and $Value -notmatch '[\s"]') { return $Value }
+    '"' + (($Value -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"'
+}
+
+# The processes a process started, and theirs, while they run.
+function Get-FreshInstallDescendants {
+    param([int]$ParentId)
+    foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $ParentId")) {
+        $child
+        Get-FreshInstallDescendants $child.ProcessId
+    }
+}
+
+function Stop-FreshInstallDescendants {
+    param([int]$ParentId, [string]$Label)
+    $left = @(Get-FreshInstallDescendants $ParentId)
+    foreach ($process in $left) {
+        Write-Host "  $Label left running: $($process.Name) ($($process.ProcessId)): $($process.CommandLine)"
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    return $left.Count
+}
+
+# Runs a command with PATH from the registry and stdin closed, as nothing
+# types into it, and returns its exit code and its stdout and stderr lines
+# apart; the shells must print nothing on stderr. A command that does not
+# finish in time, or leaves processes behind that keep its output open, fails
+# with the processes it left, which are stopped.
 function Invoke-FreshInstallCapture {
-    param([string]$Command, [string[]]$Arguments)
+    param([string]$Command, [string[]]$Arguments, [int]$TimeoutSeconds = 300)
     Reset-FreshInstallPath
-    $ErrorActionPreference = 'Continue'
-    $output = @(& $Command @Arguments 2>&1)
-    $code = $LASTEXITCODE
+    $path = Get-DotfilesCommandPath $Command
+    if (-not $path) { throw "$Command is not on PATH." }
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = $path
+    $info.Arguments = @($Arguments | ForEach-Object { ConvertTo-FreshInstallArgument $_ }) -join ' '
+    $info.UseShellExecute = $false
+    $info.RedirectStandardInput = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($info)
+    $process.StandardInput.Close()
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    $label = "$Command $($Arguments -join ' ')"
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        Write-Host "$label has not finished after $TimeoutSeconds s."
+        Stop-FreshInstallDescendants $process.Id $label | Out-Null
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        $null = $stdout.Wait(10000); $null = $stderr.Wait(10000)
+        if ($stdout.IsCompleted) { Write-Host "stdout so far:`n$($stdout.Result)" }
+        if ($stderr.IsCompleted) { Write-Host "stderr so far:`n$($stderr.Result)" }
+        throw "$label did not finish within $TimeoutSeconds s."
+    }
+    $process.WaitForExit()
+    if (-not ($stdout.Wait(15000) -and $stderr.Wait(15000))) {
+        $left = Stop-FreshInstallDescendants $process.Id $label
+        $null = $stdout.Wait(10000); $null = $stderr.Wait(10000)
+        throw "$label exited ($($process.ExitCode)) but $left process(es) it started kept its output open.`nstdout: $(if ($stdout.IsCompleted) { $stdout.Result })`nstderr: $(if ($stderr.IsCompleted) { $stderr.Result })"
+    }
     [pscustomobject]@{
-        ExitCode = $code
-        Output = @($output | Where-Object { $_ -isnot [Management.Automation.ErrorRecord] } | ForEach-Object { [string]$_ })
-        Errors = @($output | Where-Object { $_ -is [Management.Automation.ErrorRecord] } | ForEach-Object { [string]$_ })
+        ExitCode = $process.ExitCode
+        Output = @($stdout.Result -split '\r?\n' | Where-Object { $_ -ne '' })
+        Errors = @($stderr.Result -split '\r?\n' | Where-Object { $_ -ne '' })
     }
 }
 
