@@ -191,7 +191,7 @@ bootstrap_bat_theme() {
     theme_dir="$("$bat_command" --config-dir)/themes" || return
     theme_file="$theme_dir/$theme_name.tmTheme"
     mkdir -p "$theme_dir" || return
-    curl -fsSL --retry 5 -o "$theme_file.part" "$theme_url" || {
+    curl -fsSL --retry 7 -o "$theme_file.part" "$theme_url" || {
         status=$?
         rm -f "$theme_file.part"
         return "$status"
@@ -211,10 +211,10 @@ bootstrap_bat_theme() {
 # enough (release_tag), verified and installed into ~/.local/bin
 # (DOTFILES_LOCAL_BIN). No installer script is piped into a shell:
 # oh-my-posh's and zoxide's verified nothing they fetched.
-# Every curl call here retries timeouts and HTTP 408, 429 and 5xx answers,
-# five times over about 30 seconds (--retry 5): GitHub returns a 500 or 502
-# now and then, at times for several seconds, and an update looks up the
-# latest tag of every release tool.
+# Every curl call here retries timeouts and HTTP 408, 429, 500, 502, 503 and
+# 504 answers seven times over about two minutes (--retry 7, waiting 1, 2,
+# 4 ... 64 seconds): GitHub returns a 500 or 502 now and then, at times for
+# half a minute, and an update looks up the latest tag of every release tool.
 
 # install_apt_repository <name> <package>...: installs packages from one of
 # the repositories in lib/apt_repositories.sh, adding it with its pinned key
@@ -280,7 +280,7 @@ dotfiles_arch() {
 # project marks so, never a prerelease or a draft.
 github_latest_tag() {
     local url
-    url="$(curl -fsSL --retry 5 -o /dev/null -w '%{url_effective}' "https://github.com/$1/releases/latest")" || return
+    url="$(curl -fsSL --retry 7 -o /dev/null -w '%{url_effective}' "https://github.com/$1/releases/latest")" || return
     case "$url" in
         */releases/tag/?*) printf '%s\n' "${url##*/releases/tag/}" ;;
         *) echo "Could not resolve the latest release of $1: $url" >&2; return 1 ;;
@@ -337,7 +337,7 @@ github_api_cache() {
 # The answers are compressed on the way (--compressed): a list of releases
 # with all their assets runs to megabytes of JSON, a tenth of that gzipped.
 github_api_request() {
-    local args=(-fsSL --compressed --retry 5 --retry-max-time 120 -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28')
+    local args=(-fsSL --compressed --retry 7 --retry-max-time 120 -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28')
     if [ -n "${GITHUB_TOKEN:-}" ]; then
         if printf 'Authorization: Bearer %s\n' "$GITHUB_TOKEN" | curl "${args[@]}" -H @- "https://api.github.com/$1"; then
             return 0
@@ -412,7 +412,7 @@ file_sha256() {
 download_release_asset() {
     local expected actual
     expected="$(release_asset_digest "$1" "$2" "$3")" || return
-    curl -fsSL --retry 5 -o "$4" "https://github.com/$1/releases/download/$2/$3" || return
+    curl -fsSL --retry 7 -o "$4" "https://github.com/$1/releases/download/$2/$3" || return
     actual="$(file_sha256 "$4")" || return
     if [ "$actual" != "$expected" ]; then
         rm -f "$4"

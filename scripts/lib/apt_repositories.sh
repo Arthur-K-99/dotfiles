@@ -113,7 +113,7 @@ install_apt_key() (
     work="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-key.XXXXXX")" || return
     trap 'dotfiles_gpg_home_remove "$before" "$after"; rm -rf "$work"' EXIT
     status=0
-    curl -fsSL --retry 5 -o "$work/key" "$key_url" || status=$?
+    curl -fsSL --retry 7 -o "$work/key" "$key_url" || status=$?
     if [ "$status" -ne 0 ]; then
         if [ "$mode" = refresh ] && [ -e "$keyring" ]; then
             echo "Could not fetch the $name repository's key from $key_url; its keyring stays as it is." >&2

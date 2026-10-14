@@ -62,8 +62,12 @@ if ($direnvShell -and (Get-Command direnv -ErrorAction SilentlyContinue)) {
     if ($LASTEXITCODE -eq 0 -and $direnvHook.Trim()) { Invoke-Expression $direnvHook }
 }
 
+# Neovim for whatever asks for an editor (git), unless one is chosen already;
+# ~/.powershell.local.ps1, loaded last, can choose another. VISUAL is left
+# alone: git reads it before EDITOR.
 if (Get-Command nvim -ErrorAction SilentlyContinue) {
     Set-Alias vim nvim
+    if (-not $env:EDITOR) { $env:EDITOR = 'nvim' }
 }
 
 # bat reads the same configuration file as the Unix shells.

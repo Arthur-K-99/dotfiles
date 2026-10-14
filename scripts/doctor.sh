@@ -7,6 +7,17 @@ source "$DOTFILES_DIR/scripts/lib/environment.sh"
 source "$DOTFILES_DIR/scripts/lib/apt_repositories.sh"
 failures=0
 
+# The repository's scripts directory as the hints below name it: a full path,
+# so a hint works from any directory, with ~ for the home directory and the
+# rest quoted for the shell where it needs it (a space, say).
+dotfiles_home="${HOME%/}"
+if [ -n "$dotfiles_home" ] && [ "${DOTFILES_DIR#"$dotfiles_home"/}" != "$DOTFILES_DIR" ]; then
+    DOTFILES_SCRIPTS="~/$(printf '%q' "${DOTFILES_DIR#"$dotfiles_home"/}/scripts")"
+else
+    DOTFILES_SCRIPTS="$(printf '%q' "$DOTFILES_DIR/scripts")"
+fi
+unset dotfiles_home
+
 ok() { printf '  [ok] %s\n' "$1"; }
 fail() { printf '  [missing] %s\n' "$1"; failures=$((failures + 1)); }
 stale() { printf '  [stale] %s\n' "$1"; failures=$((failures + 1)); }
@@ -49,11 +60,11 @@ check_linux_font() {
     if dotfiles_is_wsl; then
         skip "$DOTFILES_FONT_FAMILY (WSL uses the Windows font, which install.ps1 installs)"
     elif ! command -v fc-list >/dev/null 2>&1; then
-        fail "$DOTFILES_FONT_FAMILY (fontconfig is not installed; rerun: bash scripts/install_packages.sh)"
+        fail "$DOTFILES_FONT_FAMILY (fontconfig is not installed; rerun: bash $DOTFILES_SCRIPTS/install_packages.sh)"
     elif dotfiles_linux_font_installed; then
         ok "$DOTFILES_FONT_FAMILY"
     else
-        fail "$DOTFILES_FONT_FAMILY (rerun: bash scripts/bootstrap_tools.sh)"
+        fail "$DOTFILES_FONT_FAMILY (rerun: bash $DOTFILES_SCRIPTS/bootstrap_tools.sh)"
     fi
 }
 
@@ -71,22 +82,22 @@ check_apt_keys() {
         read -r _ fingerprint _ <<<"$(dotfiles_apt_repository "$name")"
         keyring="$DOTFILES_APT_ETC/keyrings/$name.gpg"
         if ! command -v gpg >/dev/null 2>&1; then
-            fail "$name apt repository key (gnupg is not installed; rerun: bash scripts/install_packages.sh)"
+            fail "$name apt repository key (gnupg is not installed; rerun: bash $DOTFILES_SCRIPTS/install_packages.sh)"
             continue
         fi
         details="$(key_details "$keyring" 2>/dev/null)" || :
         if [ -e "$keyring" ] && [ ! -r "$keyring" ]; then
-            fail "$name apt repository key ($keyring is not readable, so apt cannot read it either; run: bash scripts/update.sh)"
+            fail "$name apt repository key ($keyring is not readable, so apt cannot read it either; run: bash $DOTFILES_SCRIPTS/update.sh)"
         elif [ -z "$details" ]; then
-            fail "$name apt repository key ($keyring is missing or holds no key; run: bash scripts/update.sh)"
+            fail "$name apt repository key ($keyring is missing or holds no key; run: bash $DOTFILES_SCRIPTS/update.sh)"
         elif [ "$(printf '%s\n' "$details" | cut -d ' ' -f 1)" != "$fingerprint" ]; then
-            stale "$name apt repository key ($keyring does not hold exactly the pinned key $fingerprint; run: bash scripts/update.sh)"
+            stale "$name apt repository key ($keyring does not hold exactly the pinned key $fingerprint; run: bash $DOTFILES_SCRIPTS/update.sh)"
         else
             expiry="$(printf '%s\n' "$details" | cut -s -d ' ' -f 2)"
             if [ -n "$expiry" ] && [ "$expiry" -le "$now" ]; then
-                stale "$name apt repository key (expired on $(dotfiles_date "$expiry"); run: bash scripts/update.sh, which fetches it again)"
+                stale "$name apt repository key (expired on $(dotfiles_date "$expiry"); run: bash $DOTFILES_SCRIPTS/update.sh, which fetches it again)"
             elif [ -n "$expiry" ] && [ "$expiry" -le "$soon" ]; then
-                ok "$name apt repository key (expires on $(dotfiles_date "$expiry"); scripts/update.sh fetches it again)"
+                ok "$name apt repository key (expires on $(dotfiles_date "$expiry"); $DOTFILES_SCRIPTS/update.sh fetches it again)"
             else
                 ok "$name apt repository key"
             fi
@@ -98,7 +109,7 @@ check_macos_app() {
     if dotfiles_macos_app_installed "$1"; then
         ok "$1.app"
     else
-        fail "$1.app (rerun: bash scripts/install_packages.sh)"
+        fail "$1.app (rerun: bash $DOTFILES_SCRIPTS/install_packages.sh)"
     fi
 }
 
@@ -150,7 +161,7 @@ check_bat_theme() {
         if [ -n "$theme_name" ] && "$bat_command" --list-themes 2>/dev/null | grep -q -F -- "$theme_name"; then
             ok "bat theme ($theme_name)"
         else
-            fail "bat theme ${theme_name:-(none named in config/bat/config)} (rerun: bash scripts/bootstrap_tools.sh)"
+            fail "bat theme ${theme_name:-(none named in config/bat/config)} (rerun: bash $DOTFILES_SCRIPTS/bootstrap_tools.sh)"
         fi
         return
     done
@@ -171,7 +182,7 @@ check_tree_sitter() {
     fi
     # One that starts with a warning about a newer glibc hangs installing parsers.
     if dotfiles_tree_sitter_glibc_error >/dev/null; then
-        fail "tree-sitter CLI is built for a newer glibc than this system's (rerun: bash scripts/bootstrap_tools.sh)"
+        fail "tree-sitter CLI is built for a newer glibc than this system's (rerun: bash $DOTFILES_SCRIPTS/bootstrap_tools.sh)"
         return
     fi
     if ! version="$(dotfiles_tree_sitter_version)"; then
@@ -179,7 +190,7 @@ check_tree_sitter() {
     elif dotfiles_version_at_least "$version" "$DOTFILES_TREE_SITTER_MINIMUM"; then
         ok "tree-sitter CLI $version"
     else
-        fail "tree-sitter CLI $version is older than $DOTFILES_TREE_SITTER_MINIMUM (Linux: rerun bash scripts/bootstrap_tools.sh)"
+        fail "tree-sitter CLI $version is older than $DOTFILES_TREE_SITTER_MINIMUM (Linux: rerun bash $DOTFILES_SCRIPTS/bootstrap_tools.sh)"
     fi
 }
 
@@ -194,7 +205,7 @@ check_nvim_version() {
     elif dotfiles_version_at_least "$version" "$DOTFILES_NVIM_MINIMUM"; then
         ok "Neovim $version"
     else
-        fail "Neovim $version is older than $DOTFILES_NVIM_MINIMUM (Linux: rerun bash scripts/bootstrap_tools.sh)"
+        fail "Neovim $version is older than $DOTFILES_NVIM_MINIMUM (Linux: rerun bash $DOTFILES_SCRIPTS/bootstrap_tools.sh)"
     fi
 }
 
@@ -209,7 +220,7 @@ check_nvim_plugins() {
     local output line
     # Without lazy.nvim a start would clone it, so the doctor stops here.
     if [ ! -r "$lazy_dir/lazy.nvim/lua/lazy/init.lua" ]; then
-        fail "lazy.nvim ($lazy_dir/lazy.nvim; rerun: bash scripts/bootstrap_tools.sh)"
+        fail "lazy.nvim ($lazy_dir/lazy.nvim; rerun: bash $DOTFILES_SCRIPTS/bootstrap_tools.sh)"
         return 0
     fi
     ok "lazy.nvim"
@@ -230,10 +241,10 @@ check_nvim_plugins() {
             "ok plugin "*) ok "Neovim plugin ${line#ok plugin }" ;;
             "ok parser "*) ok "Neovim parser ${line#ok parser }" ;;
             "ok package "*) ok "Neovim language server ${line#ok package }" ;;
-            "missing plugin "*) fail "Neovim plugin ${line#missing plugin } (rerun: bash scripts/bootstrap_tools.sh)" ;;
-            "stale plugin "*) stale "Neovim plugin ${line#stale plugin } is not at the commit lazy-lock.json pins (rerun: bash scripts/bootstrap_tools.sh)" ;;
-            "missing parser "*) fail "Neovim parser ${line#missing parser } (rerun: bash scripts/bootstrap_tools.sh)" ;;
-            "missing package "*) fail "Neovim language server ${line#missing package } (rerun: bash scripts/bootstrap_tools.sh)" ;;
+            "missing plugin "*) fail "Neovim plugin ${line#missing plugin } (rerun: bash $DOTFILES_SCRIPTS/bootstrap_tools.sh)" ;;
+            "stale plugin "*) stale "Neovim plugin ${line#stale plugin } is not at the commit lazy-lock.json pins (rerun: bash $DOTFILES_SCRIPTS/bootstrap_tools.sh)" ;;
+            "missing parser "*) fail "Neovim parser ${line#missing parser } (rerun: bash $DOTFILES_SCRIPTS/bootstrap_tools.sh)" ;;
+            "missing package "*) fail "Neovim language server ${line#missing package } (rerun: bash $DOTFILES_SCRIPTS/bootstrap_tools.sh)" ;;
             "skipped parser "*) skip "Neovim parser ${line#skipped parser }" ;;
             *) fail "Neovim check: $line" ;;
         esac
@@ -341,7 +352,7 @@ doctor_main() {
     echo "Checking managed links..."
     check_link "$DOTFILES_DIR/home/.zshrc" "$HOME/.zshrc"
     check_link "$DOTFILES_DIR/config/tmux/tmux.conf" "$HOME/.config/tmux/tmux.conf"
-    check_absent "~/.tmux.conf (tmux loads it as well as ~/.config/tmux/tmux.conf; rerun bash scripts/link_dotfiles.sh, which backs it up, and keep what you need in ~/.config/tmux/local.conf)" "$HOME/.tmux.conf"
+    check_absent "~/.tmux.conf (tmux loads it as well as ~/.config/tmux/tmux.conf; rerun bash $DOTFILES_SCRIPTS/link_dotfiles.sh, which backs it up, and keep what you need in ~/.config/tmux/local.conf)" "$HOME/.tmux.conf"
     check_link "$DOTFILES_DIR/config/eza" "$HOME/.config/eza"
     check_link "$DOTFILES_DIR/config/oh-my-posh/config.omp.json" "$HOME/.config/oh-my-posh/config.omp.json"
     check_link "$DOTFILES_DIR/config/bat/config" "$HOME/.config/bat/config"
@@ -356,7 +367,7 @@ doctor_main() {
     check_link "$DOTFILES_DIR/config/mise/config.toml" "$HOME/.config/mise/config.toml"
     check_link "$DOTFILES_DIR/config/zsh-abbr" "$HOME/.config/zsh-abbr"
     check_link "$DOTFILES_DIR/config/nvim" "$HOME/.config/nvim"
-    check_readable "~/.gitconfig for identity (rerun: bash scripts/link_dotfiles.sh)" "$HOME/.gitconfig"
+    check_readable "~/.gitconfig for identity (rerun: bash $DOTFILES_SCRIPTS/link_dotfiles.sh)" "$HOME/.gitconfig"
     echo "Checking plugins..."
     check_plugins
 

@@ -31,7 +31,7 @@ install_main() {
         finished="Done. Everything is up to date and all setup checks passed."
     fi
     if ! dotfiles_init_environment; then
-        echo "Could not initialize the tool environment. Check Homebrew, then rerun ${DOTFILES_RERUN##*/}." >&2
+        echo "Could not initialize the tool environment. Check Homebrew, then rerun $DOTFILES_RERUN." >&2
         return 1
     fi
     # The bootstrap reads it; a bad value stops the run before any stage.

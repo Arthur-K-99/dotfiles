@@ -115,7 +115,7 @@ The update does not pull the repository, so `git pull` first. It runs the instal
 
 | Where | Keys |
 |---|---|
-| zsh | `Tab` fzf completion menu · `Up` history · `Ctrl+P`/`Ctrl+N` history lines with the same first word · `Alt+W` cut back to the mark · `Ctrl+X Ctrl+E` edit the line in `$EDITOR` · `Space` or `Enter` expands an abbreviation (`g`, `gs`, `gc`, `lg`, …) |
+| zsh | `Tab` fzf completion menu · `Up` history · `Ctrl+P`/`Ctrl+N` history lines with the same first word · `Alt+W` cut back to the mark · `Ctrl+X Ctrl+E` edit the line in Neovim · `Space` or `Enter` expands an abbreviation (`g`, `gs`, `gc`, `lg`, …) |
 | fzf, atuin | `Ctrl+R` atuin history search (`Enter` runs, `Tab` edits) · `Ctrl+T` insert files · `Alt+C` change directory |
 | tmux, prefix `Ctrl+A` | `h j k l` panes · `Ctrl+h/j/k/l` panes and Neovim splits, no prefix · `r` reload · `Ctrl+L` clear the screen · `F` tmux-fzf · `` ` `` floating pane · `T` sesh picker, `L` last session · `Ctrl+S`/`Ctrl+R` save/restore sessions · `I` install plugins · `y` in copy mode copies |
 | Neovim, leader `Space` | `Space Space` or `Space f f` files · `Space /` grep · `Space f b` buffers · `Space f .` resume picker · `Space ?` buffer keys · `gd` definition · `grr` references · `grn` rename · `gra` code action · `K` hover · `Space c f` format · `]d`/`[d` diagnostics, `Space x x` list · `]c`/`[c` hunks · `Space g s`/`Space g r` stage/reset hunk · `Space g p` preview · `Space g b` blame · `Space g g` status · `Ctrl+Y` accept completion |

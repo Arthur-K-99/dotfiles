@@ -57,7 +57,7 @@ install_macos() {
     local declared=() present=() missing=()
     if ! command -v brew &>/dev/null; then
         echo "Installing Homebrew..."
-        installer="$(curl -fsSL --retry 5 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || return
+        installer="$(curl -fsSL --retry 7 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || return
         /bin/bash -c "$installer" || return
         dotfiles_init_environment || return
     fi
