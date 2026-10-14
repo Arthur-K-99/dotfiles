@@ -3,11 +3,26 @@ set -euo pipefail
 
 DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# backup_path <path>: where a file the linker moves out of the way goes,
+# <path>.bak.<timestamp>, with .1 appended until the name is free.
+backup_path() {
+    local backup
+    backup="${1}.bak.$(date +%Y%m%d%H%M%S)"
+    while [ -e "$backup" ] || [ -L "$backup" ]; do
+        backup="${backup}.1"
+    done
+    printf '%s\n' "$backup"
+}
+
+# link <source> <destination>: links the destination to the source, moving
+# whatever was there to a backup first. LINK_BACKUP names that backup; it is
+# empty when nothing was moved or the link failed.
 link() {
     local src="$1"
     local dst="$2"
     local backup=""
     local staging
+    LINK_BACKUP=""
 
     if [ ! -e "$src" ]; then
         echo "  missing source: $src" >&2
@@ -30,10 +45,7 @@ link() {
     fi
 
     if [ -e "$dst" ] || [ -L "$dst" ]; then
-        backup="${dst}.bak.$(date +%Y%m%d%H%M%S)"
-        while [ -e "$backup" ] || [ -L "$backup" ]; do
-            backup="${backup}.1"
-        done
+        backup="$(backup_path "$dst")"
         echo "  backing up $dst -> $backup"
         if ! mv "$dst" "$backup"; then
             rm -rf "$staging"
@@ -56,16 +68,26 @@ link() {
         return 1
     fi
     rm -rf "$staging"
+    LINK_BACKUP="$backup"
     echo "  linked: $dst"
 }
 
 main() {
     echo "Linking dotfiles..."
     link "$DOTFILES_DIR/home/.zshrc" "$HOME/.zshrc" || return 1
+    # A link into another copy of this repository holds nothing of the user's.
+    if [ -n "$LINK_BACKUP" ]; then
+        case "$(readlink "$LINK_BACKUP" 2>/dev/null)" in
+            */home/.zshrc) ;;
+            *) echo "  Your previous ~/.zshrc is in $LINK_BACKUP; move what you still need into ~/.zshrc.local, which the new one loads last." ;;
+        esac
+    fi
     # tmux reads ~/.tmux.conf as well as the XDG file when both exist, so the
-    # link from before the move is retired rather than left dangling.
+    # link from before the move is retired, and any other file there is backed
+    # up like a replaced one; the doctor fails while one is left.
     link "$DOTFILES_DIR/config/tmux/tmux.conf" "$HOME/.config/tmux/tmux.conf" || return 1
     retire_link "$DOTFILES_DIR/home/.tmux.conf" "$HOME/.tmux.conf" || return 1
+    move_aside "$HOME/.tmux.conf" "tmux would load it as well as ~/.config/tmux/tmux.conf" || return 1
     link "$DOTFILES_DIR/config/eza" "$HOME/.config/eza" || return 1
     link "$DOTFILES_DIR/config/oh-my-posh/config.omp.json" "$HOME/.config/oh-my-posh/config.omp.json" || return 1
     link "$DOTFILES_DIR/config/bat/config" "$HOME/.config/bat/config" || return 1
@@ -101,7 +123,7 @@ main() {
 
 # A destination that still links to a source this repository no longer
 # provides is removed. Regular files and links elsewhere belong to the user
-# and stay; the doctor reports them.
+# and stay.
 retire_link() {
     local retired_src="$1"
     local dst="$2"
@@ -109,6 +131,16 @@ retire_link() {
         rm "$dst" || return 1
         echo "  retired: $dst"
     fi
+}
+
+# move_aside <path> <reason>: moves a file, link or directory that must not
+# stay where it is to a backup, as link does with what it replaces.
+move_aside() {
+    local dst="$1" backup
+    [ -e "$dst" ] || [ -L "$dst" ] || return 0
+    backup="$(backup_path "$dst")" || return 1
+    echo "  backing up $dst -> $backup ($2)"
+    mv "$dst" "$backup"
 }
 
 # An empty real directory in the way of a directory link is removed; anything

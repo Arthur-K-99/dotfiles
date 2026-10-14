@@ -104,10 +104,44 @@ Not tied to a phase; pick up when convenient.
 - **Ownership of plain files in `~/.local/bin`.** Any plain file there with a tool's name counts as the bootstrap's, even without a release record (machines installed before records existed have none), so a binary that `cargo install --root ~/.local` or a manual copy put there is replaced by the update. Links are left alone. Refetching only recorded tools would leave older machines un-updated instead.
 - **A faster macOS update.** After its upgrades the update still runs `brew install` once per declared formula, about a second each, as a plain rerun does. A single `brew install` of the formulae `brew list` lacks would do.
 - **A font opt-out for headless Linux.** Every Linux machine outside WSL now installs fontconfig and the 33 MB Mono family, including servers reached only over SSH, where the client draws the text, and the doctor fails without the font. Headless machines cannot be detected reliably, so a variable like `DOTFILES_FASTFETCH=0` is the likely shape.
-- **A shorter README.** "After install" has grown to about 30 long bullets; per-tool detail could move under `docs/`, leaving the bootstrap, the tool table and the key bindings.
+- **A shorter README.** "After install" has grown to about 30 long bullets; per-tool detail could move under `docs/`, leaving the bootstrap, the tool table and the key bindings. A first-time read (2026-10-14) found these gaps and errors; fix them in the same pass:
+  - **Before you start:** each platform's prerequisites. Linux needs git and a user with sudo, and sudo can ask again during the bootstrap. macOS needs an admin account for Homebrew's interactive installer. Windows needs a working winget; say whether to run elevated, how to get links instead of copies (Developer Mode or an elevated shell), and that copies stay stale until the next install. List the tested distributions and architectures.
+  - **After install:** `chsh` to zsh is a step on Linux and WSL, not an option. On macOS, open Ghostty rather than Terminal.app.
+  - **WSL in Windows Terminal:** the fragment cannot reach WSL profiles. The README covers the color scheme but not the font: WSL keeps Cascadia Mono until its profile (or Defaults) gets the Nerd Font, which only `install.ps1` installs on Windows.
+  - **Existing configurations:**
+    - On Windows, a `Microsoft.PowerShell_profile.ps1` still runs after the managed profile and can replace its prompt.
+    - Extra files in `%LOCALAPPDATA%\nvim` mix with the managed ones, and a `lua/plugins/*.lua` there is loaded.
+  - **Stale statements:**
+    - Ctrl+R searches history with atuin, not fzf (README's PowerShell and fzf bullets).
+    - The README's Neovim language list differs from `tools.lua`.
+    - Git on macOS is the Command Line Tools'.
+    - Ghostty's reload key is Ctrl+Shift+, on Linux.
+    - The README's profiles (`development`, `personal` and OS settings) differ from the roadmap's (`minimal`, `development`, `personal`).
+    - `docs/theming.md` points to a btop item the roadmap does not have.
+  - **Undocumented behaviour:**
+    - `cd` is zoxide; `ls`, `la`, `ll` and `tree` are eza, `cat` is bat, `vim` is nvim, `c` clears.
+    - Further keys: zsh's Ctrl+P/N, Alt+W and Ctrl+X Ctrl+E, tmux's `prefix r` and `prefix C-l`, and Ghostty's Shift+Enter.
+    - `atuin import auto` brings in existing history; `mise use -g` rewrites the tracked config file.
+  - **Messages that look like errors but are not:** collect them in a troubleshooting page. Seen so far: Neovim's "Plugin catppuccin is not installed" on a first install; one Homebrew "already installed and up-to-date" warning per formula on a macOS rerun; the doctor's `[skip]` lines (tree-sitter on Debian 12, parsers on Windows without a compiler, the font on WSL); the release age's "taking"/"keeping" notes and mise's "Selected mise"; the update's "left alone" and "pinned" lines and zinit's git logs; without a terminal, `tput: No value for $TERM` and Debian 12 fzf's `can't change option: zle`.
+  - **A "Try it" section:** a container, a VM or a second WSL distribution; how to undo (the `.bak` files, the downloaded state, the apt sources and keyrings); what to include in a report.
 - **A test for the parser skip on macOS and Linux.** Since #9, `lua/dotfiles/bootstrap.lua` counts parsers as skipped whenever the tree-sitter CLI is absent on any platform (previously only on Windows). Only the doctors' parsing of `skipped parser` lines is tested, not `M.missing()` itself.
 
 Done:
+
+- **First-try fixes** ([#16](https://github.com/Arthur-K-99/dotfiles/pull/16)), from a first-time read of the README against the scripts:
+  - **An existing `~/.tmux.conf` stopped the install.** The linker retired only its own old link there. A file of the user's stayed, and since tmux would load it as well, the doctor failed and the installer stopped at "Verifying the setup". The linker now backs it up like any file it replaces (`move_aside`) and says why.
+  - **A machine-local tmux file.** There was nowhere for such settings but the tracked `config/tmux/tmux.conf`. The configuration now loads `~/.config/tmux/local.conf` last when it exists (`source-file -q`), like `~/.zshrc.local` and Ghostty's `local`.
+  - **A replaced `~/.zshrc` left no advice.** The linker now says to move what is still needed into `~/.zshrc.local`, which the new one loads last.
+  - **zsh as the login shell.** The installer said to run `zsh`, which covers one terminal. When the login shell is not zsh it now prints the `chsh` command: new terminals and tmux panes start the login shell, so without it they skip the zsh configuration. The login shell is read from the account database (`getent passwd` on Linux, `dscl` on macOS), because `SHELL` is unset under cron and in containers, and stale after `chsh` until the next login.
+  - **`.nvmrc` and `.node-version` are not read,** although the README said mise switched versions from them. mise reads such files only for the tools named in `idiomatic_version_file_enable_tools`, none by default since mise 2025.10.0, which was already so when the mise configuration was added (mise 2026.10.8 resolved Node.js 24 in a directory whose `.nvmrc` said 18). Naming node in the tracked `config/mise/config.toml` was tried and left out:
+    - mise's shims would apply a `~/.nvmrc` under the whole home directory, where nvm reads it only on `nvm use`;
+    - an nvm alias there (`node`, `stable`) is a version mise cannot resolve (`mise install --dry-run` planned `node@node`), so the bootstrap's `mise install` would likely fail;
+    - a `package.json` `devEngines.runtime` would choose Node.js too.
+
+    The README now says how to opt in (`MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS=node` in `~/.zshrc.local`) and what follows.
+  - **`DOTFILES_LOCAL_BIN` reaches the shell.** `~/.zshrc` put `~/.local/bin` on `PATH` whatever the installer used. It now puts the variable's directory first when it is set (exported from `~/.zshenv`, since `~/.zshrc.local` loads after `PATH` is built) and keeps `~/.local/bin`, where pipx, uv and npm link their tools.
+  - **A stale comment:** Ghostty's config named `.tmux.conf` for the tmux configuration.
+  - **The tests clear `DOTFILES_LOCAL_BIN`,** as they do the other settings: exported from `~/.zshenv`, as the README now suggests, it made `environment_discovery` fail.
 
 - **A minimum release age** ([#15](https://github.com/Arthur-K-99/dotfiles/pull/15)). mise.run installed the newest mise release at least a day old and `mise self-update` waits a day, while every other release tool took a release minutes after it was published. Now every GitHub release download of the Unix bootstrap waits.
   - **The setting.** `DOTFILES_MINIMUM_RELEASE_AGE` is a whole number of at most nine digits with a unit, `s`, `m`, `h`, `d` or `w` (the grammar of mise's installer, `^[0-9]+[smhdw]$`), plus a bare `0` for off. It is a day when unset or empty. `install.sh`, `scripts/update.sh` and the bootstrap stop before their first stage on anything else.
