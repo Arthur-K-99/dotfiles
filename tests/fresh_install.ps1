@@ -317,7 +317,9 @@ Write-Output 'profile loaded'
 function Assert-FreshInstallQuietStart {
     param([string]$Label, [string]$Command, [string[]]$Arguments)
     Write-Host "==> Starting $Label"
+    $clock = [Diagnostics.Stopwatch]::StartNew()
     $result = Invoke-FreshInstallCapture $Command $Arguments
+    Write-Host ('  finished in {0:0.0} s' -f $clock.Elapsed.TotalSeconds)
     $result.Output | Out-Host
     Assert-FreshInstall ($result.ExitCode -eq 0) "$Label failed (exit code $($result.ExitCode)):`n$(($result.Output + $result.Errors) -join "`n")"
     Assert-FreshInstall ($result.Errors.Count -eq 0) "$Label printed errors:`n$($result.Errors -join "`n")"
