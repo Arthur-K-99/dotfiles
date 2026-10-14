@@ -103,7 +103,7 @@ Not tied to a phase; pick up when convenient.
 
 Done:
 
-- **apt keyrings kept current and checked** (PR_PLACEHOLDER). [#13](https://github.com/Arthur-K-99/dotfiles/pull/13) pinned the repository keys but fetched one only while a package of its repository was missing, so a keyring a machine got before the pins was never checked, and an expiry the project extends would never reach it.
+- **apt keyrings kept current and checked** ([#14](https://github.com/Arthur-K-99/dotfiles/pull/14)). [#13](https://github.com/Arthur-K-99/dotfiles/pull/13) pinned the repository keys but fetched one only while a package of its repository was missing, so a keyring a machine got before the pins was never checked, and an expiry the project extends would never reach it.
   - **A shared table.** The repositories, their key URLs, pins and sources lines live in `scripts/lib/apt_repositories.sh`, which the package stage, the bootstrap and the doctor all read.
   - **The update fetches the keys again.** The fetch runs before the package stage's `apt-get update`, for each repository whose sources list the bootstrap wrote. A key that no longer matches its pin stops the update. A key that cannot be downloaded (an outage, a proxy) leaves the keyring as it is, with a warning, since the keyring is still what it was and the doctor checks it. Otherwise:
     - **The keyring holds the pinned key:** the download is merged into it with gpg (both imported into a throwaway home, then exported with default options), so an extended key keeps its old self-signature beside the new one. When the merge adds nothing, the keyring is left alone.
