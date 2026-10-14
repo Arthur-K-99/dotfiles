@@ -343,7 +343,12 @@ try {
     Invoke-Test 'Font failures and missing executable discovery cannot report success' {
         function Test-DotfilesNerdFont { $false }
         function Get-DotfilesCommandPath { param($Name) 'mock-oh-my-posh' }
-        function Invoke-DotfilesNativeCommand { param($Command, $Arguments) 1 }
+        # A font name would make oh-my-posh ask GitHub's API without a token; the release URL does not.
+        function Invoke-DotfilesNativeCommand {
+            param($Command, $Arguments)
+            Assert-True (($Arguments -join ' ') -eq 'font install https://github.com/ryanoasis/nerd-fonts/releases/latest/download/CascadiaCode.zip') "The font comes from the Nerd Fonts release URL: $Arguments"
+            1
+        }
         Assert-Throws { Invoke-DotfilesFontInstall } 'Font installation failed.*exit code 1'
         function Invoke-DotfilesNativeCommand { param($Command, $Arguments) 0 }
         Assert-Throws { Invoke-DotfilesFontInstall } 'was not found after installation'

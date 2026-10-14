@@ -260,12 +260,18 @@ function Test-DotfilesNerdFont {
     return $false
 }
 
+# Given a font name, oh-my-posh looks the Nerd Fonts release up through
+# GitHub's API, which ignores GITHUB_TOKEN there and allows 60 requests an hour
+# per address, so shared addresses get refused. The release's download URL
+# names the same archive without an API request.
+$script:DotfilesNerdFontUrl = 'https://github.com/ryanoasis/nerd-fonts/releases/latest/download/CascadiaCode.zip'
+
 function Invoke-DotfilesFontInstall {
     if (Test-DotfilesNerdFont) { Write-Host '  already installed: CaskaydiaCove Nerd Font'; return }
     $promptCommand = Get-DotfilesCommandPath 'oh-my-posh'
     if (-not $promptCommand) { throw 'oh-my-posh is unavailable after package installation. Reopen PowerShell and rerun install.ps1 to install the font.' }
     Write-Host 'Installing CaskaydiaCove Nerd Font...'
-    $code = Invoke-DotfilesNativeCommand $promptCommand @('font', 'install', 'CascadiaCode')
+    $code = Invoke-DotfilesNativeCommand $promptCommand @('font', 'install', $script:DotfilesNerdFontUrl)
     if ($code -ne 0) { throw "Font installation failed (exit code $code). Rerun install.ps1 to retry." }
     if (-not (Test-DotfilesNerdFont)) { throw 'CaskaydiaCove Nerd Font was not found after installation. Rerun install.ps1 to retry.' }
 }
