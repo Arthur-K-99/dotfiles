@@ -14,7 +14,7 @@ Whatever a change uncovers and leaves open is written down here in the same pull
 | 4 | tmux plugin suite, theme switcher, fastfetch | Done ([#6](https://github.com/Arthur-K-99/dotfiles/pull/6)) |
 | 5 | Neovim | Done ([#7](https://github.com/Arthur-K-99/dotfiles/pull/7)) |
 
-Version 1.0.0 (tag `v1.0.0`) was released on 2026-10-14 from `16ab053`, the merge of [#20](https://github.com/Arthur-K-99/dotfiles/pull/20): [release notes](https://github.com/Arthur-K-99/dotfiles/releases/tag/v1.0.0).
+Version 1.0.0 (tag `v1.0.0`) was released on 2026-10-14 from `16ab053`, the merge of [#20](https://github.com/Arthur-K-99/dotfiles/pull/20): [release notes](https://github.com/Arthur-K-99/dotfiles/releases/tag/v1.0.0). Recorded here, with the Windows font failure seen before the tag, in [#21](https://github.com/Arthur-K-99/dotfiles/pull/21).
 
 ## Adding a tool: the checklist
 
