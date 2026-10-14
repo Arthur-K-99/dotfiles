@@ -6,3 +6,8 @@
 # (https://mise.jdx.dev/lang/node.html).
 [tools]
 node = "lts"
+
+# A project's .nvmrc or .node-version chooses its Node.js, as with nvm; mise
+# reads them only for the tools named here, and names none by default.
+[settings]
+idiomatic_version_file_enable_tools = ["node"]

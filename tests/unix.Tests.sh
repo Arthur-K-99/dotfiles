@@ -65,6 +65,48 @@ test_link_fresh_and_repeat() {
     assert_equal 0 "$(find "$test_dir" -name '*.bak.*' | wc -l | tr -d ' ')"
 }
 
+# The whole link stage on a home that already has a shell setup: the user's
+# ~/.zshrc is backed up with a pointer to ~/.zshrc.local, and a ~/.tmux.conf
+# of their own is moved aside, since tmux would load it as well and the
+# doctor would fail; a rerun moves nothing. LINK_BACKUP names each backup.
+test_link_main_moves_old_files_aside() {
+    source "$TEST_REPO_DIR/scripts/link_dotfiles.sh"
+    local home="$test_dir/home" backup
+    mkdir -p "$home"
+    printf 'my zshrc\n' > "$home/.zshrc"
+    printf 'set -g mouse on\n' > "$home/.tmux.conf"
+    HOME="$home" main > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" "move what you still need into ~/.zshrc.local"
+    assert_contains "$(cat "$test_dir/output")" "(tmux would load it as well as ~/.config/tmux/tmux.conf)"
+    [ ! -e "$home/.tmux.conf" ]
+    backup="$(find "$home" -maxdepth 1 -name '.tmux.conf.bak.*')"
+    assert_equal 'set -g mouse on' "$(cat "$backup")"
+    backup="$(find "$home" -maxdepth 1 -name '.zshrc.bak.*')"
+    assert_equal 'my zshrc' "$(cat "$backup")"
+    assert_equal "$TEST_REPO_DIR/home/.zshrc" "$(readlink "$home/.zshrc")"
+    HOME="$home" main > "$test_dir/output"
+    case "$(cat "$test_dir/output")" in
+        *'backing up'*|*'zshrc.local'*) echo "A rerun moved files again." >&2; cat "$test_dir/output" >&2; return 1 ;;
+    esac
+    assert_equal 2 "$(find "$home" -maxdepth 1 -name '*.bak.*' | wc -l | tr -d ' ')"
+    # move_aside leaves nothing to move alone and moves directories and links too.
+    move_aside "$home/absent" test > "$test_dir/output"
+    assert_equal '' "$(cat "$test_dir/output")"
+    mkdir "$home/dir"
+    ln -s "$home/nowhere" "$home/dangling"
+    move_aside "$home/dir" test > /dev/null
+    move_aside "$home/dangling" test > /dev/null
+    [ ! -e "$home/dir" ]
+    [ ! -L "$home/dangling" ]
+    assert_equal 1 "$(find "$home" -maxdepth 1 -name 'dir.bak.*' -type d | wc -l | tr -d ' ')"
+    printf 'managed\n' > "$test_dir/source"
+    link "$test_dir/source" "$test_dir/fresh" > /dev/null
+    assert_equal '' "$LINK_BACKUP"
+    printf 'old\n' > "$test_dir/replaced"
+    link "$test_dir/source" "$test_dir/replaced" > /dev/null
+    assert_equal old "$(cat "$LINK_BACKUP")"
+}
+
 test_gitconfig_guard_creates_once() {
     source "$TEST_REPO_DIR/scripts/link_dotfiles.sh"
     ensure_gitconfig "$test_dir/.gitconfig"
@@ -549,8 +591,10 @@ test_install_stages_and_failure_reporting() {
         esac
     done
     failed_stage=''
-    install_main > "$test_dir/output" 2>&1
+    SHELL=/bin/bash install_main > "$test_dir/output" 2>&1
     assert_contains "$(cat "$test_dir/output")" 'All setup checks passed.'
+    assert_contains "$(cat "$test_dir/output")" 'Make zsh your login shell'
+    assert_contains "$(cat "$test_dir/output")" '  chsh -s '
     # A minimum release age the bootstrap could not read stops every stage.
     : > "$test_dir/stages"
     status=0
@@ -3933,6 +3977,7 @@ run_tests() {
     local tests=(
         syntax_every_file
         link_fresh_and_repeat
+        link_main_moves_old_files_aside
         gitconfig_guard_creates_once
         link_backups_and_collisions
         link_broken_wrong_and_relocated

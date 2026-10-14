@@ -44,7 +44,11 @@ install_main() {
     echo "$finished"
     case "${SHELL:-}" in
         */zsh) echo "Open a new zsh session to apply changes." ;;
-        *) echo "Your default shell is not zsh. Run 'zsh' to use this configuration." ;;
+        *)
+            # Terminals, tmux panes and Ghostty start the login shell.
+            echo "Your login shell is ${SHELL:-not set}, so new terminals and tmux panes start without this configuration. Make zsh your login shell, then log out and back in:"
+            echo "  chsh -s $(command -v zsh || echo /bin/zsh)"
+            ;;
     esac
 }
 
