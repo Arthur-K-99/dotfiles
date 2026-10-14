@@ -223,6 +223,7 @@ try {
     Invoke-Test 'Package installation uses corrected IDs and refreshes discovery before fonts' {
         $events = [Collections.Generic.List[string]]::new()
         function Get-DotfilesCommandPath { param($Name) $Name }
+        function Get-DotfilesWingetListedVersions { param($WingetCommand, $Package) }
         function Invoke-DotfilesNativeCommand {
             param($Command, $Arguments, [switch]$Quiet)
             $events.Add(($Arguments -join ' '))
@@ -239,6 +240,7 @@ try {
     Invoke-Test 'WinGet failures stop before font setup' {
         function Get-DotfilesCommandPath { param($Name) $Name }
         function Invoke-DotfilesFontInstall { throw 'Unexpected font installation' }
+        function Get-DotfilesWingetListedVersions { param($WingetCommand, $Package) }
         function Invoke-DotfilesNativeCommand { param($Command, $Arguments, [switch]$Quiet) 5 }
         Assert-Throws { Invoke-DotfilesPackageInstall $repository } 'could not check.*exit code 5'
         function Invoke-DotfilesNativeCommand {
@@ -246,6 +248,26 @@ try {
             if ($Arguments[0] -eq 'list') { return -1978335212 }; return 7
         }
         Assert-Throws { Invoke-DotfilesPackageInstall $repository } 'failed to install.*exit code 7'
+    }
+
+    Invoke-Test 'An install that needs a restart to finish counts as installed, as an upgrade does' {
+        $report = [Collections.Generic.List[string]]::new()
+        $calls = [Collections.Generic.List[string]]::new()
+        function Get-DotfilesCommandPath { param($Name) $Name }
+        function Get-DotfilesWingetListedVersions { param($WingetCommand, $Package) }
+        function Update-DotfilesProcessPath { }
+        function Invoke-DotfilesFontInstall { $calls.Add('font') }
+        function Write-Host { param($Object) $report.Add([string]$Object) }
+        function Invoke-DotfilesNativeCommand {
+            param($Command, $Arguments, [switch]$Quiet)
+            if ($Arguments[0] -eq 'list') { return $WingetNoApplicationsFound }
+            $calls.Add("install $($Arguments[2])")
+            if ($Arguments[2] -eq 'Git.Git') { return $WingetRebootRequiredToFinish }
+            return 0
+        }
+        Invoke-DotfilesPackageInstall $repository
+        Assert-True ($report -contains '  installed: Git.Git (restart Windows to finish)') "The restart is reported: $($report -join ' | ')"
+        Assert-True ($calls[-1] -eq 'font' -and $calls.Count -gt 2) 'The remaining packages and the font follow'
     }
 
     Invoke-Test 'Updating upgrades installed winget packages and leaves pinned, unknown and running ones alone' {
@@ -260,6 +282,7 @@ try {
         $report = [Collections.Generic.List[string]]::new()
         function Get-DotfilesCommandPath { param($Name) $Name }
         function Get-DotfilesRunningHostPackages { 'Microsoft.WindowsTerminal' }
+        function Get-DotfilesWingetListedVersions { param($WingetCommand, $Package) }
         function Test-DotfilesWingetPinned { param($WingetCommand, $Package) $Package -eq 'Test.Pinned' }
         function Update-DotfilesProcessPath { }
         function Invoke-DotfilesFontInstall { $calls.Add('font') }
@@ -311,6 +334,96 @@ try {
         Assert-True (-not (Test-DotfilesWingetPinned 'Invoke-Fake-Winget' 'Microsoft.PowerShell')) 'No pins means not pinned'
     }
 
+    Invoke-Test 'A package winget finds only without --exact counts as installed, and the update installs a newer one again' {
+        $fixture = New-Fixture
+        New-Item -ItemType Directory -Path (Join-Path $fixture.Directory 'packages') | Out-Null
+        [IO.File]::WriteAllLines((Join-Path $fixture.Directory 'packages/winget.txt'), [string[]]@('Test.Portable', 'Test.Missing'))
+        # Like rsteube.Carapace on winget 1.11: listed without --exact only, and unknown to winget upgrade.
+        $state = @{ Listed = @('1.0.6', '1.8.0', 'winget'); InstallCode = 0; Calls = [Collections.Generic.List[string]]::new() }
+        $report = [Collections.Generic.List[string]]::new()
+        function Get-DotfilesCommandPath { param($Name) $Name }
+        function Get-DotfilesRunningHostPackages { }
+        function Test-DotfilesWingetPinned { param($WingetCommand, $Package) $false }
+        function Update-DotfilesProcessPath { }
+        function Invoke-DotfilesFontInstall { }
+        function Write-Host { param($Object) $report.Add([string]$Object) }
+        function Get-DotfilesWingetListedVersions { param($WingetCommand, $Package) if ($Package -eq 'Test.Portable') { $state.Listed } }
+        function Invoke-DotfilesNativeCommand {
+            param($Command, $Arguments, [switch]$Quiet)
+            $state.Calls.Add("$($Arguments[0]) $($Arguments[2])")
+            if ($Arguments[0] -in @('list', 'upgrade')) { return $WingetNoApplicationsFound }
+            Assert-True ($Arguments -contains '--exact') 'The install names the exact package'
+            if ($Arguments[2] -ne 'Test.Portable') { return 0 }
+            return $state.InstallCode
+        }
+        Invoke-DotfilesPackageInstall $fixture.Directory
+        Assert-True ($report -contains '  already installed: Test.Portable') "The listing counts as installed: $($report -join ' | ')"
+        Assert-True (($state.Calls -join ',') -eq 'list Test.Portable,list Test.Missing,install Test.Missing') "Only the missing package is installed: $($state.Calls -join ',')"
+        $state.Calls.Clear(); $report.Clear()
+        Invoke-DotfilesPackageInstall $fixture.Directory -Update
+        Assert-True ($report -contains '  upgraded: Test.Portable (installed again: winget upgrade cannot find it)') "A newer version is installed again: $($report -join ' | ')"
+        Assert-True (($state.Calls -join ',') -match '^list Test\.Portable,upgrade Test\.Portable,install Test\.Portable,') "The install follows the failed upgrade: $($state.Calls -join ',')"
+        $state.Listed = @('1.8.0', 'winget')
+        $state.Calls.Clear(); $report.Clear()
+        Invoke-DotfilesPackageInstall $fixture.Directory -Update
+        Assert-True (($report -contains '  up to date: Test.Portable') -and -not ($state.Calls -contains 'install Test.Portable')) "Without a newer version nothing is installed: $($report -join ' | ')"
+        $state.Listed = @('1.0.6', '1.8.0', 'winget')
+        # The install's exit codes mean what an upgrade's do.
+        foreach ($case in @(
+                @($WingetUpdateNotApplicable, '  up to date: Test.Portable'),
+                @($WingetRebootRequiredToFinish, '  upgraded: Test.Portable (installed again: winget upgrade cannot find it; restart Windows to finish)'),
+                @($WingetPackageIsPinned, '  pinned, left alone: Test.Portable (winget pin remove --id Test.Portable to upgrade it)'))) {
+            $state.InstallCode = $case[0]
+            $report.Clear()
+            Invoke-DotfilesPackageInstall $fixture.Directory -Update
+            Assert-True ($report -contains $case[1]) "Install code $($case[0]) reports '$($case[1])': $($report -join ' | ')"
+        }
+        $state.InstallCode = 9
+        Assert-Throws { Invoke-DotfilesPackageInstall $fixture.Directory -Update } 'failed to install the newer Test\.Portable \(exit code 9\)\. Rerun scripts\\update\.ps1'
+    }
+
+    Invoke-Test 'The Windows fresh install refuses a machine that is not disposable' {
+        $script = Join-Path $repository 'tests/fresh_install.ps1'
+        $shell = (Get-Process -Id $PID).Path
+        $logDirectory = Join-Path (New-Fixture).Directory 'logs'
+        $savedActions = $env:GITHUB_ACTIONS
+        $savedPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $env:GITHUB_ACTIONS = $null
+            $output = @(& $shell -NoLogo -NoProfile -NonInteractive -File $script -Stage Collect -LogDirectory $logDirectory 2>&1 | ForEach-Object { [string]$_ })
+            $code = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $savedPreference
+            $env:GITHUB_ACTIONS = $savedActions
+        }
+        Assert-True ($code -ne 0) "Outside GitHub Actions and without -Disposable it must stop: $($output -join ' ')"
+        Assert-True (($output -join ' ') -match 'with -Disposable') "It says how to run it: $($output -join ' ')"
+    }
+
+    Invoke-Test 'The listing without --exact is read from the row that names the package id' {
+        $listState = @{ Lines = @(); Arguments = $null }
+        function Invoke-Fake-Winget { $listState.Arguments = $args -join ' '; $listState.Lines }
+        # winget draws a spinner before the table, separated by carriage returns.
+        $listState.Lines = @("   - `r   \ `rName     Id               Version Available Source", '-----------------------------------------------------', 'Carapace rsteube.Carapace 1.0.6   1.8.0     winget')
+        $versions = @(Get-DotfilesWingetListedVersions 'Invoke-Fake-Winget' 'rsteube.Carapace')
+        Assert-True (($versions -join ' ') -eq '1.0.6 1.8.0 winget') "The row's installed and available versions and source are read: $versions"
+        Assert-True ($listState.Arguments -eq 'list --id rsteube.Carapace --accept-source-agreements') "winget lists the id without --exact: $($listState.Arguments)"
+        $listState.Lines = @("`r-`rsd - search & displace chmln.sd 1.1.0 winget")
+        Assert-True ((@(Get-DotfilesWingetListedVersions 'Invoke-Fake-Winget' 'chmln.sd') -join ' ') -eq '1.1.0 winget') 'A name with spaces and a spinner before the row do not matter'
+        $listState.Lines = @('chmln.sd chmln.sd 1.1.0 winget')
+        Assert-True ((@(Get-DotfilesWingetListedVersions 'Invoke-Fake-Winget' 'chmln.sd') -join ' ') -eq '1.1.0 winget') 'A name that is the id too is not read as a version'
+        $listState.Lines = @('Carapace Bin rsteube.CarapaceBin 2.0.0 winget')
+        Assert-True ($null -eq (Get-DotfilesWingetListedVersions 'Invoke-Fake-Winget' 'rsteube.Carapace')) 'A longer id does not match a shorter one'
+        $listState.Lines = @('No installed package found matching input criteria.')
+        Assert-True ($null -eq (Get-DotfilesWingetListedVersions 'Invoke-Fake-Winget' 'rsteube.Carapace')) 'Nothing listed returns nothing'
+        # A newer version needs an installed and an available version that differ.
+        Assert-True (Test-DotfilesWingetNewerListed @('1.0.6', '1.8.0', 'winget')) 'An available version is newer'
+        foreach ($words in @(@('1.8.0', 'winget'), @('1.1.0', '1.1.0', 'winget'), @('<', '3.12.0', 'winget'), @('Unknown', '0.25.0', 'winget'), @())) {
+            Assert-True (-not (Test-DotfilesWingetNewerListed $words)) "No newer version in: $($words -join ' ')"
+        }
+    }
+
     Invoke-Test 'The update leaves PowerShell 7 and Windows Terminal to another shell only while they run it' {
         $savedSession = $env:WT_SESSION
         try {
@@ -343,7 +456,12 @@ try {
     Invoke-Test 'Font failures and missing executable discovery cannot report success' {
         function Test-DotfilesNerdFont { $false }
         function Get-DotfilesCommandPath { param($Name) 'mock-oh-my-posh' }
-        function Invoke-DotfilesNativeCommand { param($Command, $Arguments) 1 }
+        # A font name would make oh-my-posh ask GitHub's API without a token; the release URL does not.
+        function Invoke-DotfilesNativeCommand {
+            param($Command, $Arguments)
+            Assert-True (($Arguments -join ' ') -eq 'font install https://github.com/ryanoasis/nerd-fonts/releases/latest/download/CascadiaCode.zip') "The font comes from the Nerd Fonts release URL: $Arguments"
+            1
+        }
         Assert-Throws { Invoke-DotfilesFontInstall } 'Font installation failed.*exit code 1'
         function Invoke-DotfilesNativeCommand { param($Command, $Arguments) 0 }
         Assert-Throws { Invoke-DotfilesFontInstall } 'was not found after installation'
@@ -575,15 +693,28 @@ try {
         # probe can tell that the profile evaluated each integration with the expected command line.
         $stubBin = Join-Path $fixture.Directory 'bin'
         New-Item -ItemType Directory -Path $stubBin | Out-Null
-        $integrations = @('mise', 'carapace', 'atuin', 'direnv', 'yazi', 'fastfetch')
+        # oh-my-posh's init imports PSReadLine for the transient prompt's keys, interactive or not.
+        $promptConfig = Join-Path $fixture.Directory '.config/oh-my-posh/config.omp.json'
+        New-Item -ItemType Directory -Path (Split-Path -Parent $promptConfig) -Force | Out-Null
+        [IO.File]::WriteAllText($promptConfig, '{}')
+        $prefixes = @{ 'oh-my-posh' = 'Import-Module PSReadLine -ErrorAction SilentlyContinue; ' }
+        $integrations = @('oh-my-posh', 'mise', 'carapace', 'atuin', 'yazi', 'fastfetch')
+        # direnv's hook is several lines, which must run as such, and a hook that fails prints nothing.
+        if ($env:OS -eq 'Windows_NT') {
+            [IO.File]::WriteAllText((Join-Path $stubBin 'direnv.cmd'), "@echo off`r`nif defined DOTFILES_TEST_DIRENV_FAIL exit /b 1`r`necho `$env:DOTFILES_TEST_DIRENV_LINES = 'one'`r`necho `$env:DOTFILES_TEST_DIRENV_LINES += ' two'; `$env:DOTFILES_TEST_CALLS += 'direnv %*;'`r`nexit 0`r`n")
+        } else {
+            $stub = Join-Path $stubBin 'direnv'
+            [IO.File]::WriteAllText($stub, "#!/bin/sh`n[ -n `"`$DOTFILES_TEST_DIRENV_FAIL`" ] && exit 1`necho `"\`$env:DOTFILES_TEST_DIRENV_LINES = 'one'`"`necho `"\`$env:DOTFILES_TEST_DIRENV_LINES += ' two'; \`$env:DOTFILES_TEST_CALLS += 'direnv `$*;'`"`nexit 0`n")
+            & chmod +x $stub
+        }
         foreach ($tool in @('eza', 'bat', 'fzf') + $integrations) {
             if ($env:OS -eq 'Windows_NT') {
                 $body = "@echo off`r`n"
-                if ($tool -in $integrations) { $body += "echo `$env:DOTFILES_TEST_CALLS += '$tool %*;'`r`n" }
+                if ($tool -in $integrations) { $body += "echo $($prefixes[$tool])`$env:DOTFILES_TEST_CALLS += '$tool %*;'`r`n" }
                 [IO.File]::WriteAllText((Join-Path $stubBin "$tool.cmd"), $body + "exit 0`r`n")
             } else {
                 $body = "#!/bin/sh`n"
-                if ($tool -in $integrations) { $body += "echo `"\`$env:DOTFILES_TEST_CALLS += '$tool `$*;'`"`n" }
+                if ($tool -in $integrations) { $body += "echo `"$($prefixes[$tool])\`$env:DOTFILES_TEST_CALLS += '$tool `$*;'`"`n" }
                 $stub = Join-Path $stubBin $tool
                 [IO.File]::WriteAllText($stub, $body + "exit 0`n")
                 & chmod +x $stub
@@ -596,6 +727,8 @@ $env:PATH = $env:DOTFILES_TEST_BIN
 if ($env:DOTFILES_TEST_READLINE -eq 'yes') {
     try { Import-Module PSReadLine } catch { Write-Output 'SKIP-READLINE'; exit 0 }
 }
+if ($env:DOTFILES_TEST_UNSET_HOME) { Remove-Item Env:HOME -ErrorAction SilentlyContinue }
+$homeBefore = [Environment]::GetEnvironmentVariable('HOME')
 . $env:DOTFILES_TEST_PROFILE
 if ((Get-Alias ls).Definition -ne 'eza') { throw "ls resolves to $((Get-Alias ls).Definition), not eza" }
 if ((Get-Alias cat).Definition -ne 'bat') { throw "cat resolves to $((Get-Alias cat).Definition), not bat" }
@@ -614,8 +747,30 @@ if ($env:ProgramFiles) {
 }
 if (-not (Get-Command y -CommandType Function -ErrorAction SilentlyContinue)) { throw 'y function is missing' }
 $calls = [string]$env:DOTFILES_TEST_CALLS
-$expectedCalls = @('mise activate pwsh;', 'direnv hook pwsh;')
-if (Get-Module PSReadLine) { $expectedCalls += @('carapace _carapace;', 'atuin init powershell --disable-up-arrow;') }
+if (-not $calls.Contains('oh-my-posh init pwsh --config')) { throw "The profile did not initialise oh-my-posh. Recorded: $calls" }
+$expectedCalls = @('mise activate pwsh;')
+# direnv's hook throws below PowerShell 7.2; where it runs, direnv gets HOME and Git's bash.
+if ($PSVersionTable.PSVersion.Major -gt 7 -or ($PSVersionTable.PSVersion.Major -eq 7 -and $PSVersionTable.PSVersion.Minor -ge 2)) {
+    if ($env:DOTFILES_TEST_DIRENV_FAIL) {
+        if ($calls -match 'direnv') { throw "A failed direnv hook ran. Recorded: $calls" }
+    } else {
+        $expectedCalls += 'direnv hook pwsh;'
+        if ($env:DOTFILES_TEST_DIRENV_LINES -ne 'one two') { throw "direnv's hook lines did not run as lines: '$env:DOTFILES_TEST_DIRENV_LINES'" }
+    }
+    if ($homeBefore -and $env:HOME -ne $homeBefore) { throw "The profile changed HOME from '$homeBefore' to '$env:HOME'" }
+    # Without HOME, direnv gets the home Git for Windows would use: HOMEDRIVE and HOMEPATH when that directory exists.
+    $gitHome = $env:DOTFILES_TEST_HOME
+    if ($env:HOMEDRIVE -and $env:HOMEPATH -and (Test-Path -LiteralPath "$env:HOMEDRIVE$env:HOMEPATH")) { $gitHome = "$env:HOMEDRIVE$env:HOMEPATH" }
+    if (-not $homeBefore -and $env:HOME -ne $gitHome) { throw "HOME is '$env:HOME', expected '$gitHome' for direnv" }
+    if ($env:ProgramFiles) {
+        $gitBash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'
+        if ((Test-Path -LiteralPath $gitBash) -and $env:DIRENV_BASH -ne $gitBash) { throw "DIRENV_BASH is '$env:DIRENV_BASH', expected '$gitBash'" }
+    }
+} elseif ($calls -match 'direnv') { throw "direnv's hook must not run in PowerShell $($PSVersionTable.PSVersion). Recorded: $calls" }
+# The PSReadLine block follows the host's PSReadLine, not the one oh-my-posh's init imported:
+# CompletionPredictor would deadlock PowerShell 7 at the end of a non-interactive command.
+if ($env:DOTFILES_TEST_READLINE -eq 'yes') { $expectedCalls += @('carapace _carapace;', 'atuin init powershell --disable-up-arrow;') }
+elseif ($calls -match 'carapace|atuin') { throw "The PSReadLine block ran in a shell whose host had not loaded PSReadLine. Recorded: $calls" }
 foreach ($call in $expectedCalls) {
     if (-not $calls.Contains($call)) { throw "The profile did not evaluate '$call'. Recorded: $calls" }
 }
@@ -641,6 +796,10 @@ if ($env:DOTFILES_TEST_EXPECTED_FZF) {
 }
 if ($env:DOTFILES_TEST_READLINE -eq 'yes') {
     if ((Get-PSReadLineOption).BellStyle -ne 'None') { throw 'PSReadLine options were not applied' }
+    # Imported during startup, CompletionPredictor deadlocks `pwsh -NoExit -Command`; it waits for the first idle prompt.
+    if (Get-Module CompletionPredictor) { throw 'CompletionPredictor was imported while the profile loaded' }
+    if ((Get-Command Set-PSReadLineOption).Parameters.ContainsKey('PredictionViewStyle') -and
+        -not (Get-EventSubscriber | Where-Object { $_.SourceIdentifier -eq 'PowerShell.OnIdle' })) { throw 'CompletionPredictor is not left to the first idle prompt' }
     # PSReadLine 2.0 (Windows PowerShell) has no -Key parameter; filter the full list instead.
     if (-not (Get-PSReadLineKeyHandler | Where-Object { $_.Key -eq 'Tab' -and $_.Function -eq 'MenuComplete' })) { throw 'Tab is not bound to MenuComplete' }
 }
@@ -680,6 +839,33 @@ exit 0
                 if ($output -contains 'SKIP-READLINE') { Write-Host 'SKIP: PSReadLine cannot be imported in this non-interactive host; the bare profile load passed.' }
                 elseif ($readLine -eq 'no') { Assert-True (-not ($output -join "`n" -match '\S')) "Profile wrote unexpected output: $($output -join "`n")" }
             }
+            # Without HOME, the profile sets it by Git for Windows' rule: HOMEDRIVE and HOMEPATH
+            # when that directory exists, else the home directory.
+            $savedDrive = $env:HOMEDRIVE
+            $savedPath = $env:HOMEPATH
+            $env:DOTFILES_TEST_UNSET_HOME = '1'
+            try {
+                $env:DOTFILES_TEST_READLINE = 'no'
+                $env:HOMEDRIVE = $null
+                $env:HOMEPATH = $null
+                $probeResult = Invoke-ProfileProbe
+                Assert-True ($probeResult.ExitCode -eq 0) "Without HOME or HOMEDRIVE: $($probeResult.Lines -join "`n")"
+                New-Item -ItemType Directory -Path (Join-Path $fixture.Directory 'share') | Out-Null
+                $env:HOMEDRIVE = $fixture.Directory
+                $env:HOMEPATH = [IO.Path]::DirectorySeparatorChar + 'share'
+                $probeResult = Invoke-ProfileProbe
+                Assert-True ($probeResult.ExitCode -eq 0) "Without HOME, with HOMEDRIVE and HOMEPATH: $($probeResult.Lines -join "`n")"
+            } finally {
+                $env:DOTFILES_TEST_UNSET_HOME = $null
+                $env:HOMEDRIVE = $savedDrive
+                $env:HOMEPATH = $savedPath
+            }
+            # A direnv whose hook fails (no bash, say) is skipped without a word.
+            $env:DOTFILES_TEST_READLINE = 'no'
+            $env:DOTFILES_TEST_DIRENV_FAIL = '1'
+            $probeResult = Invoke-ProfileProbe
+            $env:DOTFILES_TEST_DIRENV_FAIL = $null
+            Assert-True ($probeResult.ExitCode -eq 0 -and -not ($probeResult.Lines -join "`n" -match '\S')) "A failing direnv hook must stay quiet: $($probeResult.Lines -join "`n")"
             # The local profile runs last so it can override anything above it.
             [IO.File]::WriteAllText((Join-Path $fixture.Directory '.powershell.local.ps1'), '$env:FZF_DEFAULT_OPTS = "local override"')
             $env:DOTFILES_TEST_READLINE = 'no'
@@ -687,7 +873,7 @@ exit 0
             $probeResult = Invoke-ProfileProbe
             Assert-True ($probeResult.ExitCode -eq 0) "Local override failed: $($probeResult.Lines -join "`n")"
         } finally {
-            foreach ($name in @('DOTFILES_TEST_HOME', 'DOTFILES_TEST_PROFILE', 'DOTFILES_TEST_BIN', 'DOTFILES_TEST_READLINE', 'DOTFILES_TEST_EXPECTED_FZF', 'DOTFILES_TEST_EXPECTED_BG')) {
+            foreach ($name in @('DOTFILES_TEST_HOME', 'DOTFILES_TEST_PROFILE', 'DOTFILES_TEST_BIN', 'DOTFILES_TEST_READLINE', 'DOTFILES_TEST_EXPECTED_FZF', 'DOTFILES_TEST_EXPECTED_BG', 'DOTFILES_TEST_DIRENV_FAIL')) {
                 [Environment]::SetEnvironmentVariable($name, $null)
             }
         }

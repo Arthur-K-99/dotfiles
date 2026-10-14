@@ -1,0 +1,80 @@
+name: Fresh install (Windows)
+
+# Installs on a clean Windows runner with real downloads: install.ps1 from
+# Windows PowerShell, a rerun, scripts/update.ps1 from PowerShell 7, the
+# doctor, then both PowerShell editions and Neovim start with the managed
+# configuration. The Windows checks in test.yml mock winget and every
+# download, so only this catches upstream changes: a package that moved to
+# another installer type, an exit code winget had not returned before, a
+# module the PowerShell Gallery dropped. tests/fresh_install.ps1 holds the
+# logic; each of its stages is a step here. It runs on pull requests that can
+# change the Windows install, every week for upstream drift, and on demand.
+on:
+  pull_request:
+    paths:
+      - '**/*.ps1'
+      - 'packages/winget.txt'
+      - 'config/**'
+      - '.github/workflows/fresh-install-windows.yml'
+  schedule:
+    - cron: '43 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to a pull request supersedes the runs of the previous one.
+concurrency:
+  group: fresh-install-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows Server 2025
+    # Windows Server 2025 ships winget; the 2022 image does not.
+    runs-on: windows-2025
+    # Above the steps' own limits together (the passing run took 17 minutes),
+    # so a step that hangs still leaves time to collect and upload the logs.
+    timeout-minutes: 100
+    env:
+      # mise and Mason read GitHub's API, which allows 60 requests an hour per
+      # address without a token, and hosted runners share addresses.
+      GITHUB_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        # Without -NoProfile every step would load the profile the install
+        # puts in place; the stages start their own shells instead.
+        shell: powershell -NoLogo -NoProfile -NonInteractive -Command ". '{0}'"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Record the runner, install older packages and placeholder profiles
+        timeout-minutes: 10
+        run: ./tests/fresh_install.ps1 -Stage Prepare
+      - name: Install from Windows PowerShell
+        timeout-minutes: 30
+        run: ./tests/fresh_install.ps1 -Stage Install
+      - name: Rerun the installer from a shell with the profile
+        timeout-minutes: 10
+        run: ./tests/fresh_install.ps1 -Stage Rerun
+      - name: Pin sd and update from PowerShell 7
+        timeout-minutes: 20
+        run: ./tests/fresh_install.ps1 -Stage Update
+      - name: Run the doctor in new shells
+        timeout-minutes: 5
+        run: ./tests/fresh_install.ps1 -Stage Doctor
+      - name: Start both PowerShell editions and Neovim
+        timeout-minutes: 10
+        run: ./tests/fresh_install.ps1 -Stage Shells
+      - name: Collect winget's and Neovim's logs
+        if: always()
+        timeout-minutes: 5
+        run: ./tests/fresh_install.ps1 -Stage Collect
+      - name: Upload the transcripts and logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fresh-install-windows
+          path: ${{ runner.temp }}/fresh-install
+          if-no-files-found: ignore

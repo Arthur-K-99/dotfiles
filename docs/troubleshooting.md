@@ -19,7 +19,7 @@ None of these is a failure.
   - `<project> <tag> is newer than its latest release, <tag>; keeping it.` The project deleted or unmarked its newest release.
   - mise's own `Selected mise <version> (minimum release age: 86400s)` during the update.
   - On Debian 12: `tree-sitter <tag> needs glibc 2.39 and this system has 2.36; Neovim will skip compiling parsers …`, and on later runs `tree-sitter <tag> does not run on glibc 2.36; Neovim keeps skipping the parsers`.
-- **The update's "left alone" lines** ([updating](updating.md#what-it-leaves-alone)): `… not installed by the bootstrap; left alone`, `pinned, left alone: …`, `held, left alone: …`, and on every update `tmux plugin catppuccin/tmux is pinned to v2.3.1; left alone`. On Windows, `left alone: Microsoft.PowerShell runs this update (from another shell: …)`.
+- **The update's "left alone" lines** ([updating](updating.md#what-it-leaves-alone)): `… not installed by the bootstrap; left alone`, `pinned, left alone: …`, `held, left alone: …`, and on every update `tmux plugin catppuccin/tmux is pinned to v2.3.1; left alone`. On Windows, `left alone: Microsoft.PowerShell runs this update (from another shell: …)`, `upgraded: <id> (installed again: winget upgrade cannot find it)` for Carapace on winget 1.11, and `installed: <id> (restart Windows to finish)` or `upgraded: <id> (restart Windows to finish)`, after which the doctor tells whether the package already works.
 - **apt repository keys:**
   - `Could not fetch the <name> repository's key from …; its keyring stays as it is.` during an update: the download failed and the doctor checks the existing keyring.
   - `[ok] charm apt repository key (expires on <date>; scripts/update.sh fetches it again)` within 30 days of the expiry.
@@ -46,6 +46,7 @@ None of these is a failure.
 - **tmux shows "TPM is missing":** run `bash scripts/bootstrap_tools.sh` from `~/dotfiles`.
 - **"Could not initialize the tool environment. Check Homebrew":** `brew shellenv` failed; check that Homebrew runs, then rerun.
 - **Neovim is older than 0.12 on macOS:** `brew upgrade neovim`, then rerun.
+- **An old oh-my-posh stays on macOS:** the update says `oh-my-posh not installed by the bootstrap; left alone` and `oh-my-posh version` prints an old release. A copy from Homebrew's former `jandedobbeleer/oh-my-posh` tap, which Homebrew 7 refuses to load, still sits in `/opt/homebrew/bin`. Remove that file, then `brew uninstall oh-my-posh`, `brew untap jandedobbeleer/oh-my-posh`, and rerun `scripts/bootstrap_tools.sh`, which installs the current release into `~/.local/bin`.
 - **git ignores a shared setting:** `~/.gitconfig` is read after `~/.config/git/config`, so an old setting there wins, such as a `core.pager` that hides delta.
 
 ## Undo an install

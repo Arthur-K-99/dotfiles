@@ -7,7 +7,7 @@ Where it has been tried:
 - **Debian 12 and 13, Ubuntu 24.04 and 26.04:** fresh installs in containers, on x86_64 (CI, every week) and arm64 (on a Mac).
 - **macOS:** my Mac and CI's macOS runner.
 - **WSL:** the Linux install inside a Debian or Ubuntu distribution; what differs there (the font, the clipboard) is covered by the mocked tests only.
-- **Native Windows:** CI runs the mocked installer tests under Windows PowerShell 5.1 and PowerShell 7; `install.ps1` has not been run on a clean machine yet.
+- **Native Windows:** `install.ps1`, a rerun and the update on a clean Windows Server 2025 machine in CI (every week), plus the mocked installer tests under Windows PowerShell 5.1 and PowerShell 7; not yet on a desktop Windows 11.
 
 ## Try it first
 
@@ -100,7 +100,7 @@ The update does not pull the repository, so `git pull` first. It runs the instal
 | eza | Yes | Yes |
 | bat, fzf, zoxide, btop | Yes | Yes |
 | fastfetch greeter in Catppuccin colors | Yes | Yes |
-| carapace completion, atuin history, direnv | Yes | Yes |
+| carapace completion, atuin history, direnv | Yes | Yes (direnv in PowerShell 7.2+) |
 | mise + Node.js LTS | Yes | Yes |
 | git configuration with delta, lazygit, lazydocker | Yes | Yes |
 | yazi with Catppuccin flavors | Yes | Yes |
