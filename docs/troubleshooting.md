@@ -37,6 +37,7 @@ None of these is a failure.
 - **"running scripts is disabled on this system":** run `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser` once.
 - **"winget is required":** install App Installer from the Microsoft Store; Windows Sandbox has no winget.
 - **"… is unavailable after package installation. Reopen PowerShell and rerun install.ps1":** the running shell does not see what winget just installed; open a new one and rerun.
+- **"Program 'oh-my-posh.exe' failed to run: The file cannot be accessed by the system":** winget's oh-my-posh, an MSIX package, could not be started at the font step. It happened once in 13 CI installs, and the next attempt, on a new machine, passed; whether a rerun on the same machine clears it is untested. Open a new PowerShell and rerun `install.ps1`. If oh-my-posh still will not start, the prompt will not either ([roadmap](roadmap.md), [oh-my-posh#7833](https://github.com/JanDeDobbeleer/oh-my-posh/issues/7833)).
 - **"Without a token GitHub answers 60 requests an hour per address":** wait an hour, or set `GITHUB_TOKEN` and rerun ([downloads](downloads.md#the-github-api-limit)).
 - **"No release of … among the 30 most recent is older than 1d":** a tool that is not installed yet has no release old enough, or the clock is behind (the message then says so). Fix the clock, or rerun with `DOTFILES_MINIMUM_RELEASE_AGE=0`.
 - **Something of yours is in the way:** `~/.local/bin/nvim exists and is not a link` or `~/.local/share/fonts/CaskaydiaCove exists and the bootstrap did not install it`. Move it away and rerun.
