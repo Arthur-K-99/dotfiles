@@ -126,7 +126,7 @@ Not tied to a phase; pick up when convenient.
 
 Done:
 
-- **A quiet first run** (PR link to follow). On 2026-10-14 (`tests/fresh_install.sh`, arm64), install, rerun and update printed 2,548 lines on Debian 13. One read as an error (Neovim's), and 40% of its 910 KB was git's progress meter. After the changes below, Debian 12 printed 1,731 lines (2,561 before) and Ubuntu 24.04 1,784 (2,592 before):
+- **A quiet first run** (PR link to follow). On 2026-10-14 (`tests/fresh_install.sh`, arm64), install, rerun and update printed 2,548 lines on Debian 13. One read as an error (Neovim's), and 40% of its 910 KB was git's progress meter. After the changes below, Debian 13 printed 1,722 lines, Debian 12 1,731 (2,561 before) and Ubuntu 24.04 1,784 (2,592 before):
   - **Neovim's first install** printed "Error in .../init.lua: Plugin catppuccin is not installed" (and mason.nvim, nvim-treesitter, nvim-lspconfig) just before cloning them:
     - **Cause:** with `install.missing` off, lazy.nvim's startup still loads every non-lazy plugin and reports each missing one with `vim.notify`, which a headless Neovim prints as an error of `init.lua`.
     - **Fix:** `lua/dotfiles/lazy.lua` drops exactly that message while one of the bootstrap's own headless runs (`require("dotfiles.bootstrap")` in Neovim's arguments) starts. Those runs report missing plugins themselves; the doctor's plain headless start still shows it.
