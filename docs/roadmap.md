@@ -22,7 +22,7 @@ Every new tool touches the same places. Skipping one means `doctor` lies on the 
 2. Configuration under `config/<tool>/`, linked by `scripts/link_dotfiles.sh` and, when the tool exists on Windows, by `Get-DotfilesManagedFiles` in `scripts/lib/windows.ps1`. Destinations derive from the home directory so the tests stay isolated.
 3. A `doctor` check in `scripts/doctor.sh` (and `Invoke-DotfilesDoctor` on Windows) for the command, the link and any theme or plugin the tool needs.
 4. A test in `tests/unix.Tests.sh` for any bootstrap logic: the already-installed path, a failure, and the retry.
-5. A line in the README's "What gets installed" table and, if there is anything to know after install, an "After install" bullet.
+5. A line in the README's "What gets installed" table, its keys in the README's "Key bindings" table, and, if there is anything to know after install, a section in `docs/tools.md` (or `docs/linux.md` and `docs/windows.md` for what differs by platform). Messages it prints that read as errors belong in `docs/troubleshooting.md`.
 
 ## Phase 1: Foundations (done)
 
@@ -96,6 +96,8 @@ Not tied to a phase; pick up when convenient.
   - on Windows, the PowerShell modules from the PowerShell Gallery and the Nerd Font from `oh-my-posh font install`. `install.ps1` reads no age setting; mise there comes from winget, and only its runtime installs wait mise's own default day.
 - **Cheaper release lookups.** `github_latest_tag` follows the `releases/latest` redirect with `-L`, so it downloads each release page (200 to 235 KB, about 4 MB per install) and throws it away; `-w '%{redirect_url}'` without `-L` reads the tag from the redirect alone. And while a latest release is too young, every update run asks for it and for the list again (two requests per tool); a note of the held-back tag and its publication time under `~/.local/state/dotfiles/` would let runs skip both until it is old enough.
 - **A fresh install on Windows.** No job runs `install.ps1` or `scripts/update.ps1` on a clean machine; only the mocked suite covers them. Check winget's support on the hosted runners first. The Windows update's winget exit codes come from winget's `returnCodes.md`, and its pin check reads the row `winget pin list --id <id> --exact` prints for a pinned package; neither was seen on a machine. Leaving the PowerShell 7 and Windows Terminal that run the update alone is a precaution, not something observed: an MSIX upgrade of Windows Terminal is expected to close it, and the PowerShell MSI to meet files in use.
+  - **Links or copies** were not seen on a machine either. `docs/windows.md` says links need an elevated shell, or Developer Mode with PowerShell 7, and that Windows PowerShell 5.1, which runs the first install, checks for elevation itself (the installer already handles its `NewItemSymbolicLinkElevationRequired` error). Check both on a clean machine.
+  - **Copies never become links.** A copy that still matches counts as installed, so a rerun after turning on Developer Mode keeps it; `docs/windows.md` says to delete the copies first. The linker could replace a matching copy with a link whenever a link can be made.
 - **oh-my-posh from Homebrew on macOS.** On macOS oh-my-posh comes from its GitHub release into `~/.local/bin`, while every other macOS tool comes from Homebrew, and homebrew-core carries it (31.8.0 on 2026-10-12). Adding it to `packages/brew.txt` needs care on machines that still have the old `jandedobbeleer/oh-my-posh` tap: its formula of the same name shadows core's, and Homebrew 7 refuses to load it (see Known issues).
 - **The Nerd Font on Windows: updates and verification.** One fix covers both: fetching the font from its release the way Linux does.
   - The update keeps the Nerd Font that `oh-my-posh font install` put on Windows, since nothing records which release it was. Linux replaces the font when Nerd Fonts publishes a newer release and it is old enough, and macOS upgrades the cask when Homebrew installed it.
@@ -103,28 +105,52 @@ Not tied to a phase; pick up when convenient.
 - **The Homebrew installer.** `scripts/install_packages.sh` runs `install.sh` from `Homebrew/install` at `HEAD`, as Homebrew's instructions say; it has no checksum or signature. On Apple Silicon the signed and notarized `Homebrew.pkg` from Homebrew/brew's latest release is the verifiable alternative; that release is immutable, so `download_release_asset` would check it too. Bottles and casks themselves are checked against the SHA-256 in their formula or cask.
 - **Ownership of plain files in `~/.local/bin`.** Any plain file there with a tool's name counts as the bootstrap's, even without a release record (machines installed before records existed have none), so a binary that `cargo install --root ~/.local` or a manual copy put there is replaced by the update. Links are left alone. Refetching only recorded tools would leave older machines un-updated instead.
 - **A font opt-out for headless Linux.** Every Linux machine outside WSL now installs fontconfig and the 33 MB Mono family, including servers reached only over SSH, where the client draws the text, and the doctor fails without the font. Headless machines cannot be detected reliably, so a variable like `DOTFILES_FASTFETCH=0` is the likely shape.
-- **A shorter README.** "After install" has grown to about 30 long bullets; per-tool detail could move under `docs/`, leaving the bootstrap, the tool table and the key bindings. A first-time read (2026-10-14) found these gaps and errors; fix them in the same pass:
-  - **Before you start:** each platform's prerequisites. Linux needs git and a user with sudo, and sudo can ask again during the bootstrap. macOS needs an admin account for Homebrew's interactive installer. Windows needs a working winget; say whether to run elevated, how to get links instead of copies (Developer Mode or an elevated shell), and that copies stay stale until the next install. List the tested distributions and architectures.
-  - **After install:** `chsh` to zsh is a step on Linux and WSL, not an option. On macOS, open Ghostty rather than Terminal.app.
-  - **WSL in Windows Terminal:** the fragment cannot reach WSL profiles. The README covers the color scheme but not the font: WSL keeps Cascadia Mono until its profile (or Defaults) gets the Nerd Font, which only `install.ps1` installs on Windows.
-  - **Existing configurations:**
-    - On Windows, a `Microsoft.PowerShell_profile.ps1` still runs after the managed profile and can replace its prompt.
-    - Extra files in `%LOCALAPPDATA%\nvim` mix with the managed ones, and a `lua/plugins/*.lua` there is loaded.
-  - **Stale statements:**
-    - Ctrl+R searches history with atuin, not fzf (README's PowerShell and fzf bullets).
-    - The README's Neovim language list differs from `tools.lua`.
-    - Git on macOS is the Command Line Tools'.
-    - Ghostty's reload key is Ctrl+Shift+, on Linux.
-    - The README's profiles (`development`, `personal` and OS settings) differ from the roadmap's (`minimal`, `development`, `personal`).
-    - `docs/theming.md` points to a btop item the roadmap does not have.
-  - **Undocumented behaviour:**
-    - `cd` is zoxide; `ls`, `la`, `ll` and `tree` are eza, `cat` is bat, `vim` is nvim, `c` clears.
-    - Further keys: zsh's Ctrl+P/N, Alt+W and Ctrl+X Ctrl+E, tmux's `prefix r` and `prefix C-l`, and Ghostty's Shift+Enter.
-    - `atuin import auto` brings in existing history; `mise use -g` rewrites the tracked config file.
-  - **Messages that look like errors but are not:** collect them in a troubleshooting page. Seen so far: the doctor's `[skip]` lines (tree-sitter on Debian 12, parsers on Windows without a compiler, the font on WSL); the release age's "taking"/"keeping" notes and mise's "Selected mise"; the update's "left alone" and "pinned" lines; without a terminal, `tput: No value for $TERM` and Debian 12 fzf's `can't change option: zle`.
-  - **A "Try it" section:** a container, a VM or a second WSL distribution; how to undo (the `.bak` files, the downloaded state, the apt sources and keyrings); what to include in a report.
+- **btop in Catppuccin.** btop is installed everywhere but keeps its default colors, which `docs/theming.md` lists as not yet managed. A theme file would need linking on every platform (btop4win on Windows) and a location in `scripts/theme.sh`.
+- **Hints that work only from the repository.** Several messages name a file by its path inside the repository, so they read wrong from any other directory, such as `~`, where the README runs the doctor:
+  - the doctors' `rerun:` hints (`bash scripts/bootstrap_tools.sh`, `scripts\install_runtimes.ps1`);
+  - the skipped-parser pointer to `docs/troubleshooting.md`, which `bootstrap.lua` writes and both doctors, the install and the update print. On Windows that Lua runs from the copy in `%LOCALAPPDATA%\nvim` and cannot know where the repository is;
+  - tmux's `TPM is missing: run bash scripts/bootstrap_tools.sh`, and the Windows stages' `Rerun scripts\update.ps1` and `run scripts/doctor.ps1 again`.
+
+  The Unix doctor knows `DOTFILES_DIR` and the Windows one `-DotfilesDir`, so they could print full paths; the Lua and tmux messages could name the repository in words, as the parser pointer now does ("in the dotfiles repository"). `docs/troubleshooting.md` says to run the hints from `~/dotfiles`. The messages also mix `/` and `\` on Windows.
+- **No `EDITOR`.** zsh's `Ctrl+X Ctrl+E` opens the command line in `$EDITOR`, which nothing sets, so it falls back to `vi`, which a minimal Debian or Ubuntu lacks. `docs/tools.md` suggests `export EDITOR=nvim` in `~/.zshrc.local`; the shared configuration could set it when Neovim is installed. PowerShell also lacks zsh's `c` alias.
+- **An uninstall command.** `docs/troubleshooting.md` lists by hand what to remove: the links and their backups, the downloaded state, the apt repositories, the packages. The linker's list, the release records and the package lists hold enough for a script to do it, except telling packages the user had before.
 
 Done:
+
+- **A shorter README** ([#18](https://github.com/Arthur-K-99/dotfiles/pull/18)). The README went from 175 lines and 4,172 words to 156 and about 1,900: intro with what has been tried where, "Try it first", the install with per-platform prerequisites, first steps, the update, the tool table and one key-binding table. Everything else moved under `docs/`; only false statements were dropped:
+  - **`docs/tools.md`:** the "After install" bullets per tool (zsh, fastfetch, Ghostty, tmux, Neovim, mise, git, theme, font).
+  - **`docs/linux.md`** and **`docs/windows.md`:** what differs by platform: sudo, the release binaries, Neovim and the tree-sitter CLI, the font, vivid, the clipboard and WSL; the stages of `install.ps1`, links or copies, existing configurations, the Windows Terminal fragment, PowerShell, the C compiler.
+  - **`docs/updating.md`:** the update section, plus what a plain rerun upgrades on each platform.
+  - **`docs/downloads.md`:** "Verified downloads", the GitHub API limit and "Release age", nearly verbatim.
+  - **`docs/development.md`:** the repository checks and the fresh install.
+  - **`docs/troubleshooting.md`** (new): messages that look like errors, first-try problems, how to undo an install, and what a report needs.
+  - **Pointers:** the doctor's skipped-parser line (`bootstrap.lua`, with the test fixtures), a comment in `bootstrap.lua` and `packages/winget.txt` sent readers to the README; they now name `docs/troubleshooting.md` and `docs/windows.md`. `docs/theming.md` says the docs name no flavor, which keeps `scripts/theme.sh` from having to rewrite them.
+
+  Fixed from the first-time read (2026-10-14):
+  - **Before you start,** per platform: git and sudo on Linux (and sudo asking again), an administrator account for Homebrew, the Command Line Tools' git on macOS, winget on Windows, elevation, links or copies (Developer Mode or an elevated shell) and stale copies. The tested distributions and architectures are in the intro.
+  - **First steps:** `chsh` is a step on Linux and WSL; on macOS, open Ghostty rather than Terminal.app.
+  - **WSL in Windows Terminal:** each WSL profile needs the font as well as the scheme, and the font is on Windows only after `install.ps1` (or a manual install, which `docs/linux.md` describes).
+  - **Existing configurations:** `Microsoft.PowerShell_profile.ps1` running after the managed profile, extra files in `%LOCALAPPDATA%\nvim` (a `lua/plugins/*.lua` is loaded, an `init.vim` conflicts), and on Unix an old `~/.gitconfig` overriding the shared settings.
+  - **Stale statements:** `Ctrl+R` is atuin's in both shells (PSFzf takes it only where atuin's PowerShell integration does not load); the Neovim list now separates language servers from parsers as `tools.lua` does; git on macOS is the Command Line Tools'; Ghostty reloads with `Ctrl+Shift+,` on Linux; the README's profiles are the roadmap's; `docs/theming.md`'s btop row points to the btop to-do above.
+  - **Undocumented behaviour:** the aliases (`cd`, `ls`, `la`, `ll`, `tree`, `cat`, `vim`, `c`, and `cdi`), zsh's `Ctrl+P`/`Ctrl+N`, `Alt+W` and `Ctrl+X Ctrl+E`, tmux's `prefix r` and `prefix Ctrl+L`, Ghostty's `Shift+Enter`, `atuin import auto`, and `mise use -g` rewriting the tracked file.
+  - **Messages that look like errors** are collected in `docs/troubleshooting.md`, with the doctor's Ghostty line on Linux, the apt key notes, the token fallback and the container's `invoke-rc.d` line added.
+  - **"Try it first":** `tests/fresh_install.sh`, a container by hand, a second WSL distribution, a virtual machine; how to undo; what a report needs.
+  - **From a review of the quiet first run:** the README said a rerun only adds what is missing, which holds on macOS and Windows; on Linux `apt-get install` also upgrades the listed packages. The fresh-install description now covers the commands typed into zsh and the stage that fails on lines that read as errors (`FRESH_INSTALL_NOISE`).
+
+  **Found along the way:**
+  - **Ghostty's local file and macOS's own file:** the README said `~/Library/Application Support/com.mitchellh.ghostty/config` loads after `~/.config/ghostty/local`; see Known issues.
+  - **The interactive container:** zsh needs a UTF-8 locale for the prompt's glyphs, as `tests/fresh_install.sh` knows. `su -` reads `/etc/default/locale` through pam_env; ubuntu:24.04 ships one with `C.UTF-8` and Debian images do not, so "Try it first" writes it. debconf is set to noninteractive as in `tests/fresh_install.sh`, although no time zone question came up there: none of the packages pulls in tzdata on ubuntu:24.04 or debian:12.
+  - **tmux's local file** loads after the tracked settings but before TPM runs the plugins, not last as the README said.
+  - New to-dos above: btop, the doctor's relative hints, `EDITOR`, an uninstall command, and two Windows link questions under "A fresh install on Windows".
+  - **A review pass** (two agents) ran "Try it first" as written in an ubuntu:24.04 container (the install passed), checked every link and anchor, the key bindings against the configurations, the 28 quoted messages against the code, and that every fact of the old README survives. It found, and this PR fixes:
+    - the container and WSL steps install GitHub's `main`, not the checkout, which the README now says;
+    - in the container, `dev` has no password, so the `chsh` the installer prints fails, and `docker start -ai` returns as root: the steps run `sudo chsh` and say so;
+    - the Windows undo said to delete `%LOCALAPPDATA%\nvim` right after restoring a backup into it;
+    - the undo's `find ~ -maxdepth 3` walks into Documents and Library on macOS and triggers privacy prompts;
+    - the undo lists missed the bat theme and cache, Neovim's and mise's state and caches, zinit's cache, Mason's npm cache, `fc-cache`, and on Windows the yazi flavors, `%LOCALAPPDATA%\mise` and the font;
+    - Windows' first run is in Windows PowerShell 5.1, where Developer Mode gives no links, and the PowerShell update ran after a failed `git pull`;
+    - the Ghostty config's comment still stated the unverified load order, the font bullet overstated when the bootstrap stops, the troubleshooting page quoted the Unix backup message for Windows, and `tests/fresh_install.sh` said the README promised a rerun changes nothing;
+    - the skipped-parser pointer named a path relative to the repository (now "in the dotfiles repository"), and the PowerShell language server is installed everywhere, only started where `pwsh` exists.
 
 - **A quiet first run** ([#17](https://github.com/Arthur-K-99/dotfiles/pull/17)). On 2026-10-14 (`tests/fresh_install.sh`, arm64), install, rerun and update printed 2,548 lines on Debian 13. One read as an error (Neovim's), and 40% of its 910 KB was git's progress meter. After the changes below, Debian 13 printed 1,722 lines, Debian 12 1,731 (2,561 before) and Ubuntu 24.04 1,784 (2,592 before):
   - **Neovim's first install** printed "Error in .../init.lua: Plugin catppuccin is not installed" (and mason.nvim, nvim-treesitter, nvim-lspconfig) just before cloning them:
@@ -342,6 +368,7 @@ Observed and not fully explained, or caused upstream; kept so they are recognise
   - To fix it by hand: remove that file, `brew uninstall oh-my-posh`, `brew untap jandedobbeleer/oh-my-posh`, then rerun the bootstrap, which installs into `~/.local/bin`, where the update keeps it current.
 - **GitHub answers with HTTP 500 or 502 now and then.** On 2026-10-12, within half an hour, the yazi asset download failed with a 500 in a Debian 12 fresh install, and the zoxide `releases/latest` lookup failed with a 502 in an Ubuntu 24.04 update. Both URLs worked minutes later. The yazi asset then failed four times in a row in an Ubuntu 24.04 install with `--retry 3` (1, 2 and 4 seconds apart). Every curl call in the bootstrap now passes `--retry 5`, about 30 seconds of backoff. In the next Debian 12 run a 503 and four 502s in a row came and went without failing it. macOS's `/usr/bin/curl` 8.7.1 retries an HTTP/1.1 503 but not an HTTP/2 one: with `-f` it exits 56 at once. Linux's curl retries both, and on macOS the bootstrap downloads little.
 - **OrbStack's Docker engine hung** on this Mac (2026-10-13) during the keyring experiments: even `_ping` on its socket timed out while `orb status` said Running, with an OrbStack update pending. `orb restart docker` hung too; `orb stop` then `orb start` brought it back. If `tests/fresh_install.sh` or a container check hangs, check the socket first.
+- **Which Ghostty file wins on macOS is unchecked** (Ghostty 1.3.1). The managed config loads `~/.config/ghostty/local` through `config-file = ?local`, and macOS Ghostty also reads `~/Library/Application Support/com.mitchellh.ghostty/config`. The README said the latter loads after both. Ghostty's documentation says `config-file` includes take effect only after the entire configuration is loaded, which would make `local` win instead. An experiment with a scratch `HOME` was inconclusive, since Ghostty did not read an Application Support file from it, so `docs/tools.md` only says to keep a setting in one of the two.
 - **gpg starts an agent even for `--show-keys` and `--import`** (seen with gpg 2.2.40 and 2.4.7). The scripts stop it with `gpgconf --kill all`; in a container without an init, the stopped agents stay as zombies, which a machine's init reaps.
 
 ## Ideas parked
