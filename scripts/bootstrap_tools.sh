@@ -31,6 +31,10 @@ record_release() {
 # Updating, zinit updates itself and every plugin it has cloned. Its update
 # returns 0 when a plugin fails and only warns ("update returned <status>"),
 # so the output decides; --no-pager keeps it from waiting in less for a key.
+# A failure shows the whole output; a success only the plugins zinit names
+# as updated, since it prints each one's git log even with --quiet. zinit
+# prints a dot per plugin and a carriage return before "Updating
+# owner/plugin", and its own changelog after "[self-update]".
 bootstrap_zinit() {
     local zinit_home="${1:-${XDG_DATA_HOME:-$HOME/.local/share}/zinit/zinit.git}"
     local output status
@@ -62,13 +66,18 @@ bootstrap_zinit() {
     else
         status=$?
     fi
-    printf '%s\n' "$output"
-    [ "$status" -eq 0 ] || return "$status"
+    case "$status $output" in
+        "0 "*"update returned"*) status=1 ;;
+    esac
+    if [ "$status" -ne 0 ]; then
+        printf '%s\n' "$output"
+        echo "zinit could not update every plugin; see the warnings above." >&2
+        return "$status"
+    fi
+    printf '%s\n' "$output" | tr -d '\r' |
+        sed -n "s/$(printf '\033')\\[[0-9;]*m//g; s/^\\.*Updating \\([^/ ][^/ ]*\\/[^ ][^ ]*\\)\$/  Updating \\1/p"
     case "$output" in
-        *"update returned"*)
-            echo "zinit could not update every plugin; see the warnings above." >&2
-            return 1
-            ;;
+        *"[self-update]"*) echo "  zinit updated itself" ;;
     esac
 }
 
@@ -80,7 +89,8 @@ dotfiles_tmux_plugins() {
 
 # Updating, TPM pulls itself and every plugin except those pinned to a tag
 # (catppuccin/tmux#v2.3.1): git pull fails on their detached checkout, and the
-# tag is the point.
+# tag is the point. A failure shows TPM's whole output; a success one line,
+# since TPM prints "Already up to date" for every plugin.
 bootstrap_tmux() (
     # TPM installs plugins beside itself. With the configuration at
     # ~/.config/tmux/tmux.conf, TPM itself defaults to this directory.
@@ -125,14 +135,15 @@ bootstrap_tmux() (
     else
         status=$?
     fi
-    printf '%s\n' "$output"
-    [ "$status" -eq 0 ] || return "$status"
-    case "$output" in
-        *"update fail"*)
-            echo "TPM could not update every plugin; see above." >&2
-            return 1
-            ;;
+    case "$status $output" in
+        "0 "*"update fail"*) status=1 ;;
     esac
+    if [ "$status" -ne 0 ]; then
+        printf '%s\n' "$output"
+        echo "TPM could not update every plugin; see above." >&2
+        return "$status"
+    fi
+    echo "  TPM and its plugins pulled: $(printf '%s\n' "$output" | grep -c 'update success' || :) succeeded"
 )
 
 # bootstrap_owns <path>: a regular executable file. The bootstrap installs

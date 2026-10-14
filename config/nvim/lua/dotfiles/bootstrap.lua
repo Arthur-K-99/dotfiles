@@ -18,7 +18,7 @@
 --
 -- Compiling a parser needs the tree-sitter CLI and a C compiler. The package
 -- lists install both on macOS and Linux; on Windows the compiler (Visual
--- Studio Build Tools, see the README) is a manual step, and on a Linux whose
+-- Studio Build Tools, see docs/windows.md) is a manual step, and on a Linux whose
 -- glibc is too old for the tree-sitter release the bootstrap leaves the CLI
 -- out, so parsers count as skipped rather than missing there.
 local M = {}
@@ -77,6 +77,12 @@ end
 -- Without the lockfile option a plain install would clone branch heads and
 -- pin those instead.
 function M.plugins()
+  -- Each pinned checkout would print git's detached-HEAD advice; lazy.nvim
+  -- passes this environment to git. An entry is added after the user's own.
+  local count = tonumber(vim.env.GIT_CONFIG_COUNT) or 0
+  vim.env["GIT_CONFIG_KEY_" .. count] = "advice.detachedHead"
+  vim.env["GIT_CONFIG_VALUE_" .. count] = "false"
+  vim.env.GIT_CONFIG_COUNT = tostring(count + 1)
   local lockfile = require("lazy.core.config").options.lockfile
   local original = read_file(lockfile)
   local snapshot = locked()
@@ -152,7 +158,7 @@ local function report(missing)
     if vim.tbl_contains(missing.parsers, lang) then
       write("missing parser " .. lang)
     elseif vim.tbl_contains(missing.skipped, lang) then
-      write("skipped parser " .. lang .. " (no C compiler or tree-sitter CLI; see the README)")
+      write("skipped parser " .. lang .. " (no C compiler or tree-sitter CLI; see docs/troubleshooting.md in the dotfiles repository)")
     else
       write("ok parser " .. lang)
     end

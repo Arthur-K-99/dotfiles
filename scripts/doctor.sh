@@ -341,7 +341,7 @@ doctor_main() {
     echo "Checking managed links..."
     check_link "$DOTFILES_DIR/home/.zshrc" "$HOME/.zshrc"
     check_link "$DOTFILES_DIR/config/tmux/tmux.conf" "$HOME/.config/tmux/tmux.conf"
-    check_absent "~/.tmux.conf (tmux loads it as well as ~/.config/tmux/tmux.conf; move its contents and remove it)" "$HOME/.tmux.conf"
+    check_absent "~/.tmux.conf (tmux loads it as well as ~/.config/tmux/tmux.conf; rerun bash scripts/link_dotfiles.sh, which backs it up, and keep what you need in ~/.config/tmux/local.conf)" "$HOME/.tmux.conf"
     check_link "$DOTFILES_DIR/config/eza" "$HOME/.config/eza"
     check_link "$DOTFILES_DIR/config/oh-my-posh/config.omp.json" "$HOME/.config/oh-my-posh/config.omp.json"
     check_link "$DOTFILES_DIR/config/bat/config" "$HOME/.config/bat/config"

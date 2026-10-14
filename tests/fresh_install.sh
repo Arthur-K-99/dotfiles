@@ -69,15 +69,23 @@ check_quiet_start() {
 
 # A terminal emulator gives zsh a terminal, which turns its line editor on;
 # without one, Debian 12's fzf 0.38 scripts fail to restore the zle option and
-# print errors a real terminal never shows. On Linux, util-linux's script
-# provides the terminal, and zsh's stderr goes to a file so it does not mix
-# with the terminal's output. macOS ships BSD script and a current fzf.
+# print errors a real terminal never shows. script provides the terminal
+# (util-linux's on Linux, BSD's on macOS), and zsh's stderr goes to a file so
+# it does not mix with the terminal's output. Commands typed into it make zsh
+# draw its prompt and run the prompt hooks (oh-my-posh, atuin, direnv) and
+# zoxide's cd. BSD script ends the session as soon as its input does, before
+# zsh reads a line, so the input stays open a few seconds.
 FRESH_INSTALL_ZSH='errors="$(mktemp)" || exit 1
-command="DOTFILES_FASTFETCH=0 zsh -i -c exit 2>\"$errors\""
+command="DOTFILES_FASTFETCH=0 zsh -i 2>\"$errors\""
+input="true
+cd /tmp
+cd
+exit
+"
 if [ "$(uname)" = Linux ]; then
-    script -qec "$command" /dev/null </dev/null >/dev/null
+    { printf %s "$input"; sleep 3; } | script -qec "$command" /dev/null >/dev/null
 else
-    sh -c "$command" </dev/null >/dev/null
+    { printf %s "$input"; sleep 3; } | script -q /dev/null sh -c "$command" >/dev/null
 fi
 status=$?
 cat "$errors" >&2
@@ -116,19 +124,41 @@ done'
 # Prints each release record that still holds the fake tag.
 FRESH_INSTALL_STILL_STALE='grep -rlx v0.0.0-fresh-install "${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/releases" 2>/dev/null || :'
 
+# Lines that read as errors in a stage that passed: the harness fails on them,
+# so what a new user would take for a failure does not creep back in. The
+# container's own invoke-rc.d messages are not among them.
+FRESH_INSTALL_NOISE="Plugin [^ ]+ is not installed|^Error|tput: |can't change option|^fatal: "
+
+# run_stage <command>...: runs a stage as the user, showing its output, and
+# fails when the stage fails or prints a line FRESH_INSTALL_NOISE matches.
+run_stage() {
+    local log status noise
+    log="$(mktemp)" || return
+    { as_user "$@" 2>&1; echo "$?" > "$log.status"; } | tee "$log"
+    status="$(cat "$log.status")"
+    noise="$(grep -E "$FRESH_INSTALL_NOISE" "$log")" || :
+    rm -f "$log" "$log.status"
+    [ "$status" -eq 0 ] || return "$status"
+    if [ -n "$noise" ]; then
+        printf 'The stage passed but printed what reads as errors:\n%s\n' "$noise" >&2
+        return 1
+    fi
+}
+
 # fresh_install_run <checkout>
 fresh_install_run() {
     local stale left
     echo "==> Installing"
-    as_user bash "$1/install.sh" || return
-    # A rerun must succeed without changes, as the README promises.
+    run_stage bash "$1/install.sh" || return
+    # A rerun must succeed, as the README says (on Linux it may upgrade the
+    # listed apt packages).
     echo "==> Rerunning the installer"
-    as_user bash "$1/install.sh" || return
+    run_stage bash "$1/install.sh" || return
     # The update right after an install must succeed, end with the doctor,
     # and fetch again every release whose record was set back.
     echo "==> Updating"
     stale="$(as_user bash -c "$FRESH_INSTALL_STALE_RECORDS")" || return
-    as_user bash "$1/scripts/update.sh" || return
+    run_stage bash "$1/scripts/update.sh" || return
     left="$(as_user bash -c "$FRESH_INSTALL_STILL_STALE")" || return
     if [ -n "$left" ]; then
         printf 'The update did not fetch these releases again:\n%s\n' "$left" >&2

@@ -49,6 +49,30 @@ check_tmux_config() {
     rm -rf "$work"
 }
 
+# Exports the oh-my-posh configuration through oh-my-posh itself. It falls back
+# to its built-in theme, and still exits 0, when it cannot read the file, so
+# the export must carry the file's own palette and segments (the export fills
+# in defaults, so whole blocks differ).
+check_oh_my_posh_config() {
+    local exported
+    exported="$(oh-my-posh config export --config "$1" --format json)" || return
+    printf '%s\n' "$exported" | python3 -I -c '
+import json, sys
+def shape(config):
+    return config.get("palette"), [[segment.get("type") for segment in block.get("segments", [])] for block in config.get("blocks", [])]
+try:
+    source = json.load(open(sys.argv[1]))
+except (OSError, ValueError) as error:
+    sys.exit("Cannot read %s: %s" % (sys.argv[1], error))
+try:
+    same = shape(json.load(sys.stdin)) == shape(source)
+except (AttributeError, TypeError, ValueError):
+    same = False
+if not same:
+    sys.exit("oh-my-posh exported another palette or other segments than %s; it cannot read the file." % sys.argv[1])
+' "$1"
+}
+
 # Parses every Lua file of the Neovim configuration and compares the plugin
 # specs with lazy-lock.json, without loading the configuration or any plugin:
 # `nvim -l` runs a script with no user configuration, so no network is touched.
@@ -105,11 +129,11 @@ test_main() {
         echo "SKIP: Ghostty configuration check (ghostty is not installed)."
     fi
 
-    if command -v oh-my-posh >/dev/null 2>&1; then
+    if command -v oh-my-posh >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
         echo "Checking oh-my-posh configuration..."
-        oh-my-posh config export --config "$DOTFILES_DIR/config/oh-my-posh/config.omp.json" --format json >/dev/null
+        check_oh_my_posh_config "$DOTFILES_DIR/config/oh-my-posh/config.omp.json"
     else
-        echo "SKIP: oh-my-posh configuration check (oh-my-posh is not installed)."
+        echo "SKIP: oh-my-posh configuration check (needs oh-my-posh and python3)."
     fi
 
     echo "All available checks passed."

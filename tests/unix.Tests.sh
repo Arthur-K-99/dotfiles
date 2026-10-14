@@ -65,6 +65,63 @@ test_link_fresh_and_repeat() {
     assert_equal 0 "$(find "$test_dir" -name '*.bak.*' | wc -l | tr -d ' ')"
 }
 
+# The whole link stage on a home that already has a shell setup: the user's
+# ~/.zshrc is backed up with a pointer to ~/.zshrc.local, and a ~/.tmux.conf
+# of their own is moved aside, since tmux would load it as well and the
+# doctor would fail; a rerun moves nothing. LINK_BACKUP names each backup.
+test_link_main_moves_old_files_aside() {
+    source "$TEST_REPO_DIR/scripts/link_dotfiles.sh"
+    local home="$test_dir/home" backup
+    mkdir -p "$home"
+    printf 'my zshrc\n' > "$home/.zshrc"
+    printf 'set -g mouse on\n' > "$home/.tmux.conf"
+    HOME="$home" main > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" "move what you still need into ~/.zshrc.local"
+    assert_contains "$(cat "$test_dir/output")" "(tmux would load it as well as ~/.config/tmux/tmux.conf)"
+    [ ! -e "$home/.tmux.conf" ]
+    backup="$(find "$home" -maxdepth 1 -name '.tmux.conf.bak.*')"
+    assert_equal 'set -g mouse on' "$(cat "$backup")"
+    backup="$(find "$home" -maxdepth 1 -name '.zshrc.bak.*')"
+    assert_equal 'my zshrc' "$(cat "$backup")"
+    assert_equal "$TEST_REPO_DIR/home/.zshrc" "$(readlink "$home/.zshrc")"
+    HOME="$home" main > "$test_dir/output"
+    case "$(cat "$test_dir/output")" in
+        *'backing up'*|*'zshrc.local'*) echo "A rerun moved files again." >&2; cat "$test_dir/output" >&2; return 1 ;;
+    esac
+    assert_equal 2 "$(find "$home" -maxdepth 1 -name '*.bak.*' | wc -l | tr -d ' ')"
+    # The link earlier versions made at ~/.tmux.conf is retired, not backed
+    # up; a ~/.zshrc that linked into another copy of this repository gets no
+    # advice.
+    ln -s "$TEST_REPO_DIR/home/.tmux.conf" "$home/.tmux.conf"
+    rm "$home/.zshrc"
+    ln -s /elsewhere/dotfiles/home/.zshrc "$home/.zshrc"
+    HOME="$home" main > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" "retired: $home/.tmux.conf"
+    assert_equal 1 "$(find "$home" -maxdepth 1 -name '.tmux.conf.bak.*' | wc -l | tr -d ' ')"
+    case "$(cat "$test_dir/output")" in
+        *'zshrc.local'*) echo "A ~/.zshrc linked into the repository got advice." >&2; return 1 ;;
+    esac
+    # move_aside ignores a missing path and moves directories and links too.
+    move_aside "$home/absent" test > "$test_dir/output"
+    assert_equal '' "$(cat "$test_dir/output")"
+    mkdir "$home/dir"
+    ln -s "$home/nowhere" "$home/dangling"
+    move_aside "$home/dir" test > /dev/null
+    move_aside "$home/dangling" test > /dev/null
+    [ ! -e "$home/dir" ]
+    [ ! -L "$home/dangling" ]
+    backup="$(find "$home" -maxdepth 1 -name 'dangling.bak.*')"
+    [ -L "$backup" ]
+    assert_equal 1 "$(find "$home" -maxdepth 1 -name 'dir.bak.*' -type d | wc -l | tr -d ' ')"
+    printf 'managed\n' > "$test_dir/source"
+    LINK_BACKUP=stale
+    link "$test_dir/source" "$test_dir/fresh" > /dev/null
+    assert_equal '' "$LINK_BACKUP"
+    printf 'old\n' > "$test_dir/replaced"
+    link "$test_dir/source" "$test_dir/replaced" > /dev/null
+    assert_equal old "$(cat "$LINK_BACKUP")"
+}
+
 test_gitconfig_guard_creates_once() {
     source "$TEST_REPO_DIR/scripts/link_dotfiles.sh"
     ensure_gitconfig "$test_dir/.gitconfig"
@@ -182,6 +239,34 @@ test_tmux_config_declares_plugins_in_order() {
     done
 }
 
+# oh-my-posh exports its built-in theme, with status 0, for a configuration it
+# cannot read; the check compares the export's palette and segments with the
+# file's.
+test_oh_my_posh_config_check() {
+    source "$TEST_REPO_DIR/scripts/test.sh"
+    local status
+    printf '{"palette": {"os": "#A5ADCB"}, "blocks": [{"type": "prompt", "segments": [{"type": "os"}, {"type": "path"}]}]}\n' > "$test_dir/config.json"
+    oh-my-posh() {
+        [ "$*" = "config export --config $test_dir/config.json --format json" ] || return 98
+        # Filled-in defaults, as the real export adds, must not matter.
+        printf '{"palette": {"os": "#A5ADCB"}, "version": 3, "blocks": [{"type": "prompt", "alignment": "left", "segments": [{"type": "os", "style": "plain"}, {"type": "path"}]}]}\n'
+    }
+    check_oh_my_posh_config "$test_dir/config.json"
+    oh-my-posh() { printf '{"palette": {"black": "#262B44"}, "blocks": [{"segments": [{"type": "session"}]}]}\n'; }
+    status=0
+    check_oh_my_posh_config "$test_dir/config.json" > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'it cannot read the file'
+    status=0
+    check_oh_my_posh_config "$test_dir/absent.json" > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'Cannot read'
+    oh-my-posh() { return 9; }
+    status=0
+    check_oh_my_posh_config "$test_dir/config.json" > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 9 "$status"
+}
+
 test_tmux_config_loads_and_errors_are_reported() {
     source "$TEST_REPO_DIR/scripts/test.sh"
     export TMPDIR="$test_dir/tmp"
@@ -194,6 +279,16 @@ test_tmux_config_loads_and_errors_are_reported() {
     assert_contains "$(cat "$test_dir/output")" 'broken.conf'
     # Both runs clean up their private server directories.
     assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-tmux-check.*' | wc -l | tr -d ' ')"
+    # A machine-local file is loaded when it exists.
+    local socket="dotfiles-local-$$" value
+    mkdir -p "$test_dir/home/.config/tmux"
+    printf 'set -g @dotfiles-local-test loaded\n' > "$test_dir/home/.config/tmux/local.conf"
+    HOME="$test_dir/home" tmux -L "$socket" -f /dev/null start-server \; set-option -g exit-empty off \; \
+        source-file "$TEST_REPO_DIR/config/tmux/tmux.conf" > "$test_dir/output" 2>&1 || :
+    value="$(tmux -L "$socket" show-options -gqv @dotfiles-local-test 2>&1)" || :
+    tmux -L "$socket" kill-server >/dev/null 2>&1 || :
+    assert_equal '' "$(cat "$test_dir/output")"
+    assert_equal loaded "$value"
 }
 
 test_theme_switch_round_trip() {
@@ -354,6 +449,27 @@ BREW
     assert_contains ":$PATH:" ":$HOME/.local/bin:"
 }
 
+# The login shell comes from the account database, getent on Linux and
+# Directory Services on macOS, and from SHELL only when neither answers.
+test_login_shell_discovery() {
+    source "$TEST_REPO_DIR/scripts/lib/environment.sh"
+    id() { printf 'dev\n'; }
+    getent() { [ "$1 $2" = 'passwd dev' ] && printf 'dev:x:1000:1000::/home/dev:/usr/bin/zsh\n'; }
+    assert_equal /usr/bin/zsh "$(SHELL=/bin/bash dotfiles_login_shell)"
+    unset -f getent
+    command() {
+        case "$*" in
+            '-v getent') return 1 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    dscl() { [ "$*" = '. -read /Users/dev UserShell' ] && printf 'UserShell: /bin/zsh\n'; }
+    assert_equal /bin/zsh "$(SHELL=/bin/bash dotfiles_login_shell)"
+    dscl() { return 56; }
+    assert_equal /bin/bash "$(SHELL=/bin/bash dotfiles_login_shell)"
+    assert_equal '' "$(unset SHELL; dotfiles_login_shell)"
+}
+
 test_package_index_failure() {
     source "$TEST_REPO_DIR/scripts/install_packages.sh"
     check_linux_distribution() { return 0; }
@@ -397,7 +513,7 @@ test_macos_font_install_and_repair() {
     assert_contains "$(cat "$test_dir/commands")" 'install --cask font-caskaydia-cove-nerd-font'
     : > "$test_dir/commands"
     install_macos
-    assert_equal 'install git' "$(cat "$test_dir/commands")"
+    assert_equal $'list --formula -1\ninstall git' "$(cat "$test_dir/commands")"
     rm "$test_dir/font-present"
     : > "$test_dir/fail-font"
     local status=0
@@ -422,12 +538,34 @@ test_macos_formulae_survive_stdin_consumers() {
     brew() {
         printf '%s\n' "$*" >> "$test_dir/commands"
         case "$*" in
+            'list --formula -1') printf 'second\nsecond-helper\n' ;;
             'list --cask '*) return 1 ;;
             *) cat >/dev/null ;;
         esac
     }
-    install_macos
-    assert_equal $'install first\ninstall second\ninstall third\nlist --cask ghostty\ninstall --cask ghostty' "$(cat "$test_dir/commands")"
+    install_macos > "$test_dir/output"
+    # Only the missing formulae are named, in one install.
+    assert_equal $'list --formula -1\ninstall first third\nlist --cask ghostty\ninstall --cask ghostty' "$(cat "$test_dir/commands")"
+    assert_contains "$(cat "$test_dir/output")" '  already installed: second'
+    # With everything installed, brew install is not run at all.
+    brew() {
+        printf '%s\n' "$*" >> "$test_dir/commands"
+        case "$*" in
+            'list --formula -1') printf 'first\nsecond\nthird\n' ;;
+            'list --cask '*) return 0 ;;
+            *) cat >/dev/null ;;
+        esac
+    }
+    dotfiles_macos_app_installed() { return 0; }
+    : > "$test_dir/commands"
+    install_macos > "$test_dir/output"
+    assert_equal 'list --formula -1' "$(cat "$test_dir/commands")"
+    assert_contains "$(cat "$test_dir/output")" '  already installed: first second third'
+    # A failed listing stops the stage.
+    brew() { [ "$*" != 'list --formula -1' ]; }
+    local status=0
+    install_macos > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
 }
 
 # Updating, Homebrew refreshes its index and upgrades the declared formulae
@@ -455,14 +593,14 @@ test_macos_update_upgrades_declared() {
         esac
     }
     install_macos > "$test_dir/output"
-    assert_equal $'install git\ninstall neovim\ninstall lazygit' "$(cat "$test_dir/commands")"
+    assert_equal $'list --formula -1\ninstall git neovim lazygit' "$(cat "$test_dir/commands")"
     assert_equal unset "$(sort -u "$test_dir/no-install-upgrade")"
     # Current: the index is refreshed and nothing is upgraded.
     export DOTFILES_UPDATE=1
     : > "$test_dir/commands"
     : > "$test_dir/no-install-upgrade"
     install_macos > "$test_dir/output"
-    assert_equal $'update\noutdated --formula --quiet\nlist --pinned --formula\noutdated --cask --quiet\nlist --pinned --cask\ninstall git\ninstall neovim\ninstall lazygit' "$(cat "$test_dir/commands")"
+    assert_equal $'update\noutdated --formula --quiet\nlist --pinned --formula\noutdated --cask --quiet\nlist --pinned --cask\nlist --formula -1\ninstall git neovim lazygit' "$(cat "$test_dir/commands")"
     # The install loop only adds what is missing; the upgrades above decide.
     assert_equal 1 "$(sort -u "$test_dir/no-install-upgrade")"
     # Newer releases: a pinned formula and an undeclared one stay; a failed
@@ -549,8 +687,19 @@ test_install_stages_and_failure_reporting() {
         esac
     done
     failed_stage=''
-    install_main > "$test_dir/output" 2>&1
+    # The closing advice depends on the login shell, not on SHELL.
+    dotfiles_login_shell() { printf '/bin/bash\n'; }
+    SHELL=/bin/zsh install_main > "$test_dir/output" 2>&1
     assert_contains "$(cat "$test_dir/output")" 'All setup checks passed.'
+    assert_contains "$(cat "$test_dir/output")" 'Your login shell is /bin/bash'
+    assert_contains "$(cat "$test_dir/output")" '  chsh -s '
+    dotfiles_login_shell() { printf '/usr/bin/zsh\n'; }
+    SHELL=/bin/bash install_main > "$test_dir/output" 2>&1
+    assert_contains "$(cat "$test_dir/output")" 'Open a new zsh session'
+    case "$(cat "$test_dir/output")" in
+        *chsh*) echo "A zsh login shell was told to run chsh." >&2; return 1 ;;
+    esac
+    unset -f dotfiles_login_shell
     # A minimum release age the bootstrap could not read stops every stage.
     : > "$test_dir/stages"
     status=0
@@ -996,7 +1145,7 @@ test_apt_held_packages_left_alone() {
     # test_apt_keys_refreshed_before_updating covers that.
     export DOTFILES_APT_ETC="$test_dir/etc-apt"
     check_linux_distribution() { return 0; }
-    parse_list() { printf 'tmux\nbat\nfzf\n'; }
+    parse_list() { printf 'tmux\nbat\nwl-clipboard\nfzf\n'; }
     apt-mark() { [ "$1" = showhold ] && cat "$DOTFILES_TEST_FIXTURE/held"; }
     sudo() {
         printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
@@ -1009,12 +1158,13 @@ test_apt_held_packages_left_alone() {
     }
     printf 'bat\nunrelated\n' > "$test_dir/held"
     install_linux > "$test_dir/output"
-    assert_equal $'apt-get update -qq\napt-get install -y tmux fzf' "$(cat "$test_dir/commands")"
+    # wl-clipboard comes without its recommends (a desktop stack on Debian 13).
+    assert_equal $'apt-get update -qq\napt-get install -y tmux fzf\napt-get install -y --no-install-recommends wl-clipboard' "$(cat "$test_dir/commands")"
     assert_contains "$(cat "$test_dir/output")" 'held, left alone: bat (sudo apt-mark unhold bat to upgrade it)'
     : > "$test_dir/commands"
     export DOTFILES_UPDATE=1
     install_linux > "$test_dir/output"
-    assert_equal $'apt-get update -qq\napt-get install -y tmux fzf' "$(cat "$test_dir/commands")"
+    assert_equal $'apt-get update -qq\napt-get install -y tmux fzf\napt-get install -y --no-install-recommends wl-clipboard' "$(cat "$test_dir/commands")"
     assert_contains "$(cat "$test_dir/output")" 'Installing and upgrading apt packages'
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
     command() {
@@ -1255,6 +1405,10 @@ TPM
 printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/update-runs"
 # Like TPM itself: a failed git pull is reported, and the status stays 0.
 [ -f "$DOTFILES_TEST_FIXTURE/update-retry" ] || echo '  "tmux-yank" update fail' >&2
+echo '  "tpm" update success'
+echo '    | Already up to date.'
+echo '  "tmux-sensible" update success'
+echo '    | Already up to date.'
 exit 0
 TPM
     chmod +x "$test_dir/tpm/bin/update_plugins"
@@ -1270,8 +1424,14 @@ TPM
     assert_equal "${expected% }" "$(cat "$test_dir/update-runs")"
     assert_contains "$(cat "$test_dir/output")" "tmux plugin ${pinned%%#*} is pinned to ${pinned#*#}; left alone"
     assert_contains "$(tail -n 1 "$test_dir/tmux-commands")" 'kill-server'
+    assert_contains "$(cat "$test_dir/output")" 'Already up to date.'
     : > "$test_dir/update-retry"
     bootstrap_tmux "$test_dir/tpm" > "$test_dir/output"
+    # A success is one line.
+    assert_contains "$(cat "$test_dir/output")" '  TPM and its plugins pulled: 2 succeeded'
+    case "$(cat "$test_dir/output")" in
+        *'Already up to date'*) echo "TPM's per-plugin output was printed on success." >&2; return 1 ;;
+    esac
     assert_equal 4 "$(wc -l < "$test_dir/plugin-runs" | tr -d ' ')"
     assert_equal 2 "$(wc -l < "$test_dir/update-runs" | tr -d ' ')"
     case " $(tail -n 1 "$test_dir/update-runs") " in
@@ -1289,6 +1449,14 @@ zinit() {
         # Like zinit itself: a failed plugin update is a warning and status 0.
         print -r -- "$*" >> "$DOTFILES_TEST_FIXTURE/update-runs"
         [[ -f $DOTFILES_TEST_FIXTURE/update-retry ]] || print -r -- "Warning: zsh-users/zsh-completions update returned 1"
+        # Like zinit: a dot per plugin, then an updated plugin's header after a
+        # carriage return, its git log, and its own changelog when it updates.
+        print -rn -- ".."
+        print -r -- $'\e[1mUpdating zsh-users/zsh-autosuggestions\e[0m'
+        print -r -- "Updating 0e810e5..85919cd"
+        print -r -- "Fast-forward"
+        print -r -- $'\r..Updating Aloxaf/fzf-tab'
+        print -r -- "[self-update] updating zinit repository"
         return 0
     fi
     printf '%s\n' "$2" >> "$DOTFILES_TEST_FIXTURE/plugin-runs"
@@ -1314,9 +1482,14 @@ ZINIT
     assert_contains "$(cat "$test_dir/output")" 'zinit could not update every plugin'
     assert_equal 'update --all --quiet --no-pager' "$(cat "$test_dir/update-runs")"
     assert_equal 13 "$(wc -l < "$test_dir/plugin-runs" | tr -d ' ')"
+    assert_contains "$(cat "$test_dir/output")" 'Fast-forward'
     : > "$test_dir/update-retry"
     bootstrap_zinit "$test_dir/zinit" > "$test_dir/output"
     assert_equal 2 "$(wc -l < "$test_dir/update-runs" | tr -d ' ')"
+    # A success names the updated plugins and leaves out their git logs.
+    assert_equal "  Updating zsh-users/zsh-autosuggestions
+  Updating Aloxaf/fzf-tab
+  zinit updated itself" "$(sed -n '/^Updating Zinit and its plugins/,$p' "$test_dir/output" | sed 1d)"
 }
 
 test_github_release_install() {
@@ -3437,11 +3610,15 @@ INIT
         XDG_CONFIG_HOME="$fx/config" XDG_DATA_HOME="$fx/data" XDG_STATE_HOME="$fx/state" XDG_CACHE_HOME="$fx/cache" \
             nvim --headless -c 'lua require("dotfiles.bootstrap").plugins()' -c 'cquit 1' > "$fx/output" 2>&1
     }
-    # Both plugins are cloned at the pinned (older) commit, not at the branch head.
+    # Both plugins are cloned at the pinned (older) commit, not at the branch
+    # head, without git's detached-HEAD advice for each checkout.
     run_plugins
     assert_equal "${first[alpha]}" "$(git -C "$fx/data/nvim/lazy/alpha" rev-parse HEAD)"
     assert_equal "${first[beta]}" "$(git -C "$fx/data/nvim/lazy/beta" rev-parse HEAD)"
     assert_contains "$(cat "$fx/output")" 'ok plugin beta'
+    case "$(cat "$fx/output")" in
+        *'detached HEAD'*) echo "git's detached-HEAD advice was printed." >&2; cat "$fx/output" >&2; return 1 ;;
+    esac
     cmp -s "$fx/lock-original.json" "$fx/config/nvim/lazy-lock.json"
     # alpha drifts and beta's clone goes while its repository is unreachable: the
     # run fails, alpha is back on its commit, and beta stays pinned in the lockfile.
@@ -3481,6 +3658,18 @@ test_nvim_config_check() {
     assert_contains "$(cat "$test_dir/output")" "lacks the declared plugin 'catppuccin'"
 }
 
+# missing() and install() against a PATH with and without a tree-sitter CLI
+# (see tests/nvim_bootstrap_missing.lua): on macOS and Linux parsers count as
+# skipped, not missing, exactly when the CLI is not on PATH (as on Debian 12,
+# whose glibc 2.36 the current releases do not run on).
+test_nvim_bootstrap_missing() {
+    if ! nvim -l "$TEST_REPO_DIR/tests/nvim_bootstrap_missing.lua" "$TEST_REPO_DIR/config/nvim" > "$test_dir/output" 2>&1; then
+        cat "$test_dir/output" >&2
+        return 1
+    fi
+    assert_contains "$(cat "$test_dir/output")" '2 parser skip cases pass.'
+}
+
 # update() against stand-ins for mason-registry and nvim-treesitter (see
 # tests/nvim_bootstrap_update.lua): current, newer, failed and retried,
 # missing, and the parser update with and without a compiler.
@@ -3504,7 +3693,7 @@ test_doctor_neovim_checks() {
                 case "$*" in *' -c cquit 1') ;; *) echo 'the check must be followed by cquit' >&2; return 99 ;; esac
                 printf 'ok plugin catppuccin\nok parser bash\nok package lua-language-server\n'
                 if [ -f "$DOTFILES_TEST_FIXTURE/tools-missing" ]; then
-                    printf 'missing plugin gitsigns.nvim\nstale plugin which-key.nvim\nmissing parser yaml\nmissing package marksman\nskipped parser python (no C compiler or tree-sitter CLI; see the README)\n'
+                    printf 'missing plugin gitsigns.nvim\nstale plugin which-key.nvim\nmissing parser yaml\nmissing package marksman\nskipped parser python (no C compiler or tree-sitter CLI; see docs/troubleshooting.md in the dotfiles repository)\n'
                     return 1
                 fi
                 ;;
@@ -3784,6 +3973,27 @@ LOCAL
             [[ "$SSH_AUTH_SOCK" == "$DOTFILES_TEST_HOME/local-agent" ]] || exit 1
             [[ "$EZA_CONFIG_DIR" == "$DOTFILES_TEST_HOME/local-eza" ]] || exit 1
         '
+    # The bootstrap's bin directory leads PATH; another one, given from
+    # ~/.zshenv, goes first and ~/.local/bin stays.
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" PATH=/usr/bin:/bin \
+        "$zsh_binary" -df -c '
+            autoload() { :; }
+            compinit() { :; }
+            source "$DOTFILES_TEST_PROFILE" || exit 1
+            [[ "${path[1]}" == "$DOTFILES_TEST_HOME/.local/bin" ]] || exit 1
+            [[ "${path[(I)$DOTFILES_TEST_HOME/.local/bin]}" -eq 1 ]] || exit 1
+        '
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" PATH=/usr/bin:/bin \
+        DOTFILES_LOCAL_BIN="$test_dir/custom-bin" \
+        "$zsh_binary" -df -c '
+            autoload() { :; }
+            compinit() { :; }
+            source "$DOTFILES_TEST_PROFILE" || exit 1
+            [[ "${path[1]}" == "$DOTFILES_LOCAL_BIN" ]] || exit 1
+            [[ "${path[2]}" == "$DOTFILES_TEST_HOME/.local/bin" ]] || exit 1
+        '
 }
 
 test_zsh_tool_hooks() {
@@ -3933,6 +4143,7 @@ run_tests() {
     local tests=(
         syntax_every_file
         link_fresh_and_repeat
+        link_main_moves_old_files_aside
         gitconfig_guard_creates_once
         link_backups_and_collisions
         link_broken_wrong_and_relocated
@@ -3940,6 +4151,7 @@ run_tests() {
         link_failed_replacement
         theme_switch_round_trip
         environment_discovery
+        login_shell_discovery
         package_index_failure
         macos_font_install_and_repair
         macos_formulae_survive_stdin_consumers
@@ -3980,15 +4192,20 @@ run_tests() {
     else
         echo "  SKIP zinit_plugin_failure_and_retry, zsh_portable_overrides and zsh_tool_hooks (zsh is not installed)."
     fi
+    if command -v python3 >/dev/null 2>&1; then
+        tests+=(oh_my_posh_config_check)
+    else
+        echo "  SKIP oh_my_posh_config_check (python3 is not installed)."
+    fi
     if command -v tmux >/dev/null 2>&1; then
         tests+=(tmux_config_loads_and_errors_are_reported)
     else
         echo "  SKIP tmux_config_loads_and_errors_are_reported (tmux is not installed)."
     fi
     if command -v nvim >/dev/null 2>&1; then
-        tests+=(nvim_config_check nvim_bootstrap_update)
+        tests+=(nvim_config_check nvim_bootstrap_update nvim_bootstrap_missing)
     else
-        echo "  SKIP nvim_config_check and nvim_bootstrap_update (nvim is not installed)."
+        echo "  SKIP nvim_config_check, nvim_bootstrap_update and nvim_bootstrap_missing (nvim is not installed)."
     fi
     # The plugin bootstrap runs against local repositories but needs a copy of
     # lazy.nvim, which only a machine that applied the configuration has.
@@ -4021,6 +4238,6 @@ else
     # each test chooses for itself whether it updates and how old a release
     # must be.
     export XDG_STATE_HOME="$test_dir/state"
-    unset DOTFILES_UPDATE DOTFILES_MINIMUM_RELEASE_AGE MISE_MINIMUM_RELEASE_AGE
+    unset DOTFILES_UPDATE DOTFILES_MINIMUM_RELEASE_AGE MISE_MINIMUM_RELEASE_AGE DOTFILES_LOCAL_BIN
     "test_$1"
 fi

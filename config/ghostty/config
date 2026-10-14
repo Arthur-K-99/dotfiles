@@ -5,9 +5,10 @@
 # `ghostty +show-config --default --docs`.
 #
 # Machine-local overrides, shaders and extra themes go in a `local` file
-# beside this one (~/.config/ghostty/local), loaded last by the config-file
-# line at the bottom and ignored when absent. On macOS Ghostty also loads
-# ~/Library/Application Support/com.mitchellh.ghostty/config after this file.
+# beside this one (~/.config/ghostty/local), loaded by the config-file line at
+# the bottom and ignored when absent. On macOS Ghostty also reads
+# ~/Library/Application Support/com.mitchellh.ghostty/config; which of the two
+# wins for a setting set in both is unverified, so keep each in one place.
 
 # Appearance. The theme follows the OS light/dark setting. Both flavors ship
 # inside Ghostty, so nothing is downloaded and the names must match the files
@@ -41,7 +42,8 @@ copy-on-select = clipboard
 # replace the old blanket `term = xterm-256color`: ssh-terminfo installs
 # Ghostty's entry on remote hosts that allow it, and ssh-env sends
 # TERM=xterm-256color to the ones that do not. sudo keeps TERMINFO for root.
-# Inside tmux none of this applies, because .tmux.conf forces tmux-256color.
+# Inside tmux none of this applies, because the tmux configuration forces
+# tmux-256color.
 shell-integration-features = cursor,sudo,title,ssh-env,ssh-terminfo,path
 
 # Keyboard. The left Option key acts as Alt so fzf's Alt-C and zsh's Alt-w

@@ -867,14 +867,14 @@ exit 0
         Assert-True ($script:neovimStarts -eq $startsBefore) 'Neovim is not started without lazy.nvim'
         [IO.File]::WriteAllText($lazyFile, '-- lazy')
         # Missing and stale items fail and name the stage; skipped parsers do not count.
-        $neovimCheck = @{ Lines = @('ok plugin catppuccin', 'missing plugin gitsigns.nvim', 'stale plugin which-key.nvim', 'missing parser yaml', 'missing package marksman', 'skipped parser python (no C compiler or tree-sitter CLI; see the README)'); ExitCode = 1 }
+        $neovimCheck = @{ Lines = @('ok plugin catppuccin', 'missing plugin gitsigns.nvim', 'stale plugin which-key.nvim', 'missing parser yaml', 'missing package marksman', 'skipped parser python (no C compiler or tree-sitter CLI; see docs/troubleshooting.md in the dotfiles repository)'); ExitCode = 1 }
         $report.Clear()
         Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } '4 check\(s\) need attention'
         foreach ($line in @('  [missing] Neovim plugin gitsigns.nvim (rerun: scripts\install_runtimes.ps1)',
                 '  [stale] Neovim plugin which-key.nvim is not at the commit lazy-lock.json pins (rerun: scripts\install_runtimes.ps1)',
                 '  [missing] Neovim parser yaml (rerun: scripts\install_runtimes.ps1)',
                 '  [missing] Neovim language server marksman (rerun: scripts\install_runtimes.ps1)',
-                '  [skip] Neovim parser python (no C compiler or tree-sitter CLI; see the README)')) {
+                '  [skip] Neovim parser python (no C compiler or tree-sitter CLI; see docs/troubleshooting.md in the dotfiles repository)')) {
             Assert-True ($report -contains $line) "The report line is shown: $line"
         }
         $neovimCheck = @{ Lines = @(); ExitCode = 0 }
