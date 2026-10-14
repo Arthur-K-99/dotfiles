@@ -46,6 +46,7 @@ None of these is a failure.
 - **tmux shows "TPM is missing":** run `bash scripts/bootstrap_tools.sh` from `~/dotfiles`.
 - **"Could not initialize the tool environment. Check Homebrew":** `brew shellenv` failed; check that Homebrew runs, then rerun.
 - **Neovim is older than 0.12 on macOS:** `brew upgrade neovim`, then rerun.
+- **An old oh-my-posh stays on macOS:** the update says `oh-my-posh not installed by the bootstrap; left alone` and `oh-my-posh version` prints an old release. A copy from Homebrew's former `jandedobbeleer/oh-my-posh` tap, which Homebrew 7 refuses to load, still sits in `/opt/homebrew/bin`. Remove that file, then `brew uninstall oh-my-posh`, `brew untap jandedobbeleer/oh-my-posh`, and rerun `scripts/bootstrap_tools.sh`, which installs the current release into `~/.local/bin`.
 - **git ignores a shared setting:** `~/.gitconfig` is read after `~/.config/git/config`, so an old setting there wins, such as a `core.pager` that hides delta.
 
 ## Undo an install
