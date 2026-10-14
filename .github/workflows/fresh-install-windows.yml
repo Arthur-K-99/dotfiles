@@ -33,11 +33,12 @@ jobs:
     name: Windows Server 2025
     # Windows Server 2025 ships winget; the 2022 image does not.
     runs-on: windows-2025
-    timeout-minutes: 90
+    # Above the steps' own limits together (the passing run took 17 minutes),
+    # so a step that hangs still leaves time to collect and upload the logs.
+    timeout-minutes: 100
     env:
-      # oh-my-posh, mise and Mason read GitHub's API, which allows 60
-      # requests an hour per address without a token, and hosted runners
-      # share addresses.
+      # mise and Mason read GitHub's API, which allows 60 requests an hour per
+      # address without a token, and hosted runners share addresses.
       GITHUB_TOKEN: ${{ github.token }}
     defaults:
       run:
@@ -49,19 +50,19 @@ jobs:
         with:
           persist-credentials: false
       - name: Record the runner, install older packages and placeholder profiles
-        timeout-minutes: 15
+        timeout-minutes: 10
         run: ./tests/fresh_install.ps1 -Stage Prepare
       - name: Install from Windows PowerShell
-        timeout-minutes: 60
+        timeout-minutes: 30
         run: ./tests/fresh_install.ps1 -Stage Install
       - name: Rerun the installer from a shell with the profile
-        timeout-minutes: 15
+        timeout-minutes: 10
         run: ./tests/fresh_install.ps1 -Stage Rerun
       - name: Pin sd and update from PowerShell 7
-        timeout-minutes: 45
+        timeout-minutes: 20
         run: ./tests/fresh_install.ps1 -Stage Update
       - name: Run the doctor in new shells
-        timeout-minutes: 10
+        timeout-minutes: 5
         run: ./tests/fresh_install.ps1 -Stage Doctor
       - name: Start both PowerShell editions and Neovim
         timeout-minutes: 10

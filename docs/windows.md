@@ -7,7 +7,7 @@ Windows and WSL share one repository but are separate environments:
 | Native Windows | `install.ps1` | PowerShell |
 | WSL Debian/Ubuntu | `install.sh` inside WSL | zsh |
 
-WSL is a Linux install; [Linux and WSL](linux.md#wsl) covers it, and the [Windows Terminal](#windows-terminal) section below covers its profile. `install.ps1` is installed for real every week on a clean Windows Server 2025 machine in CI, with a rerun, the update and the doctor ([development](development.md#fresh-install)); a desktop Windows 11 has not been tried yet.
+WSL is a Linux install; [Linux and WSL](linux.md#wsl) covers it, and the [Windows Terminal](#windows-terminal) section below covers its profile. CI runs `install.ps1` every week on a clean Windows Server 2025 machine, with a rerun, the update, the doctor and both PowerShell editions ([development](development.md#fresh-install)); a desktop Windows 11 has not been tried yet.
 
 ## What install.ps1 does
 
@@ -67,8 +67,9 @@ The fragment adds the Catppuccin scheme of the current flavor and applies it, th
 - **Aliases** as in zsh: `cd` is zoxide, `ls` is eza and `la`, `ll` and `tree` call it, `cat` is bat, `vim` is nvim, and `y` opens yazi and changes to the directory you quit in. There is no `c`; `cls` clears.
 - **Completion:** carapace through the Tab menu.
 - **mise:** PowerShell runs `mise activate`, so a project's `[env]` section applies here, unlike in zsh.
-- **direnv** loads in PowerShell 7.2 and newer only; its hook throws in Windows PowerShell. Windows sets no `HOME`, which direnv needs for its own directories, so the profile sets it to your home directory when it is unset, and points `DIRENV_BASH` at Git for Windows' bash, which runs `.envrc` files and is not on `PATH` by default.
-- **Non-interactive shells** (`pwsh -Command`, `pwsh -File`, editor tasks) skip the PSReadLine setup: keys, colors, predictions, carapace, atuin and PSFzf. In such a shell CompletionPredictor would deadlock PowerShell 7 as the command finishes, and oh-my-posh's init loads PSReadLine even there, so the profile notes before anything else whether the shell loaded PSReadLine itself.
+- **direnv** loads in PowerShell 7.2 and newer only; its hook throws in Windows PowerShell. Windows sets no `HOME`, which direnv needs for its own directories, so when it is unset the profile sets it to the home Git for Windows would use itself (`HOMEDRIVE` and `HOMEPATH` when that directory exists, otherwise your profile folder), which programs started from the shell see too. Unless `DIRENV_BASH` is set, it points it at Git for Windows' bash, from Program Files or beside the `git` on `PATH`; that bash runs `.envrc` files and is not on `PATH` by default. A direnv hook that fails (no bash found) is skipped without a message.
+- **Non-interactive shells** (`pwsh -Command`, `pwsh -File`, editor tasks) skip the PSReadLine setup (keys, colors, predictions, carapace, atuin, PSFzf). oh-my-posh's init loads PSReadLine even in such shells, so the profile checks first whether the host loaded it.
+- **CompletionPredictor** loads when the shell first waits for input, not with the profile: loaded with it, it deadlocks PowerShell 7 when the host runs a command after the profile, as `pwsh -Command` and `pwsh -NoExit -Command` (VS Code's terminal) do.
 - **Machine-local settings** go in `~\.powershell.local.ps1`, which the profile loads after its own settings.
 - **fastfetch** greets the console host only, and not shells started with `-Command`, `-File`, `-EncodedCommand` or `-NonInteractive`. `$env:DOTFILES_FASTFETCH = '0'` in `~\.powershell.local.ps1` turns it off.
 - One profile serves both editions and loads every tool and module only when it is present. It stays ASCII (glyphs as code points) because Windows PowerShell reads scripts without a byte-order mark as ANSI.

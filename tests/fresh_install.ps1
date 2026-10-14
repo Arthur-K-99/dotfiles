@@ -10,9 +10,10 @@
 # older fzf and Carapace (the update must upgrade them) and placeholder
 # profiles (the install must back them up), and before updating it pins sd
 # with winget (the update must leave it alone). Run it only on a disposable
-# machine such as a CI runner:
+# machine such as a CI runner; outside GitHub Actions it refuses to run
+# without -Disposable:
 #
-#   powershell -NoProfile -File tests\fresh_install.ps1 [-Stage <stage>] [-LogDirectory <directory>]
+#   powershell -NoProfile -File tests\fresh_install.ps1 -Disposable [-Stage <stage>] [-LogDirectory <directory>]
 #
 # The stages run in this order: Prepare, Install, Rerun, Update, Doctor and
 # Shells; All, the default, runs them one after another and then Collect,
@@ -24,7 +25,8 @@
 param(
     [ValidateSet('All', 'Prepare', 'Install', 'Rerun', 'Update', 'Doctor', 'Shells', 'Collect')]
     [string]$Stage = 'All',
-    [string]$LogDirectory
+    [string]$LogDirectory,
+    [switch]$Disposable
 )
 $ErrorActionPreference = 'Stop'
 $repository = Split-Path -Parent $PSScriptRoot
@@ -228,6 +230,12 @@ function Invoke-FreshInstallPrepare {
         $result.Output[0]
     })
     foreach ($profilePath in $profiles) {
+        # Written through a link, the placeholder would replace the file it
+        # points to, such as config/powershell/profile.ps1 in a checkout.
+        $existing = Get-Item -LiteralPath $profilePath -Force -ErrorAction SilentlyContinue
+        if ($existing -and ($existing.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw "$profilePath is a link, as the dotfiles install makes; this machine is not fresh. Run the fresh install on a disposable machine."
+        }
         New-Item -ItemType Directory -Path (Split-Path -Parent $profilePath) -Force | Out-Null
         [IO.File]::WriteAllText($profilePath, $seedProfileContent)
         Write-Host "Wrote a placeholder profile: $profilePath"
@@ -377,6 +385,11 @@ function Invoke-FreshInstallStage {
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
+    if ($env:GITHUB_ACTIONS -ne 'true' -and -not $Disposable) {
+        throw ('This installs the dotfiles over this machine''s PowerShell profiles and configuration, installs older fzf ' +
+            'and Carapace packages, pins sd with winget and sets the execution policy for this user. Run it only on a ' +
+            'disposable machine, with -Disposable.')
+    }
     if ($Stage -ne 'All') { Invoke-FreshInstallStage $Stage }
     else {
         try {

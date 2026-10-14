@@ -261,9 +261,9 @@ function Test-DotfilesNerdFont {
 }
 
 # Given a font name, oh-my-posh looks the Nerd Fonts release up through
-# GitHub's API, which ignores GITHUB_TOKEN there and allows 60 requests an hour
-# per address, so shared addresses get refused. The release's download URL
-# names the same archive without an API request.
+# GitHub's API without a token (it ignores GITHUB_TOKEN), which allows 60
+# requests an hour per address, so shared addresses get refused. The
+# release's download URL names the same archive without an API request.
 $script:DotfilesNerdFontUrl = 'https://github.com/ryanoasis/nerd-fonts/releases/latest/download/CascadiaCode.zip'
 
 function Invoke-DotfilesFontInstall {
@@ -374,17 +374,28 @@ function Test-DotfilesWingetPinned {
 # This reads that listing and returns the words after the id on the row that
 # names it (the installed version, an available version when there is a newer
 # one, the source), or nothing when no row does. Column headers are localized,
-# so the row is found by the id alone.
+# so the row is found by the id alone, at its last place on the row, since
+# the name before it may be the id too. Passing --source would drop the
+# Source column.
 function Get-DotfilesWingetListedVersions {
     param([string]$WingetCommand, [string]$Package)
     $ErrorActionPreference = 'Continue'
     $PSNativeCommandUseErrorActionPreference = $false
     $lines = @(& $WingetCommand list --id $Package --accept-source-agreements 2>$null | ForEach-Object { [string]$_ })
-    $pattern = "(^|\s)$([regex]::Escape($Package))\s+(\S.*)$"
+    $pattern = "^(?:.*\s)?$([regex]::Escape($Package))\s+(\S.*)$"
     foreach ($line in $lines) {
         # The progress spinner precedes the first line, separated by carriage returns.
-        if ((($line -split "`r")[-1]) -match $pattern) { return @($Matches[2].Trim() -split '\s+') }
+        if ((($line -split "`r")[-1]) -match $pattern) { return @($Matches[1].Trim() -split '\s+') }
     }
+}
+
+# Whether the listed words show a newer version: an installed and an
+# available version number that differ. An installed version winget cannot
+# tell ("Unknown") or a range ("< 3.12.0") leaves nothing to compare.
+function Test-DotfilesWingetNewerListed {
+    param([string[]]$Words)
+    $versions = @($Words | Where-Object { $_ -match '^\d+(\.\d+)+$' })
+    return $versions.Count -ge 2 -and $versions[0] -ne $versions[1]
 }
 
 # Whether winget lists the package as installed, by its exact id or else by
@@ -401,23 +412,26 @@ function Test-DotfilesWingetInstalled {
 # installed version winget cannot tell, and one whose upgrade needs another
 # installer type are left as they are and reported. A package that winget
 # upgrade cannot find is installed again by id when the listing shows a
-# newer version, which replaces it.
+# newer version, which replaces it; its exit code means the same as an
+# upgrade's.
 function Update-DotfilesWingetPackage {
     param([string]$WingetCommand, [string]$Package)
+    $action = 'upgrade'
+    $note = ''
     $code = Invoke-DotfilesNativeCommand $WingetCommand @('upgrade', '--id', $Package, '--exact', '--silent', '--accept-package-agreements', '--accept-source-agreements')
     if ($code -eq $script:WingetNoApplicationsFound) {
-        if (@(Get-DotfilesWingetListedVersions $WingetCommand $Package).Count -lt 3) { Write-Host "  up to date: $Package"; return }
+        if (-not (Test-DotfilesWingetNewerListed @(Get-DotfilesWingetListedVersions $WingetCommand $Package))) { Write-Host "  up to date: $Package"; return }
         $code = Invoke-DotfilesNativeCommand $WingetCommand @('install', '--id', $Package, '--exact', '--silent', '--accept-package-agreements', '--accept-source-agreements')
-        if ($code -eq 0 -or $code -eq $script:WingetRebootRequiredToFinish) { Write-Host "  upgraded: $Package (installed again: winget upgrade cannot find it)" }
-        else { throw "winget failed to install the newer $Package (exit code $code). Rerun scripts\update.ps1 to retry." }
+        $action = 'install the newer'
+        $note = 'installed again: winget upgrade cannot find it'
     }
-    elseif ($code -eq 0) { Write-Host "  upgraded: $Package" }
+    if ($code -eq 0) { Write-Host "  upgraded: $Package$(if ($note) { " ($note)" })" }
     elseif ($code -eq $script:WingetUpdateNotApplicable) { Write-Host "  up to date: $Package" }
-    elseif ($code -eq $script:WingetRebootRequiredToFinish) { Write-Host "  upgraded: $Package (restart Windows to finish)" }
+    elseif ($code -eq $script:WingetRebootRequiredToFinish) { Write-Host "  upgraded: $Package ($(if ($note) { "$note; " })restart Windows to finish)" }
     elseif ($code -eq $script:WingetPackageIsPinned) { Write-Host "  pinned, left alone: $Package (winget pin remove --id $Package to upgrade it)" }
     elseif ($code -eq $script:WingetUpgradeVersionUnknown) { Write-Host "  left alone: $Package (winget cannot tell its installed version; winget upgrade --id $Package --exact --include-unknown)" }
     elseif ($code -eq $script:WingetInstallTechnologyMismatch) { Write-Host "  left alone: $Package (the upgrade uses another installer type; reinstall it with winget to change)" }
-    else { throw "winget failed to upgrade $Package (exit code $code). Rerun scripts\update.ps1 to retry." }
+    else { throw "winget failed to $action $Package (exit code $code). Rerun scripts\update.ps1 to retry." }
 }
 
 function Invoke-DotfilesPackageInstall {

@@ -35,16 +35,31 @@ if (Get-Command mise -ErrorAction SilentlyContinue) {
 # direnv loads and unloads .envrc files on directory changes (direnv 2.33+).
 # Its hook needs PowerShell 7.2 and throws in Windows PowerShell. direnv finds
 # its configuration, cache and data directories through HOME, which Windows
-# does not set, and runs .envrc files with bash: Git for Windows' bash, which
-# is not on PATH by default (and a bash on PATH may be WSL's).
+# does not set; it gets the home Git for Windows itself would use without one
+# (HOMEDRIVE and HOMEPATH when that directory exists), so git and ssh started
+# from here see no other home. direnv runs .envrc files with bash: Git for
+# Windows' bash, which is not on PATH by default (and a bash on PATH may be
+# WSL's), from Program Files or beside the git on PATH (a per-user install,
+# Scoop). A hook that fails or prints nothing is skipped rather than
+# reported at every start.
 $direnvShell = $PSVersionTable.PSVersion.Major -gt 7 -or ($PSVersionTable.PSVersion.Major -eq 7 -and $PSVersionTable.PSVersion.Minor -ge 2)
 if ($direnvShell -and (Get-Command direnv -ErrorAction SilentlyContinue)) {
-    if (-not (Test-Path Env:HOME)) { Set-Item Env:HOME $HOME }
-    if ($env:ProgramFiles -and -not $env:DIRENV_BASH) {
-        $gitBash = Join-Path $env:ProgramFiles "Git\bin\bash.exe"
-        if (Test-Path -LiteralPath $gitBash) { $env:DIRENV_BASH = $gitBash }
+    if (-not (Test-Path Env:HOME)) {
+        $gitHome = $HOME
+        if ($env:HOMEDRIVE -and $env:HOMEPATH -and (Test-Path -LiteralPath "$env:HOMEDRIVE$env:HOMEPATH")) { $gitHome = "$env:HOMEDRIVE$env:HOMEPATH" }
+        Set-Item Env:HOME $gitHome
     }
-    direnv hook pwsh | Out-String | Invoke-Expression
+    if (-not $env:DIRENV_BASH) {
+        $gitBashes = @()
+        if ($env:ProgramFiles) { $gitBashes += Join-Path $env:ProgramFiles "Git\bin\bash.exe" }
+        $gitCommand = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($gitCommand) { $gitBashes += Join-Path (Split-Path -Parent (Split-Path -Parent $gitCommand.Source)) "bin\bash.exe" }
+        foreach ($gitBash in $gitBashes) {
+            if (Test-Path -LiteralPath $gitBash) { $env:DIRENV_BASH = $gitBash; break }
+        }
+    }
+    $direnvHook = direnv hook pwsh 2>$null | Out-String
+    if ($LASTEXITCODE -eq 0 -and $direnvHook.Trim()) { Invoke-Expression $direnvHook }
 }
 
 if (Get-Command nvim -ErrorAction SilentlyContinue) {
@@ -150,11 +165,14 @@ if ($interactiveReadLine) {
         $readLineColors['InlinePrediction'] = '#6e738d' # overlay0
         $readLineColors['ListPrediction'] = '#c6a0f6' # mauve
         $readLineColors['ListPredictionSelected'] = "$esc[48;2;54;58;79m" # surface0 background
-        $predictionOptions['PredictionSource'] = 'History'
+        $predictionOptions['PredictionSource'] = 'HistoryAndPlugin'
         $predictionOptions['PredictionViewStyle'] = 'ListView'
-        Import-Module CompletionPredictor -ErrorAction SilentlyContinue
-        if (Get-Module CompletionPredictor) {
-            $predictionOptions['PredictionSource'] = 'HistoryAndPlugin'
+        # CompletionPredictor is imported once the shell first waits for
+        # input. Imported here, it deadlocks PowerShell 7 when the host runs a
+        # command after the profile, as `pwsh -NoExit -Command` and VS Code's
+        # terminal do. Without the module the plugin source stays empty.
+        $null = Register-EngineEvent -SourceIdentifier PowerShell.OnIdle -MaxTriggerCount 1 -Action {
+            Import-Module CompletionPredictor -Global -ErrorAction SilentlyContinue
         }
     }
     Set-PSReadLineOption @readLineOptions
