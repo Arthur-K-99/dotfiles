@@ -7,9 +7,10 @@
 # upstream changes such as a package that moved to another installer type.
 #
 # It changes the machine beyond the install: before installing it puts in an
-# older fzf (the update must upgrade it) and placeholder profiles (the install
-# must back them up), and before updating it pins sd with winget (the update
-# must leave it alone). Run it only on a disposable machine such as a CI runner:
+# older fzf and Carapace (the update must upgrade them) and placeholder
+# profiles (the install must back them up), and before updating it pins sd
+# with winget (the update must leave it alone). Run it only on a disposable
+# machine such as a CI runner:
 #
 #   powershell -NoProfile -File tests\fresh_install.ps1 [-Stage <stage>] [-LogDirectory <directory>]
 #
@@ -37,8 +38,12 @@ if (-not $LogDirectory) {
 New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
 $stateFile = Join-Path $LogDirectory 'state.json'
 
-# What the Prepare stage set up, for the stages that check it later.
+# What the Prepare stage set up, for the stages that check it later. The
+# older packages give the update something to upgrade: fzf through winget
+# upgrade, Carapace by installing it again, since winget 1.11's upgrade cannot
+# find it (see Get-DotfilesWingetListedVersions).
 $seedProfileContent = '# A profile that was here before the dotfiles install.'
+$olderPackages = @('junegunn.fzf', 'rsteube.Carapace')
 $pinnedPackage = 'chmln.sd'
 
 function Assert-FreshInstall {
@@ -116,14 +121,16 @@ function Invoke-FreshInstallWinget {
     return $result
 }
 
-function Get-FreshInstallFzfVersion {
-    $result = Invoke-FreshInstallCapture 'fzf' @('--version')
-    if ($result.ExitCode -ne 0 -or [string]$result.Output[0] -notmatch '^(\d+(?:\.\d+)+)') { throw "fzf --version failed: $($result.Output + $result.Errors)" }
-    return [version]$Matches[1]
+# The installed version winget lists for a package, and whether it lists a newer one.
+function Get-FreshInstallListedVersion {
+    param([string]$Package)
+    $listed = @(Get-DotfilesWingetListedVersions (Get-FreshInstallWinget) $Package)
+    Assert-FreshInstall ($listed.Count -ge 2) "winget does not list $Package as installed."
+    [pscustomobject]@{ Installed = [version]$listed[0]; Outdated = $listed.Count -ge 3 }
 }
 
 # The runner, winget and the packages that are already there, for the record;
-# then an older fzf and placeholder profiles for the install to find.
+# then older packages and placeholder profiles for the install to find.
 function Invoke-FreshInstallPrepare {
     $os = Get-CimInstance Win32_OperatingSystem
     Write-Host "Windows: $($os.Caption) $($os.Version) build $($os.BuildNumber)"
@@ -143,18 +150,20 @@ function Invoke-FreshInstallPrepare {
         if ($path) { Write-Host "  $name`t$path" } else { Write-Host "  $name`t(absent)" }
     }
 
-    # The newest fzf but one, so the update has something to upgrade.
-    $versions = Invoke-FreshInstallWinget @('show', '--id', 'junegunn.fzf', '--exact', '--versions', '--source', 'winget', '--accept-source-agreements')
-    Assert-FreshInstall ($versions.ExitCode -eq 0) "winget show --versions failed (exit code $($versions.ExitCode)): $($versions.Output -join ' | ')"
-    $available = @($versions.Output | Where-Object { $_ -match '^\d+(\.\d+)+$' })
-    Assert-FreshInstall ($available.Count -ge 2) "winget lists fewer than two fzf versions: $($versions.Output -join ' | ')"
-    $older = $available[1]
-    Write-Host "Installing fzf $older, older than the latest $($available[0])..."
-    $install = Invoke-FreshInstallWinget @('install', '--id', 'junegunn.fzf', '--exact', '--version', $older, '--source', 'winget', '--silent', '--accept-package-agreements', '--accept-source-agreements')
-    $install.Output | Out-Host
-    Assert-FreshInstall ($install.ExitCode -eq 0) "Installing fzf $older failed (exit code $($install.ExitCode))."
-    $fzfVersion = Get-FreshInstallFzfVersion
-    Write-Host "fzf --version: $fzfVersion"
+    # The newest version but one of each older package.
+    $older = @(foreach ($package in $olderPackages) {
+        $versions = Invoke-FreshInstallWinget @('show', '--id', $package, '--exact', '--versions', '--source', 'winget', '--accept-source-agreements')
+        Assert-FreshInstall ($versions.ExitCode -eq 0) "winget show --versions failed for $package (exit code $($versions.ExitCode)): $($versions.Output -join ' | ')"
+        $available = @($versions.Output | Where-Object { $_ -match '^\d+(\.\d+)+$' })
+        Assert-FreshInstall ($available.Count -ge 2) "winget lists fewer than two versions of ${package}: $($versions.Output -join ' | ')"
+        Write-Host "Installing $package $($available[1]), older than the latest $($available[0])..."
+        $install = Invoke-FreshInstallWinget @('install', '--id', $package, '--exact', '--version', $available[1], '--source', 'winget', '--silent', '--accept-package-agreements', '--accept-source-agreements')
+        $install.Output | Out-Host
+        Assert-FreshInstall ($install.ExitCode -eq 0) "Installing $package $($available[1]) failed (exit code $($install.ExitCode))."
+        $listed = Get-FreshInstallListedVersion $package
+        Assert-FreshInstall ($listed.Installed -eq [version]$available[1] -and $listed.Outdated) "winget lists $package as $($listed.Installed), not as an outdated $($available[1])."
+        [pscustomobject]@{ Id = $package; Version = $available[1] }
+    })
 
     # A profile the user had before, in each edition, which the install must keep as a backup.
     $profiles = @(foreach ($shell in @('powershell.exe', 'pwsh.exe')) {
@@ -167,7 +176,7 @@ function Invoke-FreshInstallPrepare {
         [IO.File]::WriteAllText($profilePath, $seedProfileContent)
         Write-Host "Wrote a placeholder profile: $profilePath"
     }
-    [pscustomobject]@{ FzfVersion = [string]$fzfVersion; Profiles = $profiles } | ConvertTo-Json | Set-Content -LiteralPath $stateFile
+    [pscustomobject]@{ Older = $older; Profiles = $profiles } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $stateFile
 }
 
 # From Windows PowerShell, after allowing local scripts, as the README says.
@@ -176,7 +185,9 @@ function Invoke-FreshInstallInstall {
     $install = Join-Path $repository 'install.ps1'
     Invoke-FreshInstallShell 'powershell.exe' 'install' "Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force`n    & '$($install.Replace("'", "''"))'"
     $transcript = Get-FreshInstallTranscript 'install'
-    Assert-FreshInstall ($transcript -contains '  already installed: junegunn.fzf') 'The install did not keep the fzf that was already installed.'
+    foreach ($older in $state.Older) {
+        Assert-FreshInstall ($transcript -contains "  already installed: $($older.Id)") "The install did not keep the $($older.Id) that was already installed."
+    }
     foreach ($profilePath in $state.Profiles) {
         $backups = @(Get-ChildItem -Path "$profilePath.bak.*" -File -ErrorAction SilentlyContinue)
         Assert-FreshInstall ($backups.Count -eq 1) "Expected one backup of $profilePath, found $($backups.Count)."
@@ -196,8 +207,8 @@ function Invoke-FreshInstallRerun {
 }
 
 # The update runs from PowerShell 7 without its profile: it must upgrade the
-# older fzf, leave the pinned package and the running PowerShell 7 alone, and
-# end with the doctor.
+# older packages, leave the pinned package and the running PowerShell 7
+# alone, and end with the doctor.
 function Invoke-FreshInstallUpdate {
     $state = Get-FreshInstallState
     $pin = Invoke-FreshInstallWinget @('pin', 'add', '--id', $pinnedPackage, '--exact', '--source', 'winget', '--accept-source-agreements')
@@ -206,12 +217,14 @@ function Invoke-FreshInstallUpdate {
     $update = Join-Path $repository 'scripts/update.ps1'
     Invoke-FreshInstallShell 'pwsh.exe' 'update' "& '$($update.Replace("'", "''"))'"
     $transcript = Get-FreshInstallTranscript 'update'
-    Assert-FreshInstall ($transcript -contains '  upgraded: junegunn.fzf') 'The update did not upgrade the older fzf.'
     Assert-FreshInstall (@($transcript | Where-Object { $_ -like "  pinned, left alone: $pinnedPackage *" }).Count -eq 1) "The update did not leave the pinned $pinnedPackage alone."
     Assert-FreshInstall (@($transcript | Where-Object { $_ -like '  left alone: Microsoft.PowerShell runs this update*' }).Count -eq 1) 'The update did not leave the PowerShell 7 running it alone.'
-    $fzfVersion = Get-FreshInstallFzfVersion
-    Assert-FreshInstall ($fzfVersion -gt [version]$state.FzfVersion) "fzf is still $fzfVersion after the update (was $($state.FzfVersion))."
-    Write-Host "fzf went from $($state.FzfVersion) to $fzfVersion."
+    foreach ($older in $state.Older) {
+        Assert-FreshInstall (@($transcript | Where-Object { $_ -like "  upgraded: $($older.Id)*" }).Count -eq 1) "The update did not report upgrading $($older.Id)."
+        $listed = Get-FreshInstallListedVersion $older.Id
+        Assert-FreshInstall ($listed.Installed -gt [version]$older.Version -and -not $listed.Outdated) "winget lists $($older.Id) as $($listed.Installed) after the update (was $($older.Version)), outdated: $($listed.Outdated)."
+        Write-Host "$($older.Id) went from $($older.Version) to $($listed.Installed)."
+    }
 }
 
 # The doctor on its own, in each edition, as after reopening the terminal.

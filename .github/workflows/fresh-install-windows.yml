@@ -50,7 +50,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Record the runner, install an older fzf and placeholder profiles
+      - name: Record the runner, install older packages and placeholder profiles
         timeout-minutes: 15
         run: ./tests/fresh_install.ps1 -Stage Prepare
       - name: Install from Windows PowerShell
