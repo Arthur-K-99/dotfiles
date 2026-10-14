@@ -115,7 +115,7 @@ Not tied to a phase; pick up when convenient.
 
 Done:
 
-- **Fixes before 1.0** (PR link to follow), the small things everyday use would run into:
+- **Fixes before 1.0** ([#20](https://github.com/Arthur-K-99/dotfiles/pull/20)), the small things everyday use would run into:
   - **Transient GitHub errors still failed installs.** Two days after `--retry 5` (about 30 seconds of backoff), lazygit's release asset answered HTTP 500 six times in a row in a Debian 12 run on CI. Every bootstrap download now passes `--retry 7`, about two minutes (1, 2, 4 ... 64 seconds between tries).
   - **The doctors' hints name full paths.** `rerun: bash scripts/bootstrap_tools.sh` only worked from inside the repository, while the README runs the doctor by its full path, from any directory. The Unix doctor now names the clone's scripts by full path, with `~` for the home directory (`bash ~/dotfiles/scripts/bootstrap_tools.sh`), and the Windows doctor builds full paths from `-DotfilesDir`. tmux's "TPM is missing" names the repository in words, since the configuration cannot know where the clone is, and macOS's "Check Homebrew, then rerun" names the installer by full path.
   - **`EDITOR` is Neovim.** Nothing set it, so zsh's `Ctrl+X Ctrl+E` fell back to `vi` and `git commit` to `vi` (Debian and Ubuntu: `editor`), which the Debian and Ubuntu container images lack. Both shells now set `EDITOR` to `nvim` when Neovim is installed and it is not set already. `VISUAL` is left alone, since git and zsh read it first: a copy made before the machine-local files load would override an `EDITOR` chosen there.
