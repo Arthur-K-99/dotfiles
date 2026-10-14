@@ -55,7 +55,7 @@ Two philosophies are in play. Explicit hex values look identical in every termin
 | zsh completion menus, fd | `vivid generate catppuccin-macchiato` in `home/.zshrc` | named vivid theme; a small ANSI default applies without vivid |
 | zsh syntax highlighting, autosuggestions | plugin defaults | ANSI |
 | Neovim | `background` in `config/nvim/lua/plugins/colorscheme.lua` | the `catppuccin/nvim` plugin with `flavour = "auto"`: Latte when the terminal background is light, the flavor above when dark, like Ghostty and yazi |
-| btop | not yet managed | see `docs/roadmap.md` |
+| btop | not yet managed | btop's own default theme; the roadmap's "btop in Catppuccin" to-do |
 
 ## Switching flavor
 
@@ -72,7 +72,7 @@ The flavors are `latte`, `frappe`, `macchiato` and `mocha`. The script reads the
 
 After switching: review `git diff`, run `bash scripts/test.sh`, then `bash scripts/bootstrap_tools.sh` (installs the new yazi flavor, and the bat theme on old packages), start a new tmux server or press `prefix r`, and open a new shell. On Windows, rerun `install.ps1` or `scripts\install_runtimes.ps1` for the yazi flavor and restart Windows Terminal so the fragment is read again.
 
-Not touched: the README's prose, `docs/roadmap.md` (history), and tools that follow the terminal palette.
+Not touched: the README and the other documents under `docs/` (they say "the flavor" rather than naming it, except the roadmap's history), and tools that follow the terminal palette.
 
 ## Adding a themed location
 

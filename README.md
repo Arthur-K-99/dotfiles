@@ -1,21 +1,53 @@
 # dotfiles
 
-My personal machine setup and source of truth for rebuilding macOS, Debian/Ubuntu, WSL, and native Windows environments.
+My personal machine setup and source of truth for rebuilding macOS, Debian/Ubuntu, WSL and native Windows environments: one terminal setup in one Catppuccin flavor, with every tool declared in this repository.
 
-- [docs/roadmap.md](docs/roadmap.md): what is planned, phase by phase, and the checklist for adding a tool.
-- [docs/theming.md](docs/theming.md): where every color lives and how to switch Catppuccin flavor.
+Where it has been tried:
 
-## Bootstrap
+- **Debian 12 and 13, Ubuntu 24.04 and 26.04:** fresh installs in containers, on x86_64 (CI, every week) and arm64 (on a Mac).
+- **macOS:** my Mac and CI's macOS runner.
+- **WSL:** the Linux install inside a Debian or Ubuntu distribution; what differs there (the font, the clipboard) is covered by the mocked tests only.
+- **Native Windows:** CI runs the mocked installer tests under Windows PowerShell 5.1 and PowerShell 7; `install.ps1` has not been run on a clean machine yet.
+
+## Try it first
+
+The installer replaces your shell and tool configuration and installs packages. To see it without touching your machine:
+
+- **Linux, unattended:** from a clone of this repository, `bash tests/fresh_install.sh ubuntu:24.04` (or `debian:12`, `debian:13`, `ubuntu:26.04`) installs the checkout in a new Docker container, reruns it, runs the update and starts zsh and tmux, then removes the container. On a Mac prefix `DOCKER_DEFAULT_PLATFORM=linux/arm64`; for repeated runs add `GITHUB_TOKEN="$(gh auth token)"` ([development](docs/development.md#fresh-install)).
+- **Linux, to look around:** a container with a user that has sudo, as on a real machine. `docker start -ai dotfiles-try` returns to it and `docker rm -f dotfiles-try` removes it.
+
+  ```sh
+  docker run -it --name dotfiles-try ubuntu:24.04
+  # inside, as root
+  apt-get update && apt-get install -y sudo git ca-certificates
+  echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections   # no time zone question
+  useradd -m -s /bin/bash dev && echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev
+  su - dev
+  export LANG=C.UTF-8
+  git clone https://github.com/Arthur-K-99/dotfiles.git ~/dotfiles && ~/dotfiles/install.sh
+  exec zsh
+  ```
+
+- **WSL:** a second distribution, copied from yours, which `wsl --unregister dotfiles-try` removes: `wsl --export Ubuntu $env:TEMP\ubuntu.tar`, `wsl --import dotfiles-try $env:LOCALAPPDATA\dotfiles-try $env:TEMP\ubuntu.tar`, then `wsl -d dotfiles-try -u <your user>` and install inside. `wsl -l` lists the distribution names.
+- **macOS and Windows:** a virtual machine (UTM, Tart, Parallels, Hyper-V). A second macOS user is not isolated: Homebrew's prefix belongs to the first administrator and `/Applications` is shared. Windows Sandbox has no winget.
+
+[Troubleshooting](docs/troubleshooting.md) says how to [undo an install](docs/troubleshooting.md#undo-an-install) and what to put in a [report](docs/troubleshooting.md#report-a-problem).
+
+## Install
+
+### Before you start
+
+- **Debian and Ubuntu:** git (and `ca-certificates`, which minimal images lack) and a user with sudo. apt runs through sudo, which may ask again during the long bootstrap stage. Debian, Ubuntu and their derivatives only, on x86_64 or arm64.
+- **WSL:** run the Linux install inside the distribution, not in Windows PowerShell. WSL itself comes from `wsl --install` in an administrator PowerShell and may need a restart. The font is the Windows one, which `install.ps1` installs.
+- **macOS:** an administrator account, for Homebrew's installer, which asks for your password and for RETURN. git comes from the Command Line Tools: on a brand-new Mac run `xcode-select --install` first. They also bring the C compiler for Neovim's parsers.
+- **Windows:** a working winget (App Installer), then Git with `winget install --id Git.Git --exact`, and a new PowerShell before cloning. Elevation is optional: an elevated shell, or Developer Mode with PowerShell 7, gets links; otherwise the installer copies the files, and copies stay stale until the next install ([Windows](docs/windows.md#links-or-copies)).
+- **Existing configuration on Windows:** a `Microsoft.PowerShell_profile.ps1` still runs after the managed profile and can replace its prompt, and extra files in `%LOCALAPPDATA%\nvim` mix with the managed ones ([Windows](docs/windows.md#existing-configurations)).
 
 ### macOS / Debian / Ubuntu / WSL
 
 ```sh
 git clone https://github.com/Arthur-K-99/dotfiles.git ~/dotfiles && ~/dotfiles/install.sh
 ```
-
-> **macOS:** if `git` is unavailable on a brand-new Mac, run `xcode-select --install` first.
->
-> **WSL:** run this command inside the Linux distro, not in Windows PowerShell. WSL uses the same Linux packages and dotfiles as a regular Debian/Ubuntu machine.
 
 ### Windows (PowerShell)
 
@@ -25,81 +57,38 @@ Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
 ~\dotfiles\install.ps1
 ```
 
-On a brand-new Windows machine, install Git first with `winget install --id Git.Git --exact`, then reopen PowerShell before cloning this repository.
+The installers can be rerun safely; the links point into the clone, so keep it where it is. Existing unmanaged files are preserved with timestamped `.bak` names before managed links are created; if replacement fails, the previous configuration is restored, and a backup that cannot be restored is kept and its location reported. On Windows a matching copy is used when symbolic links are unavailable. An install is complete only after verification (the doctor) passes, including the automated font and plugin installation. A failed step returns a nonzero status, keeps the completed work, and names the command to rerun once you have fixed the reported problem.
 
-The installers are designed to be safely rerunnable. Existing unmanaged files are preserved with timestamped `.bak` names before managed links are created. If replacement fails, the previous configuration is restored; any backup that cannot be restored is retained and its location is reported. On Windows, a matching file copy is used when symlink creation is unavailable.
+Native Windows and WSL are separate environments: `install.ps1` sets up PowerShell with winget packages, and `install.sh` inside WSL sets up zsh with the Linux packages ([Windows](docs/windows.md), [Linux and WSL](docs/linux.md)).
 
-An install is complete only after setup verification passes, including automated font and plugin installation. A failed step returns a nonzero status and gives rerun instructions; completed work is preserved. Fix the reported problem and rerun the same installer to finish.
+## First steps after install
 
-### Update
+- **Login shell:** on Linux and WSL, and wherever the installer prints it, run `chsh -s "$(command -v zsh)"`, then sign out and back in (WSL: open a new tab). New terminals and tmux panes start the login shell, so without this they skip the zsh configuration; `exec zsh` covers one terminal only.
+- **Terminal:** on macOS open Ghostty, not Terminal.app: it carries the font and the theme. Elsewhere select `CaskaydiaCove Nerd Font Mono` in your terminal, or install Ghostty from [ghostty.org](https://ghostty.org/download), whose configuration is already linked.
+- **Windows Terminal:** restart it. Make PowerShell the default profile, and give each WSL profile the font `CaskaydiaCove Nerd Font Mono` and the scheme `Catppuccin <flavor>`; the fragment cannot ([Windows](docs/windows.md#windows-terminal)).
+- **Git identity:** `git config --global user.name …` and `user.email …` write to `~/.gitconfig`, which the installer creates when it is missing and which stays out of the repository.
+- **Machine-local settings:** `~/.zshrc.local`, `~/.powershell.local.ps1`, `~/.config/ghostty/local` and `~/.config/tmux/local.conf`. The linked files are the repository's.
+- **History:** `atuin import auto` brings your existing shell history into atuin's `Ctrl+R`.
+- **Greeting:** `DOTFILES_FASTFETCH=0` in `~/.zshrc.local` (PowerShell: `$env:DOTFILES_FASTFETCH = '0'` in `~/.powershell.local.ps1`) turns fastfetch off.
+- **Check:** `~/dotfiles/scripts/doctor.sh` (Windows: `~\dotfiles\scripts\doctor.ps1`). [Troubleshooting](docs/troubleshooting.md) explains the lines that look like errors.
+
+## Update
 
 ```sh
-~/dotfiles/scripts/update.sh
+git -C ~/dotfiles pull && ~/dotfiles/scripts/update.sh
 ```
 
 ```powershell
-~\dotfiles\scripts\update.ps1
+git -C $HOME\dotfiles pull; ~\dotfiles\scripts\update.ps1
 ```
 
-A rerun of the installer only adds what is missing. The update runs the same stages and also upgrades, then finishes with the same verification:
-
-- **Packages:** the ones `packages/*.txt` declares, after Homebrew refreshes its index. On Linux apt refreshes its index after the signing keys of the eza and Charm repositories are fetched again and checked against their pins. Homebrew may also upgrade the formulae a declared one depends on and the installed formulae that depend on it; nothing else is touched.
-- **Release tools:** each tool the bootstrap fetched from a GitHub release, when a newer release exists and is old enough (see [Release age](#release-age)).
-- **Plugins:** zinit and TPM with their plugins, and the yazi flavors.
-- **Runtimes:** mise's runtimes.
-- **Neovim:** the parsers and the Mason language servers. The plugins stay at the commits `lazy-lock.json` pins.
-
-It leaves some things alone and says so:
-
-- tools it did not install, such as a binary on `PATH` from another source. In `~/.local/bin` a plain file with a tool's name counts as the bootstrap's, but a link (pipx, uv and npm make links there) does not;
-- whatever you pinned or held (`brew pin`, `apt-mark hold`, `winget pin`, a tmux plugin pinned to a tag);
-- a release tool whose installed release is newer than the one its project now marks latest, as after a project deletes its newest releases;
-- on Windows, the PowerShell 7 or Windows Terminal that is running it. Upgrade those from another shell with the `winget upgrade` command it prints.
-
-Casks that update themselves, such as Ghostty, are not reported as outdated by Homebrew, so the update leaves them to their own updater without a word.
-
-It does not pull this repository: run `git pull` first to take its changes.
-
-### Verified downloads
-
-The files the Unix bootstrap downloads with curl are checked or pinned before they are used:
-
-- **GitHub releases:** the release tools (including oh-my-posh, zoxide and mise), Neovim, the tree-sitter CLI and the Linux Nerd Font. Each file must match the SHA-256 digest GitHub lists for that asset; a file that does not is deleted before anything is unpacked or replaced. No installer script is piped into a shell.
-- **apt repositories:** eza's and Charm's are added only when the downloaded signing key has the fingerprint pinned in `scripts/lib/apt_repositories.sh`. The update fetches both keys again before apt reads the repositories and checks them against the pins. A changed copy of the pinned key is merged into the keyring, so an expiry the project extends reaches the machine without invalidating what the key signed before (Charm's key expires on 2027-07-13). A keyring holding any other key is replaced. When a key cannot be downloaded, the update keeps the keyring and says so. The doctor reports a keyring that does not hold its pinned key and a key that has expired; a key that expires within 30 days passes, with its date shown. This matters because an expired key makes `apt-get update` fail only on fresh lists; once a repository's lists exist, apt warns and keeps the old ones.
-- **bat themes:** bat releases older than 0.26 get the Catppuccin theme from a fixed commit of catppuccin/bat, so the file cannot change under its URL.
-
-The digest comes from the same release as the file, so it proves the file is what the release holds, not that the release itself is genuine. Package managers check their own downloads: apt against its signed indexes, Homebrew bottles and casks against the SHA-256 in their formula or cask, and winget each installer against the SHA-256 in its manifest. Plugins come from git: Neovim's at the commits `lazy-lock.json` pins; zinit's, TPM's and the yazi flavors at their branch heads. Two downloads are not checked yet: Homebrew's installer script (from `HEAD`, as Homebrew's instructions say), and on Windows the Nerd Font that `oh-my-posh font install` fetches.
-
-GitHub's API answers 60 requests an hour per address without a token, and a Linux install makes one per release download, about 18, plus one for each latest release that is too young to install (see Release age). Repeated installs behind one address can exceed that; set `GITHUB_TOKEN` (for example `GITHUB_TOKEN="$(gh auth token)"`) to raise the limit. A token GitHub does not accept is dropped with a warning.
-
-### Release age
-
-The Unix bootstrap installs a GitHub release only once it has been public for a day: a bad or hijacked release is usually noticed and pulled within hours, and its digest cannot tell (see Verified downloads). This covers the release tools (oh-my-posh, zoxide and mise among them), Neovim, the tree-sitter CLI and the Linux Nerd Font, on a first install and in the update.
-
-- **Which release:** the one the project marks latest, once it is old enough. Until then, the highest version among the project's 30 most recent releases that is old enough and lists the file this machine needs with a SHA-256 digest; the bootstrap says which release it passed over. Prereleases, drafts and tags that are not plain version numbers (`stable`, `nightly`, `v1.0-rc.1`) never count.
-- **Updates:** the update keeps the installed release until a newer one is old enough, and never moves a tool to a release older than the one recorded (Neovim and the tree-sitter CLI also compare the version they run), even when a project deletes its newest releases.
-- **Late changes:** a release whose files changed after it was published counts from the change.
-- **The setting:** `DOTFILES_MINIMUM_RELEASE_AGE` is a whole number with a unit, `s`, `m` (minutes), `h`, `d` or `w`, such as `12h` or `3d`, the form mise's installer reads; `0` takes every release at once. Set it for one run (`DOTFILES_MINIMUM_RELEASE_AGE=3d ~/dotfiles/scripts/update.sh`) or export it from `~/.zshrc.local`. A value the bootstrap cannot read stops the installer before it changes anything.
-- **mise:** when `DOTFILES_MINIMUM_RELEASE_AGE` is set, the bootstrap passes it to mise as `MISE_MINIMUM_RELEASE_AGE`, unless that is already in the environment. mise's self-update and its runtime installs (Node.js) honour it ahead of a `minimum_release_age` in mise's configuration, though behind mise's own self-update setting (`MISE_SELF_UPDATE_MINIMUM_RELEASE_AGE` or `self_update.minimum_release_age`). Unset, mise decides: a day by default.
-- **The clock:** ages are measured against this machine's clock. A clock that runs ahead shortens the delay. One far behind makes every release look young: a tool that is not installed yet then stops the run, saying so.
-- **Not covered:** packages from Homebrew, apt (the eza and Charm repositories included) and winget, plugins from git, the language servers Mason installs, and on Windows the PowerShell modules and the Nerd Font that `oh-my-posh font install` fetches. There mise comes from winget, and only its runtime installs wait mise's own day. `docs/roadmap.md` tracks these.
-
-## Windows and WSL
-
-Windows and WSL share one repository but are separate environments:
-
-| Environment | Installer | Managed shell |
-|---|---|---|
-| Native Windows | `install.ps1` | PowerShell |
-| WSL Debian/Ubuntu | `install.sh` inside WSL | zsh |
-
-Native Windows installs PowerShell, Windows Terminal, and command-line tools through winget, PowerShell modules from the PowerShell Gallery, and Node.js through mise. It manages the PowerShell profile, oh-my-posh, git, the tool configurations and a Windows Terminal settings fragment. WSL reuses the Linux package list and Unix dotfiles. Installing or enabling WSL itself remains an explicit host action because it can require administrator approval and a restart: run `wsl --install`, restart if requested, then run the Unix bootstrap inside WSL.
+The update does not pull the repository, so `git pull` first. It runs the install stages again and also upgrades the declared packages, the release tools (once a release is a day old), the PowerShell modules, the zsh and tmux plugins, the yazi flavors, mise's runtimes, and Neovim's parsers and language servers, then runs the doctor. Neovim's plugins stay at the commits `lazy-lock.json` pins. It leaves alone what it did not install and what you pinned or held, and says so. A plain rerun adds what is missing and upgrades nothing but the listed apt packages on Linux. [Updating](docs/updating.md) has the details.
 
 ## What gets installed
 
 | Tool | macOS / Linux / WSL | Native Windows |
 |---|---:|---:|
-| Git and GitHub CLI | Yes | Yes |
+| Git (macOS: the Command Line Tools') and GitHub CLI | Yes | Yes |
 | Ghostty with Catppuccin, following the OS appearance | macOS; manual on Linux | No |
 | zsh + Zinit | Yes | No |
 | PowerShell + Windows Terminal with a Catppuccin fragment | No | Yes |
@@ -121,38 +110,28 @@ Native Windows installs PowerShell, Windows Terminal, and command-line tools thr
 | tree-sitter CLI (compiles the Tree-sitter parsers) | Yes | Yes |
 | CaskaydiaCove Nerd Font | Yes (WSL uses the Windows font) | Yes |
 
-## After install
+## Key bindings
 
-- **Ghostty:** The configuration is linked to `~/.config/ghostty/config`; reload it with `Cmd+Shift+,`. The theme follows the OS appearance (Latte in light mode, the flavor in `config/catppuccin/flavor` in dark), the left Option key acts as Alt for fzf's `Alt+C`, and `` Cmd+` `` opens a drop-down quick terminal from any app after macOS grants the Accessibility permission it asks for. Machine-local settings, shaders and extra themes go in `~/.config/ghostty/local`, which the managed file loads last when it exists; on macOS, `~/Library/Application Support/com.mitchellh.ghostty/config` is loaded after both. On Linux, install Ghostty from [ghostty.org](https://ghostty.org/download); the configuration is already in place.
-- **Windows Terminal:** Restart Windows Terminal after installing, or save `settings.json` once: fragments are read only when settings load. A fragment under `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\dotfiles\` adds the Catppuccin scheme of the current flavor and applies it, the Nerd Font, padding and acrylic to the PowerShell 7, Windows PowerShell and Command Prompt profiles without touching `settings.json`. Fragments cannot change global settings or WSL profiles: choose PowerShell as the default profile and the scheme for WSL profiles once in Settings, or set `"defaultProfile": "{574e775e-4f2a-5b96-ac1e-a2962a402336}"` in `settings.json`.
-- **PowerShell keys:** `Tab` opens a completion menu, `Up`/`Down` search history by prefix, `Ctrl+R` searches history and `Ctrl+T` inserts files through fzf, and PowerShell 7 shows predictions from history and tab completion in a list. Windows PowerShell 5.1 gets the colors and the Tab, Up/Down, Ctrl+D and Ctrl+W keys; predictions, the fzf chords, posh-git and Terminal-Icons are PowerShell 7 only, because its PSReadLine is older and the modules are installed for PowerShell 7.
-- **tmux:** The configuration is linked to `~/.config/tmux/tmux.conf` and TPM installs plugins under `~/.config/tmux/plugins/`. The bootstrap installs the plugins; press `prefix + I` (Ctrl+A, I) if one is missing after editing the plugin list. tmux would load a `~/.tmux.conf` as well, so the linker removes the link earlier versions of this repository made there and backs up any other `~/.tmux.conf` beside it. Machine-local settings, such as those from that file, go in `~/.config/tmux/local.conf`, which the configuration loads last if it exists. A `~/.tmux/plugins` directory from before the move can be deleted.
-- **tmux keys** (prefix is Ctrl+A): `h j k l` select panes and `Ctrl+h/j/k/l` do so without the prefix, across tmux panes and Neovim splits alike; `y` in copy mode and mouse selections copy to the system clipboard (`wl-clipboard` on Wayland and `xsel` on X11 come from the apt list; `clip.exe` serves WSL); `F` opens tmux-fzf over sessions, windows and panes; `` ` `` toggles a floating scratch pane (floax), the tmux counterpart of Ghostty's quick terminal; `T` opens sesh to jump to or create a session from zoxide directories and `L` returns to the last one; `Ctrl+S` saves and `Ctrl+R` restores the session layout, and continuum does both automatically. The status line shows the directory, session, CPU, battery and time in Catppuccin.
-- **Neovim:** The configuration is `config/nvim`, linked whole to `~/.config/nvim` (Windows: every file managed into `%LOCALAPPDATA%\nvim`). Plugins are pinned in `lazy-lock.json` and installed by the bootstrap at exactly those commits; nothing is fetched when Neovim starts. After `:Lazy update` commit the lockfile, and run the bootstrap or the update (or `scripts\install_runtimes.ps1`) on other machines to follow it. The update also brings the parsers to the revisions the pinned nvim-treesitter names and the language servers to their latest versions. Tree-sitter parsers and language servers (Lua, Bash, TypeScript, Python, JSON, YAML, TOML, Markdown, PowerShell) are listed in `config/nvim/lua/dotfiles/tools.lua`; the bootstrap installs them headless through nvim-treesitter and Mason, and `doctor` reports each one. Completion is Neovim's own (`Ctrl+Y` accepts); `:Mason` and `:checkhealth` show the tooling state.
-- **Neovim keys:** the leader is `Space`. `Space Space` or `Space f f` finds files, `Space /` greps, `Space f b` lists buffers, `Space f .` resumes the last picker, `Space ?` shows the keys that apply in the current buffer and `Space` alone waits to show the groups (find, git, search, diagnostics, buffer). LSP: `gd` goes to the definition, `grr` lists references, `grn` renames, `gra` offers code actions, `K` hovers, `Space c f` formats; `]d`/`[d` step through diagnostics and `Space x x` lists them. Git: `]c`/`[c` step through hunks, `Space g s`/`Space g r` stage or reset one, `Space g p` previews it, `Space g b` blames the line, `Space g g` opens the status picker. `Ctrl+h/j/k/l` move between splits and on into tmux panes.
-- **Neovim on Linux:** Debian 12 (0.7), Debian 13 (0.10), Ubuntu 24.04 (0.9) and Ubuntu 26.04 (0.11) package older releases than the configuration needs, so the bootstrap unpacks the GitHub release into `~/.local/opt/nvim` (`DOTFILES_LOCAL_OPT` chooses another directory) and links `~/.local/bin/nvim`; the tree-sitter CLI comes from its GitHub release and `build-essential` from apt. Rerunning the bootstrap keeps them; `scripts/update.sh` replaces them when a newer release is out and old enough (see Release age), and never replaces a working tree-sitter CLI with a release that does not run on this glibc. The tree-sitter releases are built against glibc 2.39, newer than Debian 12's 2.36: on Debian 12 a release either does not start (arm64) or starts with a glibc warning and then hangs Neovim's parser install (x86_64), so where the loader complains about glibc the bootstrap leaves the release out and records that in `~/.local/state/dotfiles/tree-sitter-unsupported`, reruns fetch only a newer release, the doctor marks the CLI and the parsers as skipped, and Neovim highlights those file types with Vim's syntax files as on Windows without a compiler.
-- **Neovim on Windows:** compiling a Tree-sitter parser needs a C compiler, which winget does not install for you. Without one the doctor marks the parsers as skipped and Neovim falls back to Vim's regex highlighting for those file types. To build them, install the Visual Studio Build Tools with the C++ workload (`winget install --id Microsoft.VisualStudio.2022.BuildTools --exact --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"`), reopen the terminal and rerun `scripts\install_runtimes.ps1`. If the files under `%LOCALAPPDATA%\nvim` are copies rather than links (symbolic links unavailable), `:Lazy update` changes the copy of `lazy-lock.json`; copy it back to the repository before committing.
-- **fastfetch:** New interactive shells start with a machine summary in Catppuccin colors; tmux panes and non-interactive shells skip it. Set `DOTFILES_FASTFETCH=0` in `~/.zshrc.local` (or `$env:DOTFILES_FASTFETCH = '0'` in `~/.powershell.local.ps1`) to turn it off; the modules are in `config/fastfetch/config.jsonc`.
-- **tmux colors:** tmux identifies itself as `tmux-256color` for italics and forces true color through every host terminal, including Windows Terminal and WSL. Linux gets the terminfo from the `ncurses-term` package. If a remote host you `ssh` into from tmux lacks that terminfo, prefix the command with `TERM=screen-256color`.
-- **Theme:** Every tool uses one Catppuccin flavor, recorded in `config/catppuccin/flavor`: tmux, the prompt, eza, bat and fzf, including tab-completion menus. `bash scripts/theme.sh <flavor>` switches all of them at once and [docs/theming.md](docs/theming.md) lists every location. bat 0.26+ ships the themes; the bootstrap installs the current one for older distribution packages.
-- **fzf keys:** `Ctrl+T` inserts files, `Ctrl+R` searches history, `Alt+C` changes directory, and `Tab` completion opens the same fzf window.
-- **Shell:** The Unix configuration is for zsh, and new terminals and tmux panes start your login shell. If that is Bash or another shell, run `chsh -s "$(command -v zsh)"`, then sign out and back in (`exec zsh` uses zsh in the current terminal only). The installer prints this command when your login shell is not zsh, but does not run it.
-- **Runtimes:** mise installs the Node.js LTS pinned in `config/mise/config.toml` and switches versions per project from `mise.toml` or `.tool-versions` files. mise reads `.nvmrc` and `.node-version` only when told to, for example with `export MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS=node` in `~/.zshrc.local`; then a project's `package.json` `devEngines` chooses Node.js as well, and a `~/.nvmrc` applies under your whole home directory. zsh puts mise's shims directory on `PATH` rather than running `mise activate`, which keeps shell startup fast; project `[env]` sections in mise files are therefore not applied (use direnv). PowerShell runs `mise activate`. `mise use -g node@22` changes the global default, `mise use python@3.13` adds a runtime to a project, `mise ls` shows what is installed. An existing nvm installation is left alone and no longer loaded; remove `~/.nvm` when you are sure nothing else needs it.
-- **Completion:** carapace completes over a thousand commands in zsh and PowerShell; `Tab` opens the menu in both shells. Run `carapace --clear-cache` after installing new tools.
-- **History:** atuin owns `Ctrl+R` in the shell (tmux has its own `prefix Ctrl+R` for restoring sessions) with fuzzy search over a local SQLite database; `Up` stays plain zsh history. Sync between machines is opt-in: `atuin register` or `atuin login`, then `atuin sync`. PowerShell support needs atuin 18.11 or newer, which winget installs.
-- **Git:** `~/.config/git/config` holds the shared settings (delta as pager, zdiff3 conflicts, rebase on pull, autosquash, sorted branches, a global ignore in `~/.config/git/ignore`). Identity and credential helpers stay in `~/.gitconfig`, which git reads afterwards and which `git config --global` writes to; the linker creates an empty one when it is missing, so those writes never land in the managed file. `lazygit` and `lazydocker` use the same Catppuccin colors.
-- **Abbreviations:** zsh-abbr expands `g`, `gs`, `gc`, `lg` and friends on `Space` or `Enter`; `abbr add name=command` adds one and rewrites the tracked `config/zsh-abbr/user-abbreviations` through the linked directory, so commit the change. you-should-use reminds you of an alias after a command runs.
-- **Colors on Linux:** vivid 0.9 or newer carries the Catppuccin `LS_COLORS`; Debian 12 ships 0.8, so completion menus there fall back to the terminal palette until vivid is updated (`cargo install vivid` or the GitHub release).
-- **Files:** `y` opens yazi and changes to the directory you quit in. `fd` and `rg` replace `find` and `grep` (Debian installs fd as `fdfind`; the shell aliases it and the bootstrap links it as `fd` in `~/.local/bin` for tmux and scripts). `Ctrl+T` and `Alt+C` use fd, so ignored files stay out of the way.
-- **Font:** Ghostty and the Windows Terminal fragment select `CaskaydiaCove Nerd Font Mono` themselves (some pickers list it as `CaskaydiaCove NFM`); choose it by hand in any other terminal. On Linux the bootstrap installs the Mono family from the latest Nerd Fonts release old enough (see Release age) into `~/.local/share/fonts/CaskaydiaCove` and registers it with fontconfig, unless fontconfig already lists the family from another directory. A rerun keeps the installed copy; `scripts/update.sh` replaces it when Nerd Fonts publishes a newer release and it is old enough (macOS: when Homebrew installed the cask). On Windows the update keeps the installed font. WSL skips it, because Windows Terminal draws WSL's text with the font `install.ps1` installs on Windows.
-- **Machine-specific config:** Add anything that shouldn't be in the repo to `~/.zshrc.local` (sourced automatically).
-- **SSH agent:** The shared configuration preserves `SSH_AUTH_SOCK`. To use Bitwarden on a particular machine, add `export SSH_AUTH_SOCK="$HOME/.bitwarden-ssh-agent.sock"` to that machine's `~/.zshrc.local`.
-- **Tool binaries on Linux:** Tools that Debian and Ubuntu do not package, or package too old, come from signed apt repositories (eza, glow, gum) or from a GitHub release (the latest one old enough, see Release age) into `~/.local/bin` (oh-my-posh, zoxide, mise, lazygit, lazydocker, delta, atuin, carapace, yazi, dust, procs, xh, tlrc, sesh, fastfetch, tree-sitter, and Neovim as described above), each checked against its SHA-256 digest (see Verified downloads). oh-my-posh comes from its release on macOS as well. Set `DOTFILES_LOCAL_BIN` before installing to use another directory; the installers put it on `PATH`. Export it from `~/.zshenv` too (`~/.zshrc.local` loads after `PATH` is built), so `~/.zshrc` puts it before `~/.local/bin`. Rerunning the bootstrap keeps the tools. `scripts/update.sh` fetches a tool again when its project has a newer release than the tag recorded under `~/.local/state/dotfiles/releases/` and that release is old enough (see Release age). A tool installed before those records existed is fetched once. mise in `~/.local/bin` updates itself with `mise self-update`, and a tool found elsewhere on `PATH` is left to whatever installed it.
-- **Windows machine-specific config:** Put private or machine-only PowerShell settings in `~/.powershell.local.ps1`.
-- **Verify:** Run `scripts/doctor.sh` on Unix/WSL or `scripts\doctor.ps1` in PowerShell. Both installers also run verification before reporting success. Windows checks both PowerShell editions' actual profile locations, including redirected Documents folders, detects stale copied configurations, and confirms each PowerShell module is installed for PowerShell 7.
-- **Repository checks:** Run `bash scripts/test.sh` before committing installer or configuration changes. The suite checks syntax and uses temporary destinations and mocked installation commands to exercise reruns and failures without installing packages or changing your configuration. Missing optional validation tools are reported as skipped checks. Run `pwsh -NoProfile -NonInteractive -File tests/windows.Tests.ps1` for the Windows behavioral suite alone. CI runs checks on macOS, Linux, and Windows, including Windows PowerShell 5.1 and PowerShell 7.
-- **Fresh install:** `bash tests/fresh_install.sh debian:12` (or `debian:13`, `ubuntu:24.04`, `ubuntu:26.04`) installs the checkout in a new container as a user with sudo, with real downloads, then reruns the installer, runs `scripts/update.sh` (after setting every recorded release tag back, so the update fetches each release again), starts an interactive zsh on a pseudo-terminal (which loads every tool's init script) and loads tmux with its plugins, failing on any error they report. It needs Docker and takes several minutes; a Mac runs the arm64 images, and should be told so with `DOCKER_DEFAULT_PLATFORM=linux/arm64`: pulling an image for linux/amd64 retags the local copy, and later runs then emulate x86_64 without saying so. The Fresh install workflow runs it for every image on x86_64, plus a macOS runner, on pull requests that touch the Unix install, every Monday, and on demand from the Actions tab, so upstream changes such as a renamed release asset show up before the next new machine. GitHub pauses the weekly run after 60 days without a commit; the Actions tab turns it back on.
-- **Secrets:** Do not store credentials, private keys, access tokens, or work-only settings in this repository. Restore those through a password manager or another private channel.
+| Where | Keys |
+|---|---|
+| zsh | `Tab` fzf completion menu · `Up` history · `Ctrl+P`/`Ctrl+N` history lines with the same first word · `Alt+W` cut back to the mark · `Ctrl+X Ctrl+E` edit the line in `$EDITOR` · `Space` or `Enter` expands an abbreviation (`g`, `gs`, `gc`, `lg`, …) |
+| fzf, atuin | `Ctrl+R` atuin history search (`Enter` runs, `Tab` edits) · `Ctrl+T` insert files · `Alt+C` change directory |
+| tmux, prefix `Ctrl+A` | `h j k l` panes · `Ctrl+h/j/k/l` panes and Neovim splits, no prefix · `r` reload · `Ctrl+L` clear the screen · `F` tmux-fzf · `` ` `` floating pane · `T` sesh picker, `L` last session · `Ctrl+S`/`Ctrl+R` save/restore sessions · `I` install plugins · `y` in copy mode copies |
+| Neovim, leader `Space` | `Space Space` or `Space f f` files · `Space /` grep · `Space f b` buffers · `Space f .` resume picker · `Space ?` buffer keys · `gd` definition · `grr` references · `grn` rename · `gra` code action · `K` hover · `Space c f` format · `]d`/`[d` diagnostics, `Space x x` list · `]c`/`[c` hunks · `Space g s`/`Space g r` stage/reset hunk · `Space g p` preview · `Space g b` blame · `Space g g` status · `Ctrl+Y` accept completion |
+| PowerShell | `Tab` menu · `Up`/`Down` prefix history · `Ctrl+R` history (atuin, or PSFzf) · `Ctrl+T` files · `Ctrl+D` exit · `Ctrl+W` delete word ([5.1 differs](docs/windows.md#powershell)) |
+| Ghostty | `Cmd+Shift+,` reload (Linux `Ctrl+Shift+,`) · `` Cmd+` `` quick terminal (macOS) · `Shift+Enter` newline · left Option is Alt (macOS) |
+| Aliases | `cd` zoxide · `ls`, `la`, `ll`, `tree` eza · `cat` bat · `vim` nvim · `c` clear · `y` yazi, changing to its directory on exit |
+
+## More docs
+
+- [docs/tools.md](docs/tools.md): what each tool does after install and where its configuration lives.
+- [docs/linux.md](docs/linux.md) and [docs/windows.md](docs/windows.md): what differs by platform, WSL included.
+- [docs/updating.md](docs/updating.md): everything the update upgrades and leaves alone.
+- [docs/downloads.md](docs/downloads.md): verified downloads, the release age and `GITHUB_TOKEN`.
+- [docs/troubleshooting.md](docs/troubleshooting.md): messages that are not errors, first-try problems, undoing an install, reporting.
+- [docs/development.md](docs/development.md): repository checks, fresh installs and CI.
+- [docs/theming.md](docs/theming.md): where every color lives and how to switch Catppuccin flavor.
+- [docs/roadmap.md](docs/roadmap.md): what is planned, the checklist for adding a tool, and known issues.
 
 ## Structure
 
@@ -164,12 +143,14 @@ dotfiles/
 │                   # yazi, zsh-abbr
 ├── packages/       # Declarative package lists (brew, apt, winget)
 ├── scripts/        # Install, symlink, bootstrap, update, doctor and theme-switch scripts
-├── tests/          # Isolated installer regression tests
-├── docs/           # Roadmap and theming notes
+├── tests/          # Isolated installer regression tests and the fresh-install check
+├── docs/           # Per-tool and per-platform notes, troubleshooting, theming and the roadmap
 ├── install.sh      # Unix entry point
 └── install.ps1     # Windows entry point
 ```
 
 ## Scope
 
-The current baseline covers the terminal emulators, terminal tools, shell configuration, prompt configuration, tmux and Neovim, all in one Catppuccin flavor. Other GUI applications and operating-system preferences should be added as opt-in profiles rather than silently changing every machine. Good future profiles include `development`, `personal`, and platform-specific OS settings. Planned work is tracked in [docs/roadmap.md](docs/roadmap.md).
+The current baseline covers the terminal emulators, terminal tools, shell configuration, prompt configuration, tmux and Neovim, all in one Catppuccin flavor. Other GUI applications and operating-system preferences should be added as opt-in profiles (`minimal`, `development`, `personal`) rather than silently changing every machine; [the roadmap](docs/roadmap.md) tracks them.
+
+Do not store credentials, private keys, access tokens or work-only settings in this repository. Restore those through a password manager or another private channel.

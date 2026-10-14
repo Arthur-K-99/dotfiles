@@ -3686,7 +3686,7 @@ test_doctor_neovim_checks() {
                 case "$*" in *' -c cquit 1') ;; *) echo 'the check must be followed by cquit' >&2; return 99 ;; esac
                 printf 'ok plugin catppuccin\nok parser bash\nok package lua-language-server\n'
                 if [ -f "$DOTFILES_TEST_FIXTURE/tools-missing" ]; then
-                    printf 'missing plugin gitsigns.nvim\nstale plugin which-key.nvim\nmissing parser yaml\nmissing package marksman\nskipped parser python (no C compiler or tree-sitter CLI; see the README)\n'
+                    printf 'missing plugin gitsigns.nvim\nstale plugin which-key.nvim\nmissing parser yaml\nmissing package marksman\nskipped parser python (no C compiler or tree-sitter CLI; see docs/troubleshooting.md)\n'
                     return 1
                 fi
                 ;;
