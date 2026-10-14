@@ -44,6 +44,21 @@ dotfiles_is_wsl() {
     return 1
 }
 
+# dotfiles_login_shell: the shell new terminals start for this user, from
+# the account database (getent on Linux, Directory Services on macOS), since
+# SHELL can be unset (cron, containers) or stale after chsh until the next
+# login; SHELL only when neither answers.
+dotfiles_login_shell() {
+    local user shell=""
+    user="$(id -un 2>/dev/null)" || user=""
+    if [ -n "$user" ] && command -v getent >/dev/null 2>&1; then
+        shell="$(getent passwd "$user" 2>/dev/null | cut -d: -f7)" || shell=""
+    elif [ -n "$user" ] && command -v dscl >/dev/null 2>&1; then
+        shell="$(dscl . -read "/Users/$user" UserShell 2>/dev/null | sed -n 's/^UserShell: //p')" || shell=""
+    fi
+    printf '%s\n' "${shell:-${SHELL:-}}"
+}
+
 # dotfiles_updating: scripts/update.sh exports DOTFILES_UPDATE=1 for the
 # install stages, which then bring what they installed to the newest release
 # they may take instead of keeping whatever is present.

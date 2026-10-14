@@ -89,7 +89,19 @@ test_link_main_moves_old_files_aside() {
         *'backing up'*|*'zshrc.local'*) echo "A rerun moved files again." >&2; cat "$test_dir/output" >&2; return 1 ;;
     esac
     assert_equal 2 "$(find "$home" -maxdepth 1 -name '*.bak.*' | wc -l | tr -d ' ')"
-    # move_aside leaves nothing to move alone and moves directories and links too.
+    # The link earlier versions made at ~/.tmux.conf is retired, not backed
+    # up; a ~/.zshrc that linked into another copy of this repository gets no
+    # advice.
+    ln -s "$TEST_REPO_DIR/home/.tmux.conf" "$home/.tmux.conf"
+    rm "$home/.zshrc"
+    ln -s /elsewhere/dotfiles/home/.zshrc "$home/.zshrc"
+    HOME="$home" main > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" "retired: $home/.tmux.conf"
+    assert_equal 1 "$(find "$home" -maxdepth 1 -name '.tmux.conf.bak.*' | wc -l | tr -d ' ')"
+    case "$(cat "$test_dir/output")" in
+        *'zshrc.local'*) echo "A ~/.zshrc linked into the repository got advice." >&2; return 1 ;;
+    esac
+    # move_aside ignores a missing path and moves directories and links too.
     move_aside "$home/absent" test > "$test_dir/output"
     assert_equal '' "$(cat "$test_dir/output")"
     mkdir "$home/dir"
@@ -98,8 +110,11 @@ test_link_main_moves_old_files_aside() {
     move_aside "$home/dangling" test > /dev/null
     [ ! -e "$home/dir" ]
     [ ! -L "$home/dangling" ]
+    backup="$(find "$home" -maxdepth 1 -name 'dangling.bak.*')"
+    [ -L "$backup" ]
     assert_equal 1 "$(find "$home" -maxdepth 1 -name 'dir.bak.*' -type d | wc -l | tr -d ' ')"
     printf 'managed\n' > "$test_dir/source"
+    LINK_BACKUP=stale
     link "$test_dir/source" "$test_dir/fresh" > /dev/null
     assert_equal '' "$LINK_BACKUP"
     printf 'old\n' > "$test_dir/replaced"
@@ -236,6 +251,16 @@ test_tmux_config_loads_and_errors_are_reported() {
     assert_contains "$(cat "$test_dir/output")" 'broken.conf'
     # Both runs clean up their private server directories.
     assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-tmux-check.*' | wc -l | tr -d ' ')"
+    # A machine-local file is loaded when it exists.
+    local socket="dotfiles-local-$$" value
+    mkdir -p "$test_dir/home/.config/tmux"
+    printf 'set -g @dotfiles-local-test loaded\n' > "$test_dir/home/.config/tmux/local.conf"
+    HOME="$test_dir/home" tmux -L "$socket" -f /dev/null start-server \; set-option -g exit-empty off \; \
+        source-file "$TEST_REPO_DIR/config/tmux/tmux.conf" > "$test_dir/output" 2>&1 || :
+    value="$(tmux -L "$socket" show-options -gqv @dotfiles-local-test 2>&1)" || :
+    tmux -L "$socket" kill-server >/dev/null 2>&1 || :
+    assert_equal '' "$(cat "$test_dir/output")"
+    assert_equal loaded "$value"
 }
 
 test_theme_switch_round_trip() {
@@ -394,6 +419,27 @@ BREW
     dotfiles_init_environment
     assert_contains ":$PATH:" ":$test_dir/intel/bin:"
     assert_contains ":$PATH:" ":$HOME/.local/bin:"
+}
+
+# The login shell comes from the account database, getent on Linux and
+# Directory Services on macOS, and from SHELL only when neither answers.
+test_login_shell_discovery() {
+    source "$TEST_REPO_DIR/scripts/lib/environment.sh"
+    id() { printf 'dev\n'; }
+    getent() { [ "$1 $2" = 'passwd dev' ] && printf 'dev:x:1000:1000::/home/dev:/usr/bin/zsh\n'; }
+    assert_equal /usr/bin/zsh "$(SHELL=/bin/bash dotfiles_login_shell)"
+    unset -f getent
+    command() {
+        case "$*" in
+            '-v getent') return 1 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    dscl() { [ "$*" = '. -read /Users/dev UserShell' ] && printf 'UserShell: /bin/zsh\n'; }
+    assert_equal /bin/zsh "$(SHELL=/bin/bash dotfiles_login_shell)"
+    dscl() { return 56; }
+    assert_equal /bin/bash "$(SHELL=/bin/bash dotfiles_login_shell)"
+    assert_equal '' "$(unset SHELL; dotfiles_login_shell)"
 }
 
 test_package_index_failure() {
@@ -591,10 +637,19 @@ test_install_stages_and_failure_reporting() {
         esac
     done
     failed_stage=''
-    SHELL=/bin/bash install_main > "$test_dir/output" 2>&1
+    # The closing advice depends on the login shell, not on SHELL.
+    dotfiles_login_shell() { printf '/bin/bash\n'; }
+    SHELL=/bin/zsh install_main > "$test_dir/output" 2>&1
     assert_contains "$(cat "$test_dir/output")" 'All setup checks passed.'
-    assert_contains "$(cat "$test_dir/output")" 'Make zsh your login shell'
+    assert_contains "$(cat "$test_dir/output")" 'Your login shell is /bin/bash'
     assert_contains "$(cat "$test_dir/output")" '  chsh -s '
+    dotfiles_login_shell() { printf '/usr/bin/zsh\n'; }
+    SHELL=/bin/bash install_main > "$test_dir/output" 2>&1
+    assert_contains "$(cat "$test_dir/output")" 'Open a new zsh session'
+    case "$(cat "$test_dir/output")" in
+        *chsh*) echo "A zsh login shell was told to run chsh." >&2; return 1 ;;
+    esac
+    unset -f dotfiles_login_shell
     # A minimum release age the bootstrap could not read stops every stage.
     : > "$test_dir/stages"
     status=0
@@ -3828,6 +3883,27 @@ LOCAL
             [[ "$SSH_AUTH_SOCK" == "$DOTFILES_TEST_HOME/local-agent" ]] || exit 1
             [[ "$EZA_CONFIG_DIR" == "$DOTFILES_TEST_HOME/local-eza" ]] || exit 1
         '
+    # The bootstrap's bin directory leads PATH; another one, given from
+    # ~/.zshenv, goes first and ~/.local/bin stays.
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" PATH=/usr/bin:/bin \
+        "$zsh_binary" -df -c '
+            autoload() { :; }
+            compinit() { :; }
+            source "$DOTFILES_TEST_PROFILE" || exit 1
+            [[ "${path[1]}" == "$DOTFILES_TEST_HOME/.local/bin" ]] || exit 1
+            [[ "${path[(I)$DOTFILES_TEST_HOME/.local/bin]}" -eq 1 ]] || exit 1
+        '
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" PATH=/usr/bin:/bin \
+        DOTFILES_LOCAL_BIN="$test_dir/custom-bin" \
+        "$zsh_binary" -df -c '
+            autoload() { :; }
+            compinit() { :; }
+            source "$DOTFILES_TEST_PROFILE" || exit 1
+            [[ "${path[1]}" == "$DOTFILES_LOCAL_BIN" ]] || exit 1
+            [[ "${path[2]}" == "$DOTFILES_TEST_HOME/.local/bin" ]] || exit 1
+        '
 }
 
 test_zsh_tool_hooks() {
@@ -3985,6 +4061,7 @@ run_tests() {
         link_failed_replacement
         theme_switch_round_trip
         environment_discovery
+        login_shell_discovery
         package_index_failure
         macos_font_install_and_repair
         macos_formulae_survive_stdin_consumers
@@ -4066,6 +4143,6 @@ else
     # each test chooses for itself whether it updates and how old a release
     # must be.
     export XDG_STATE_HOME="$test_dir/state"
-    unset DOTFILES_UPDATE DOTFILES_MINIMUM_RELEASE_AGE MISE_MINIMUM_RELEASE_AGE
+    unset DOTFILES_UPDATE DOTFILES_MINIMUM_RELEASE_AGE MISE_MINIMUM_RELEASE_AGE DOTFILES_LOCAL_BIN
     "test_$1"
 fi

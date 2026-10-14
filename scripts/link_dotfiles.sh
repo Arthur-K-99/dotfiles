@@ -15,8 +15,8 @@ backup_path() {
 }
 
 # link <source> <destination>: links the destination to the source, moving
-# whatever was there to a backup first. LINK_BACKUP names that backup, or is
-# empty when there was nothing to move.
+# whatever was there to a backup first. LINK_BACKUP names that backup; it is
+# empty when nothing was moved or the link failed.
 link() {
     local src="$1"
     local dst="$2"
@@ -75,8 +75,12 @@ link() {
 main() {
     echo "Linking dotfiles..."
     link "$DOTFILES_DIR/home/.zshrc" "$HOME/.zshrc" || return 1
+    # A link into another copy of this repository holds nothing of the user's.
     if [ -n "$LINK_BACKUP" ]; then
-        echo "  Your previous ~/.zshrc is in $LINK_BACKUP; move what you still need into ~/.zshrc.local, which the new one loads last."
+        case "$(readlink "$LINK_BACKUP" 2>/dev/null)" in
+            */home/.zshrc) ;;
+            *) echo "  Your previous ~/.zshrc is in $LINK_BACKUP; move what you still need into ~/.zshrc.local, which the new one loads last." ;;
+        esac
     fi
     # tmux reads ~/.tmux.conf as well as the XDG file when both exist, so the
     # link from before the move is retired, and any other file there is backed

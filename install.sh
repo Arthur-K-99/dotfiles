@@ -24,7 +24,7 @@ run_step() {
 # With DOTFILES_UPDATE=1 (scripts/update.sh) the same stages also bring what
 # they installed to the newest release they may take.
 install_main() {
-    local packages="Installing packages" tools="Bootstrapping tools" finished="Done. All setup checks passed."
+    local packages="Installing packages" tools="Bootstrapping tools" finished="Done. All setup checks passed." login_shell
     if dotfiles_updating; then
         packages="Updating packages"
         tools="Updating tools"
@@ -42,12 +42,13 @@ install_main() {
     run_step "Verifying the setup" "$DOTFILES_DIR/scripts/doctor.sh" || return
     echo ""
     echo "$finished"
-    case "${SHELL:-}" in
+    # New terminals (Ghostty too) and tmux panes start the login shell.
+    login_shell="$(dotfiles_login_shell)"
+    case "$login_shell" in
         */zsh) echo "Open a new zsh session to apply changes." ;;
         *)
-            # Terminals, tmux panes and Ghostty start the login shell.
-            echo "Your login shell is ${SHELL:-not set}, so new terminals and tmux panes start without this configuration. Make zsh your login shell, then log out and back in:"
-            echo "  chsh -s $(command -v zsh || echo /bin/zsh)"
+            echo "Your login shell is ${login_shell:-unknown}, so new terminals and tmux panes start without this configuration. Make zsh your login shell, then log out and back in:"
+            echo "  chsh -s $(command -v zsh)"
             ;;
     esac
 }

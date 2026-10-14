@@ -9,9 +9,10 @@ elif [[ -x "/usr/local/bin/brew" ]]; then
     eval "$(/usr/local/bin/brew shellenv)"
 fi
 typeset -U path PATH
-# The bootstrap's release binaries; DOTFILES_LOCAL_BIN, exported from
-# ~/.zshenv, moves them as it did for the install.
-path=("${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}" $path)
+# The bootstrap's release binaries, in DOTFILES_LOCAL_BIN when the install
+# used another directory (export it from ~/.zshenv: .zshrc.local comes too
+# late), and ~/.local/bin, where pipx, uv and npm link theirs.
+path=("${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}" "$HOME/.local/bin" $path)
 
 # Tools that print an init script cost 20-50 ms each per shell, and the output
 # changes only when the binary does. dotfiles_cached_init <name> <tool> <cmd...>
