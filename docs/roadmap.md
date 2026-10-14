@@ -162,7 +162,7 @@ Done:
     - `script` runs without a timeout, so a prompt hook that reads the terminal would hang the job until its timeout;
     - neither CI image installs oh-my-posh, so the real configuration check runs only on machines that have it.
 
-- **First-try fixes** (PR link to follow), from a first-time read of the README against the scripts:
+- **First-try fixes** ([#16](https://github.com/Arthur-K-99/dotfiles/pull/16)), from a first-time read of the README against the scripts:
   - **An existing `~/.tmux.conf` stopped the install.** The linker retired only its own old link there. A file of the user's stayed, and since tmux would load it as well, the doctor failed and the installer stopped at "Verifying the setup". The linker now backs it up like any file it replaces (`move_aside`) and says why.
   - **A machine-local tmux file.** There was nowhere for such settings but the tracked `config/tmux/tmux.conf`. The configuration now loads `~/.config/tmux/local.conf` last when it exists (`source-file -q`), like `~/.zshrc.local` and Ghostty's `local`.
   - **A replaced `~/.zshrc` left no advice.** The linker now says to move what is still needed into `~/.zshrc.local`, which the new one loads last.
