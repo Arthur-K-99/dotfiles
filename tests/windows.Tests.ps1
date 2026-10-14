@@ -727,6 +727,7 @@ $env:PATH = $env:DOTFILES_TEST_BIN
 if ($env:DOTFILES_TEST_READLINE -eq 'yes') {
     try { Import-Module PSReadLine } catch { Write-Output 'SKIP-READLINE'; exit 0 }
 }
+if ($env:DOTFILES_TEST_UNSET_HOME) { Remove-Item Env:HOME -ErrorAction SilentlyContinue }
 $homeBefore = [Environment]::GetEnvironmentVariable('HOME')
 . $env:DOTFILES_TEST_PROFILE
 if ((Get-Alias ls).Definition -ne 'eza') { throw "ls resolves to $((Get-Alias ls).Definition), not eza" }
@@ -757,7 +758,10 @@ if ($PSVersionTable.PSVersion.Major -gt 7 -or ($PSVersionTable.PSVersion.Major -
         if ($env:DOTFILES_TEST_DIRENV_LINES -ne 'one two') { throw "direnv's hook lines did not run as lines: '$env:DOTFILES_TEST_DIRENV_LINES'" }
     }
     if ($homeBefore -and $env:HOME -ne $homeBefore) { throw "The profile changed HOME from '$homeBefore' to '$env:HOME'" }
-    if (-not $homeBefore -and $env:HOME -ne $env:DOTFILES_TEST_HOME) { throw "HOME is '$env:HOME', expected the home directory for direnv" }
+    # Without HOME, direnv gets the home Git for Windows would use: HOMEDRIVE and HOMEPATH when that directory exists.
+    $gitHome = $env:DOTFILES_TEST_HOME
+    if ($env:HOMEDRIVE -and $env:HOMEPATH -and (Test-Path -LiteralPath "$env:HOMEDRIVE$env:HOMEPATH")) { $gitHome = "$env:HOMEDRIVE$env:HOMEPATH" }
+    if (-not $homeBefore -and $env:HOME -ne $gitHome) { throw "HOME is '$env:HOME', expected '$gitHome' for direnv" }
     if ($env:ProgramFiles) {
         $gitBash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'
         if ((Test-Path -LiteralPath $gitBash) -and $env:DIRENV_BASH -ne $gitBash) { throw "DIRENV_BASH is '$env:DIRENV_BASH', expected '$gitBash'" }
@@ -834,6 +838,27 @@ exit 0
                 Assert-True ($probeResult.ExitCode -eq 0) "Profile failed (PSReadLine: $readLine): $($output -join "`n")"
                 if ($output -contains 'SKIP-READLINE') { Write-Host 'SKIP: PSReadLine cannot be imported in this non-interactive host; the bare profile load passed.' }
                 elseif ($readLine -eq 'no') { Assert-True (-not ($output -join "`n" -match '\S')) "Profile wrote unexpected output: $($output -join "`n")" }
+            }
+            # Without HOME, the profile sets it by Git for Windows' rule: HOMEDRIVE and HOMEPATH
+            # when that directory exists, else the home directory.
+            $savedDrive = $env:HOMEDRIVE
+            $savedPath = $env:HOMEPATH
+            $env:DOTFILES_TEST_UNSET_HOME = '1'
+            try {
+                $env:DOTFILES_TEST_READLINE = 'no'
+                $env:HOMEDRIVE = $null
+                $env:HOMEPATH = $null
+                $probeResult = Invoke-ProfileProbe
+                Assert-True ($probeResult.ExitCode -eq 0) "Without HOME or HOMEDRIVE: $($probeResult.Lines -join "`n")"
+                New-Item -ItemType Directory -Path (Join-Path $fixture.Directory 'share') | Out-Null
+                $env:HOMEDRIVE = $fixture.Directory
+                $env:HOMEPATH = [IO.Path]::DirectorySeparatorChar + 'share'
+                $probeResult = Invoke-ProfileProbe
+                Assert-True ($probeResult.ExitCode -eq 0) "Without HOME, with HOMEDRIVE and HOMEPATH: $($probeResult.Lines -join "`n")"
+            } finally {
+                $env:DOTFILES_TEST_UNSET_HOME = $null
+                $env:HOMEDRIVE = $savedDrive
+                $env:HOMEPATH = $savedPath
             }
             # A direnv whose hook fails (no bash, say) is skipped without a word.
             $env:DOTFILES_TEST_READLINE = 'no'
