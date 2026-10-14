@@ -16,8 +16,6 @@ on:
       - 'packages/winget.txt'
       - 'config/**'
       - '.github/workflows/fresh-install-windows.yml'
-  push:
-    branches: [rice/windows-fresh-install]
   schedule:
     - cron: '43 4 * * 1'
   workflow_dispatch:
