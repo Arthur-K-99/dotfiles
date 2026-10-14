@@ -45,8 +45,8 @@ dotfiles_is_wsl() {
 }
 
 # dotfiles_updating: scripts/update.sh exports DOTFILES_UPDATE=1 for the
-# install stages, which then bring what they installed to the latest release
-# instead of keeping whatever is present.
+# install stages, which then bring what they installed to the newest release
+# they may take instead of keeping whatever is present.
 dotfiles_updating() {
     [ "${DOTFILES_UPDATE:-0}" = 1 ]
 }
@@ -91,8 +91,8 @@ dotfiles_minimum_release_age() {
 
 # dotfiles_utc_seconds <2026-10-14T08:00:00Z>: seconds since the epoch for a
 # UTC time as the GitHub API writes it. Pure arithmetic (Howard Hinnant's
-# days-from-civil), since GNU and BSD date parse dates differently, and
-# numbers rather than strings are compared, which no locale can reorder.
+# days-from-civil), since GNU and BSD date parse dates differently; the
+# release age then compares numbers, which no locale can reorder.
 dotfiles_utc_seconds() {
     local year month day era year_of_era day_of_year day_of_era
     case "$1" in

@@ -14,9 +14,9 @@
 # user's home, so nothing on the host changes. A Mac runs the arm64 images;
 # CI runs x86_64. An install and its update make about 35 requests to the
 # GitHub API, one per release download plus one per release held back by the
-# minimum release age, and it answers 60 an hour per address without a token:
-# for several runs in a row, pass one with GITHUB_TOKEN="$(gh auth token)",
-# which reaches the container.
+# minimum release age; the API answers 60 an hour per address without a
+# token, so for several runs in a row pass one with
+# GITHUB_TOKEN="$(gh auth token)", which reaches the container.
 
 # The user that commands run as; empty runs them as the current user.
 FRESH_INSTALL_USER=""
@@ -41,7 +41,7 @@ fresh_install_prepare() {
 # as_user <command>...: runs a command from the home directory of
 # FRESH_INSTALL_USER (or the current user) in a terminal-like environment.
 # GITHUB_TOKEN, when set, reaches the installer, which reads each release's
-# digests from the GitHub API (60 requests an hour without a token).
+# digest and age from the GitHub API (60 requests an hour without a token).
 as_user() {
     if [ -n "$FRESH_INSTALL_USER" ]; then
         (cd "/home/$FRESH_INSTALL_USER" && sudo -u "$FRESH_INSTALL_USER" -H --preserve-env=GITHUB_TOKEN \

@@ -198,8 +198,8 @@ bootstrap_bat_theme() {
 # in order of preference: a signed third-party apt repository (updates arrive
 # with apt) and a static binary from a GitHub release, the latest one old
 # enough (release_tag), verified and installed into ~/.local/bin
-# (DOTFILES_LOCAL_BIN). No installer script is
-# piped into a shell: oh-my-posh's and zoxide's verified nothing they fetched.
+# (DOTFILES_LOCAL_BIN). No installer script is piped into a shell:
+# oh-my-posh's and zoxide's verified nothing they fetched.
 # Every curl call here retries timeouts and HTTP 408, 429 and 5xx answers,
 # five times over about 30 seconds (--retry 5): GitHub returns a 500 or 502
 # now and then, at times for several seconds, and an update looks up the
@@ -288,7 +288,8 @@ github_latest_tag() {
 
 # github_api <path>: GET https://api.github.com/<path>. Without a token GitHub
 # answers 60 requests an hour per address, which an install (one request per
-# release download) stays well under. GITHUB_TOKEN raises the limit when set;
+# release download, plus one per release held back by the minimum release
+# age) stays well under. GITHUB_TOKEN raises the limit when set;
 # it goes to curl on stdin, so it never shows in the process list. GitHub
 # answers a token it does not accept (expired, or for another host) with 401
 # instead of answering anonymously, so a failed request is made once more
@@ -339,20 +340,23 @@ github_api_request() {
 # list of them on stdin, without a JSON parser, and prints a line per asset:
 # <tag>/<asset name> and its digest ("-" when GitHub lists none). Split at
 # commas, brackets and braces, every key arrives on a line of its own; quotes
-# inside string values are escaped, so no value can pass for a key. An asset's
-# digest precedes its browser_download_url
-# (https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>), and its
-# API url starts the asset, which keeps the digest of one asset from carrying
-# over to the next.
+# inside string values are escaped, so no value can pass for a key. A release
+# starts at its API url and names its tag before its assets; each asset starts
+# at its own API url, which keeps the digest of one asset from carrying over
+# to the next, and ends with its browser_download_url. The tag comes from
+# tag_name rather than from that URL, where GitHub percent-encodes it
+# (v1.37.1+k3s1 becomes v1.37.1%2Bk3s1).
 release_asset_digests() {
     tr ',[{' '\n\n\n' |
         sed -n 's/^[[:space:]]*"\([a-z_]*\)":[[:space:]]*"\([^"]*\)".*/\1 \2/p' |
         awk '
-            $1 == "url" && $2 ~ /\/releases\/assets\// { digest = "-" }
-            $1 == "digest" { digest = $2 }
-            $1 == "browser_download_url" && (start = index($2, "/releases/download/")) {
-                print substr($2, start + length("/releases/download/")), digest
-            }'
+            $1 == "url" && $2 ~ /\/releases\/[0-9]+$/ { tag = ""; in_asset = 0; next }
+            $1 == "url" && $2 ~ /\/releases\/assets\/[0-9]+$/ { in_asset = 1; name = ""; digest = "-"; next }
+            $1 == "tarball_url" || $1 == "zipball_url" { in_asset = 0 }
+            !in_asset && $1 == "tag_name" { tag = $2 }
+            in_asset && $1 == "name" { name = $2 }
+            in_asset && $1 == "digest" { digest = $2 }
+            in_asset && $1 == "browser_download_url" { print tag "/" name, digest }'
 }
 
 # release_asset_digest <owner/repo> <tag> <asset>: prints the SHA-256 GitHub
@@ -412,8 +416,8 @@ download_release_asset() {
 # DOTFILES_MINIMUM_RELEASE_AGE (lib/environment.sh, a day by default): a bad or
 # compromised release is usually noticed and pulled within hours, and a
 # digest from the same release cannot tell. While the latest release is
-# younger, the newest release that is old enough is installed instead, and the
-# update moves on once a newer one is. Its age is read from the release the
+# younger, the highest version that is old enough is installed instead, and
+# the update moves on once a newer one is. Its age is read from the release the
 # digest check reads anyway, so a latest release that is old enough costs no
 # extra request; a younger one costs one more, the list of recent releases,
 # which also serves the older release's digest. With
@@ -425,7 +429,8 @@ download_release_asset() {
 # it was published ("-" for a draft). An asset updated after that (a project
 # adding a build later, or someone replacing one) moves the time to the
 # update, so a release counts from its last change. Each release starts at its
-# API url; each asset at its own.
+# API url; each asset at its own, and the assets end before the release's
+# tarball_url.
 release_records() {
     tr ',[{' '\n\n\n' |
         sed -n -e 's/^[[:space:]]*"\([a-z_]*\)":[[:space:]]*"\([^"]*\)".*/\1 \2/p' \
@@ -442,6 +447,7 @@ release_records() {
             }
             $1 == "url" && $2 ~ /\/releases\/[0-9]+$/ { flush(); next }
             $1 == "url" && $2 ~ /\/releases\/assets\/[0-9]+$/ { in_asset = 1; next }
+            $1 == "tarball_url" || $1 == "zipball_url" { in_asset = 0 }
             !in_asset && $1 == "tag_name" { tag = $2 }
             !in_asset && $1 == "draft" { draft = $2 }
             !in_asset && $1 == "prerelease" { prerelease = $2 }
@@ -450,8 +456,9 @@ release_records() {
             END { flush() }'
 }
 
-# release_published <owner/repo> <tag>: when the release was published (or
-# last changed), as the API writes it, such as 2026-10-14T08:00:00Z.
+# release_published <owner/repo> <tag>: when the release was published, or an
+# asset of it last changed if that came later, as the API writes it, such as
+# 2026-10-14T08:00:00Z.
 release_published() {
     local json published
     if ! json="$(github_api "repos/$1/releases/tags/$2")"; then
@@ -466,29 +473,31 @@ release_published() {
     printf '%s\n' "$published"
 }
 
-# release_version <tag>: the version number a tag names, from v1.2.3 or 1.2.3;
-# fails for tags that name none, such as Neovim's "stable" and "nightly".
+# release_version <tag>: the version number a tag is, from v1.2.3 or 1.2.3;
+# fails for every other tag, such as Neovim's "stable" and "nightly" and
+# prereleases a project did not flag as such (tree-sitter's
+# v0.21.0-pre-release-1, dust's v0.8.1-alpha.1).
 release_version() {
     local version="${1#v}"
-    version="${version%%[!0-9.]*}"
     case "$version" in
-        [0-9]*) printf '%s\n' "$version" ;;
-        *) return 1 ;;
+        ''|.*|*.|*..*|*[!0-9.]*) return 1 ;;
     esac
+    printf '%s\n' "$version"
 }
 
 # release_tag <owner/repo> <asset template> [installed tag]: the tag of the
 # release to install, given the tag of the one installed, if any.
 # - The release the project marks latest (github_latest_tag), once it is
-#   DOTFILES_MINIMUM_RELEASE_AGE old.
+#   DOTFILES_MINIMUM_RELEASE_AGE old (release_published).
 # - While it is younger, the highest version among the 30 most recent releases
 #   that is old enough, no higher than the latest, and has the asset with a
 #   SHA-256 digest (projects publish releases whose builds failed). Drafts,
-#   prereleases and tags without a version number never count.
-# - The installed tag when it is at least as new as that choice: a machine is
-#   never moved to an older release (a project deleting its newest releases
-#   makes the latest one go back), and once installed, the latest release is
-#   not checked again.
+#   prereleases and tags that are not plain version numbers never count.
+# - The installed tag when it is at least as new as that choice, or newer than
+#   the latest: a machine is never moved to an older release (a project
+#   deleting its newest releases makes the latest one go back), and once
+#   installed, the latest release is not checked again. Without an installed
+#   tag nothing is known to be newer.
 # Notes about releases passed over go to stderr.
 release_tag() {
     local repo="$1" template="$2" installed="${3:-}" latest latest_version installed_version="" age now cutoff published
@@ -503,7 +512,7 @@ release_tag() {
         installed_version="$(release_version "$installed")" || installed_version=""
     fi
     if [ -n "$installed_version" ] && [ -n "$latest_version" ] &&
-        dotfiles_version_at_least "$installed_version" "$latest_version"; then
+        ! dotfiles_version_at_least "$latest_version" "$installed_version"; then
         echo "$repo $installed is newer than its latest release, $latest; keeping it." >&2
         printf '%s\n' "$installed"
         return 0
@@ -549,12 +558,12 @@ release_tag() {
         [ -z "$best" ] ||
             { [ -n "$installed_version" ] && dotfiles_version_at_least "$installed_version" "$best_version"; }
     }; then
-        echo "$repo $latest was published at $published, less than $(dotfiles_minimum_release_age_label) ago; keeping $installed." >&2
+        echo "$repo $latest dates from $published, less than $(dotfiles_minimum_release_age_label) ago; keeping $installed." >&2
         printf '%s\n' "$installed"
         return 0
     fi
     if [ -z "$best" ]; then
-        echo "No release of $repo among the 30 most recent is older than $(dotfiles_minimum_release_age_label) and has $(release_asset "$template" "$latest"); the latest, $latest, was published at $published." >&2
+        echo "No release of $repo among the 30 most recent is older than $(dotfiles_minimum_release_age_label) and lists its asset (for $latest, $(release_asset "$template" "$latest")) with a SHA-256 digest; the latest, $latest, dates from $published." >&2
         if [ "$(dotfiles_utc_seconds "$published")" -gt "$now" ]; then
             echo "That is later than this machine's clock ($(dotfiles_utc_time "$now")); check the system time." >&2
         fi
@@ -565,19 +574,20 @@ release_tag() {
     if cache="$(github_api_cache "repos/$repo/releases/tags/$best")"; then
         printf '%s\n' "$json" > "$cache" || :
     fi
-    echo "$repo $latest was published at $published, less than $(dotfiles_minimum_release_age_label) ago; taking $best." >&2
+    echo "$repo $latest dates from $published, less than $(dotfiles_minimum_release_age_label) ago; taking $best." >&2
     printf '%s\n' "$best"
 }
 
 # install_github_release <owner/repo> <asset template> <binary>...
-# Installs the named binaries from the release release_tag chooses (the latest
-# one old enough for DOTFILES_MINIMUM_RELEASE_AGE) into the local bin directory
-# when one of them is missing from PATH, and records the tag. Updating,
-# binaries in the local bin directory are fetched again when release_tag
-# chooses another release than the recorded one; a binary elsewhere on PATH
-# belongs to whatever installed it and is left alone. Templates may use {tag},
-# {version} (the tag without a leading v), {os} (linux|darwin), {arch},
-# {arch_go}, {arch_deb}, {arch_amd64} and {arch_node}.
+# Installs the named binaries from the release that release_tag chooses (the
+# latest one old enough for DOTFILES_MINIMUM_RELEASE_AGE) into the local bin
+# directory when one of them is missing from PATH, and records the tag.
+# Updating, binaries in the local bin directory are fetched again when
+# release_tag chooses another release than the recorded one; a binary
+# elsewhere on PATH belongs to whatever installed it and is left alone.
+# Templates may use {tag}, {version} (the tag without a leading v), {os}
+# (linux|darwin), {arch}, {arch_go}, {arch_deb}, {arch_amd64} and
+# {arch_node}.
 install_github_release() {
     local repo="$1" template="$2"
     shift 2
@@ -685,15 +695,14 @@ bootstrap_zoxide() {
 # mise is a single binary; the musl build runs on every glibc. Updating, a
 # copy in the local bin directory updates itself: `mise self-update` checks
 # the release's signatures and takes the newest release older than its
-# minimum release age, which it is given (mise_minimum_release_age), so the
-# bootstrap records no tag for it. A copy elsewhere on PATH (Homebrew's on
-# macOS) is left alone.
+# minimum release age (mise_with_release_age), never an older one than it
+# is, so the bootstrap records no tag for it. A copy elsewhere on PATH
+# (Homebrew's on macOS) is left alone.
 bootstrap_mise_binary() {
-    local bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}" path tag age template='mise-{tag}-linux-{arch_node}-musl'
+    local bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}" path tag template='mise-{tag}-linux-{arch_node}-musl'
     if bootstrap_owns "$bin_dir/mise" && dotfiles_updating; then
         echo "Updating mise..."
-        age="$(mise_minimum_release_age)" || return
-        MISE_MINIMUM_RELEASE_AGE="$age" "$bin_dir/mise" self-update --yes
+        mise_with_release_age "$bin_dir/mise" self-update --yes
         return
     fi
     if path="$(command -v mise)"; then
@@ -754,8 +763,10 @@ install_neovim_release() (
             echo "Neovim $version was not installed by the bootstrap; left alone"
             return 0
         fi
+        # Without a record, the running version keeps release_tag from
+        # choosing an older one.
         recorded="$(recorded_release neovim/neovim)"
-        tag="$(release_tag neovim/neovim "$template" "$recorded")" || return
+        tag="$(release_tag neovim/neovim "$template" "${recorded:-v$version}")" || return
         if [ "$recorded" = "$tag" ]; then
             echo "Neovim $tag is current"
             return 0
@@ -845,7 +856,7 @@ DOTFILES_TREE_SITTER_ASSET='tree-sitter-cli-linux-{arch_node}.zip'
 # and only by a release that runs: a working CLI is never traded for one that
 # does not.
 install_tree_sitter_cli() {
-    local version glibc tag recorded record bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
+    local version glibc tag recorded record failed="" failed_glibc bin_dir="${DOTFILES_LOCAL_BIN:-$HOME/.local/bin}"
     record="$(dotfiles_tree_sitter_record)"
     if version="$(dotfiles_tree_sitter_version)" && dotfiles_version_at_least "$version" "$DOTFILES_TREE_SITTER_MINIMUM" && \
         ! dotfiles_tree_sitter_glibc_error >/dev/null; then
@@ -857,8 +868,10 @@ install_tree_sitter_cli() {
             echo "tree-sitter $version was not installed by the bootstrap; left alone"
             return 0
         fi
+        # Without a record, the running version keeps release_tag from
+        # choosing an older one.
         recorded="$(recorded_release tree-sitter/tree-sitter)"
-        tag="$(release_tag tree-sitter/tree-sitter "$DOTFILES_TREE_SITTER_ASSET" "$recorded")" || return
+        tag="$(release_tag tree-sitter/tree-sitter "$DOTFILES_TREE_SITTER_ASSET" "${recorded:-v$version}")" || return
         if [ "$recorded" = "$tag" ]; then
             echo "tree-sitter $tag is current"
             return 0
@@ -869,8 +882,15 @@ install_tree_sitter_cli() {
         fi
         echo "Updating tree-sitter $version to $tag..."
     else
-        tag="$(release_tag tree-sitter/tree-sitter "$DOTFILES_TREE_SITTER_ASSET")" || return
-        if [ -r "$record" ] && glibc="$(dotfiles_glibc_version)" && [ "$(cat "$record")" = "$tag $glibc" ]; then
+        # A release left out on this glibc counts as installed for
+        # release_tag: a rerun asks the API nothing until the latest release
+        # differs, and never tries an older one.
+        if [ -r "$record" ] && glibc="$(dotfiles_glibc_version)"; then
+            read -r failed failed_glibc < "$record" || :
+            [ "${failed_glibc:-}" = "$glibc" ] || failed=""
+        fi
+        tag="$(release_tag tree-sitter/tree-sitter "$DOTFILES_TREE_SITTER_ASSET" "$failed")" || return
+        if [ -n "$failed" ] && [ "$tag" = "$failed" ]; then
             echo "tree-sitter $tag does not run on glibc $glibc; Neovim keeps skipping the parsers"
             return 0
         fi
@@ -1010,18 +1030,20 @@ install_nerd_font() (
 
 # --- Runtimes and themes ------------------------------------------------------
 
-# mise_minimum_release_age: DOTFILES_MINIMUM_RELEASE_AGE as mise reads its own
-# MISE_MINIMUM_RELEASE_AGE, in seconds ("86400s"), unless that is set: mise
-# applies it to its self-update and to the runtimes it installs, and waits a
-# day on its own when it is unset.
-mise_minimum_release_age() {
+# mise_with_release_age <command>...: runs a mise command with
+# DOTFILES_MINIMUM_RELEASE_AGE, when that is set, as mise's own
+# MISE_MINIMUM_RELEASE_AGE in seconds ("86400s"), which its self-update and
+# its installs honour. Unset, mise waits its own default day, or whatever its
+# configuration says; a MISE_MINIMUM_RELEASE_AGE already in the environment
+# is left as it is.
+mise_with_release_age() {
     local seconds
-    if [ -n "${MISE_MINIMUM_RELEASE_AGE:-}" ]; then
-        printf '%s\n' "$MISE_MINIMUM_RELEASE_AGE"
-        return 0
+    if [ -n "${DOTFILES_MINIMUM_RELEASE_AGE:-}" ] && [ -z "${MISE_MINIMUM_RELEASE_AGE:-}" ]; then
+        seconds="$(dotfiles_minimum_release_age)" || return
+        MISE_MINIMUM_RELEASE_AGE="${seconds}s" "$@"
+    else
+        "$@"
     fi
-    seconds="$(dotfiles_minimum_release_age)" || return
-    printf '%ss\n' "$seconds"
 }
 
 # mise installs every runtime pinned in config/mise/config.toml (Node.js LTS),
@@ -1031,20 +1053,18 @@ mise_minimum_release_age() {
 # that a project's own mise file does not decide; a mise file in the home
 # directory itself, such as ~/.tool-versions, is the user's global choice and
 # counts. (`mise upgrade --global` would skip those, but only recent mise
-# releases have it.) Both take the newest release older than the minimum
-# release age.
+# releases have it.) Both take the newest release older than mise's minimum
+# release age (mise_with_release_age).
 bootstrap_runtimes() {
-    local age
     if ! command -v mise &>/dev/null; then
         echo "mise is not installed; install packages first." >&2
         return 1
     fi
-    age="$(mise_minimum_release_age)" || return
     echo "Installing runtimes with mise..."
-    MISE_MINIMUM_RELEASE_AGE="$age" mise install --yes || return
+    mise_with_release_age mise install --yes || return
     if dotfiles_updating; then
         echo "Upgrading runtimes with mise..."
-        (cd "$HOME" && MISE_MINIMUM_RELEASE_AGE="$age" mise upgrade --yes) || return
+        (cd "$HOME" && mise_with_release_age mise upgrade --yes) || return
     fi
     if ! mise which node >/dev/null 2>&1; then
         echo "mise does not provide node after installing; check ~/.config/mise/config.toml." >&2
@@ -1162,7 +1182,7 @@ nvim_with_mise_node() {
 
 bootstrap_tools_main() {
     dotfiles_init_environment || return
-    # A wrong DOTFILES_MINIMUM_RELEASE_AGE stops the stage before anything changes.
+    # A bad DOTFILES_MINIMUM_RELEASE_AGE stops the stage before any change.
     dotfiles_minimum_release_age >/dev/null || return
     DOTFILES_GITHUB_API_CACHE="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-github-api.XXXXXX")" || return
     export DOTFILES_GITHUB_API_CACHE
