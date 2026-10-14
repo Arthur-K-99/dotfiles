@@ -3,6 +3,8 @@
 DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/environment.sh
 source "$DOTFILES_DIR/scripts/lib/environment.sh"
+# shellcheck source=lib/apt_repositories.sh
+source "$DOTFILES_DIR/scripts/lib/apt_repositories.sh"
 
 # --- Release records ----------------------------------------------------------
 # The tag each tool from a GitHub release was installed at, one file per
@@ -202,50 +204,17 @@ bootstrap_bat_theme() {
 # now and then, at times for several seconds, and an update looks up the
 # latest tag of every release tool.
 
-# key_fingerprints <key file>: the primary fingerprint of every OpenPGP key in
-# the file, one per line, read without importing anything. gpg wants a
-# writable home even for --show-keys (it would create ~/.gnupg), so it gets
-# an empty one that goes away afterwards.
-key_fingerprints() (
-    local home
-    home="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-gnupg.XXXXXX")" || return
-    trap 'rm -rf "$home"' EXIT
-    GNUPGHOME="$home" gpg --batch --quiet --show-keys --with-colons -- "$1" |
-        awk -F: '$1 == "pub" { primary = 1; next } primary && $1 == "fpr" { print $10; primary = 0 }'
-)
-
-# install_apt_key <name> <key url> <fingerprint>: installs a repository's
-# signing key as /etc/apt/keyrings/<name>.gpg, only when the file downloaded
-# holds exactly the key whose fingerprint is pinned here. apt then trusts
-# that key for that repository alone (signed-by). Neither project publishes
-# its fingerprint; each pin is the key that signs the repository's InRelease.
-install_apt_key() (
-    local work found
-    if ! command -v gpg >/dev/null 2>&1; then
-        echo "gnupg is not installed; install packages first." >&2
-        return 1
-    fi
-    work="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-key.XXXXXX")" || return
-    trap 'rm -rf "$work"' EXIT
-    curl -fsSL --retry 5 -o "$work/key" "$2" || return
-    found="$(key_fingerprints "$work/key")" || :
-    if [ "$found" != "$3" ]; then
-        printf 'The signing key at %s is not the one pinned for the %s repository:\n  expected %s\n  received %s\n' \
-            "$2" "$1" "$3" "$(printf '%s' "${found:-no OpenPGP key}" | tr '\n' ' ')" >&2
-        return 1
-    fi
-    sudo mkdir -p /etc/apt/keyrings || return
-    sudo gpg --dearmor --yes -o "/etc/apt/keyrings/$1.gpg" < "$work/key"
-)
-
-# install_apt_repository <name> <key url> <key fingerprint> <sources line> <package>...
-# Package names double as command names. The sources line must reference
-# /etc/apt/keyrings/<name>.gpg. Updating, installed packages are upgraded from
-# the index the package stage has just refreshed, except held ones.
+# install_apt_repository <name> <package>...: installs packages from one of
+# the repositories in lib/apt_repositories.sh, adding it with its pinned key
+# when one of them is missing. Package names double as command names.
+# Updating, installed packages are upgraded from the index the package stage
+# has just refreshed (after fetching the keys again), except held ones.
 install_apt_repository() {
-    local name="$1" key_url="$2" fingerprint="$3" sources_line="$4"
-    shift 4
+    local name="$1" fields sources_line
+    shift
     local package held
+    fields="$(dotfiles_apt_repository "$name")" || return
+    read -r _ _ sources_line <<<"$fields"
     local missing=() upgrades=()
     if dotfiles_updating; then
         held="$(apt-mark showhold)" || return
@@ -268,24 +237,19 @@ install_apt_repository() {
         return
     fi
     echo "Installing ${missing[*]} from the $name repository..."
-    install_apt_key "$name" "$key_url" "$fingerprint" || return
-    printf '%s\n' "$sources_line" | sudo tee "/etc/apt/sources.list.d/$name.list" >/dev/null || return
+    install_apt_key "$name" || return
+    printf '%s\n' "$sources_line" | sudo tee "$DOTFILES_APT_ETC/sources.list.d/$name.list" >/dev/null || return
     sudo apt-get update -qq || return
     # Updating, the installed packages of the repository come along.
     sudo apt-get install -y "${missing[@]}" ${upgrades[@]+"${upgrades[@]}"} || return
 }
 
 install_eza() {
-    install_apt_repository gierens https://raw.githubusercontent.com/eza-community/eza/main/deb.asc \
-        1548BC8A4B4D2688F9B0DAF7EC29E2090CE3FD43 \
-        "deb [signed-by=/etc/apt/keyrings/gierens.gpg] https://deb.gierens.de stable main" eza
+    install_apt_repository gierens eza
 }
 
-# Charm's key expires on 2027-07-13 (docs/roadmap.md).
 install_charm_tools() {
-    install_apt_repository charm https://repo.charm.sh/apt/gpg.key \
-        ED927B38BE981E53CA09153D03BBF595D4DFD35C \
-        "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" glow gum
+    install_apt_repository charm glow gum
 }
 
 # Projects spell architectures differently. Prints five words: {arch}
