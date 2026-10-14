@@ -852,7 +852,7 @@ exit 0
         # The mocked report resolves a line once the step that fixes it has succeeded,
         # as the real report would; StayBroken keeps every line as it is.
         $neovimState = @{ Version = [version]'0.12.6'; Report = @('ok plugin fzf-lua', 'missing plugin catppuccin', 'missing package marksman'); PluginsDone = $false; InstallDone = $false; StayBroken = $false
-            PluginsExitCode = 1; InstallExitCode = 1; NodeDirectory = $null; Calls = [Collections.Generic.List[string]]::new(); InstallPath = $null }
+            PluginsExitCode = 1; InstallExitCode = 1; NodeDirectory = $null; Calls = [Collections.Generic.List[string]]::new(); InstallPath = $null; PluginsGit = $null; InstallGit = $null }
         function Get-DotfilesCommandPath { param($Name) if ($Name -eq 'nvim') { 'mock-nvim' } }
         function Get-DotfilesNeovimVersion { param($Command) Assert-True ($Command -eq 'mock-nvim') 'The version comes from the discovered nvim'; $neovimState.Version }
         function Get-DotfilesNeovimCheck {
@@ -873,23 +873,33 @@ exit 0
             param($Command, $Arguments, [switch]$Quiet)
             Assert-True ($Command -eq 'mock-nvim' -and -not $Quiet -and $Arguments[0] -eq '--headless' -and $Arguments[-2] -eq '-c' -and $Arguments[-1] -eq 'cquit 1') 'Installation runs nvim headless, visibly, with cquit after the Lua'
             $neovimState.Calls.Add($Arguments[2])
+            $git = "$env:GIT_CONFIG_COUNT $env:GIT_CONFIG_KEY_0 $env:GIT_CONFIG_VALUE_0"
             if ($Arguments[2] -eq $DotfilesNeovimPluginsLua) {
+                $neovimState.PluginsGit = $git
                 if ($neovimState.PluginsExitCode -eq 0) { $neovimState.PluginsDone = $true }
                 return $neovimState.PluginsExitCode
             }
             Assert-True ($Arguments[2] -eq $DotfilesNeovimInstallLua) "Unexpected nvim command: $Arguments"
+            $neovimState.InstallGit = $git
             $neovimState.InstallPath = $env:PATH
             if ($neovimState.InstallExitCode -eq 0) { $neovimState.InstallDone = $true }
             return $neovimState.InstallExitCode
         }
         $savedPath = $env:PATH
+        $savedGitCount = $env:GIT_CONFIG_COUNT
         try {
+            # The plugin checkouts run without git's detached-HEAD advice; the environment is restored.
+            $env:GIT_CONFIG_COUNT = 'fixture'
             Assert-Throws { Install-DotfilesNeovim } 'Neovim plugin install failed \(exit code 1\)\. Rerun install.ps1 to retry'
             Assert-True (($neovimState.Calls -join "`n") -eq $DotfilesNeovimPluginsLua) "A failed plugin install stops before the parsers: $($neovimState.Calls -join ' | ')"
+            Assert-True ($neovimState.PluginsGit -eq '1 advice.detachedHead false') "git's detached-HEAD advice is off for plugins(): $($neovimState.PluginsGit)"
+            Assert-True ($env:GIT_CONFIG_COUNT -eq 'fixture' -and $null -eq $env:GIT_CONFIG_KEY_0 -and $null -eq $env:GIT_CONFIG_VALUE_0) "The git environment is restored after a failure: [$env:GIT_CONFIG_COUNT] [$env:GIT_CONFIG_KEY_0] [$env:GIT_CONFIG_VALUE_0]"
+            $env:GIT_CONFIG_COUNT = $savedGitCount
             $neovimState.PluginsExitCode = 0
             $neovimState.Calls.Clear()
             Assert-Throws { Install-DotfilesNeovim } 'parser and language server install failed \(exit code 1\)\. Rerun install.ps1 to retry'
             Assert-True ($neovimState.Calls.Count -eq 2 -and $neovimState.Calls[1] -eq $DotfilesNeovimInstallLua) "The parsers follow the plugins: $($neovimState.Calls -join ' | ')"
+            Assert-True ($neovimState.InstallGit.Trim() -eq [string]$savedGitCount) "Only plugins() runs with the git settings: $($neovimState.InstallGit)"
             Assert-True ($neovimState.InstallPath -eq $savedPath) 'Without a mise Node.js the install runs with the current PATH'
             Assert-True ($env:PATH -eq $savedPath) 'PATH is restored after a failure'
             # The retry installs only what is still missing: the plugins are in place.
@@ -927,7 +937,7 @@ exit 0
             function Get-DotfilesCommandPath { param($Name) $null }
             Assert-Throws { Install-DotfilesNeovim } 'nvim is unavailable.*Reopen PowerShell and rerun install.ps1'
             Assert-True ($neovimState.Calls.Count -eq 0) 'Nothing runs without a usable Neovim'
-        } finally { $env:PATH = $savedPath }
+        } finally { $env:PATH = $savedPath; $env:GIT_CONFIG_COUNT = $savedGitCount }
     }
 
     Invoke-Test 'Updating Neovim runs update() once the report passes, with mise Node.js first, and can be retried' {
