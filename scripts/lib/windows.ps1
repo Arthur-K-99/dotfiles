@@ -691,6 +691,10 @@ function Get-DotfilesDoctorCommands {
 function Invoke-DotfilesDoctor {
     param([string]$DotfilesDir, [string]$HomeDirectory)
     $failures = 0
+    # Hints name the scripts by full path, so they work from any directory.
+    $runtimesScript = Join-Path (Join-Path $DotfilesDir 'scripts') 'install_runtimes.ps1'
+    $doctorScript = Join-Path (Join-Path $DotfilesDir 'scripts') 'doctor.ps1'
+    $installScript = Join-Path $DotfilesDir 'install.ps1'
     Write-Host 'Checking commands...'
     foreach ($name in Get-DotfilesDoctorCommands) {
         if (Get-DotfilesCommandPath $name) { Write-Host "  [ok] $name" }
@@ -708,10 +712,10 @@ function Invoke-DotfilesDoctor {
     try {
         $miseCommand = Get-DotfilesCommandPath 'mise'
         if ($miseCommand -and (Invoke-DotfilesNativeCommand $miseCommand @('which', 'node') -Quiet) -eq 0) { Write-Host '  [ok] Node.js via mise' }
-        else { Write-Host '  [missing] Node.js via mise (rerun: scripts\install_runtimes.ps1)'; $failures++ }
+        else { Write-Host "  [missing] Node.js via mise (rerun: $runtimesScript)"; $failures++ }
         foreach ($flavor in Get-DotfilesYaziFlavors $HomeDirectory) {
             if (Test-Path -LiteralPath (Get-DotfilesYaziFlavorFile $HomeDirectory $flavor) -PathType Leaf) { Write-Host "  [ok] yazi flavor $flavor" }
-            else { Write-Host "  [missing] yazi flavor $flavor (rerun: scripts\install_runtimes.ps1)"; $failures++ }
+            else { Write-Host "  [missing] yazi flavor $flavor (rerun: $runtimesScript)"; $failures++ }
         }
     } catch { Write-Host "  [failed] $($_.Exception.Message)"; $failures++ }
     Write-Host 'Checking Neovim...'
@@ -725,7 +729,7 @@ function Invoke-DotfilesDoctor {
         } elseif (-not (Test-Path -LiteralPath $lazyFile -PathType Leaf)) {
             # Without lazy.nvim a start would clone it, so the doctor stops here.
             Write-Host "  [ok] Neovim $version"
-            Write-Host "  [missing] lazy.nvim ($lazyFile; rerun: scripts\install_runtimes.ps1)"; $failures++
+            Write-Host "  [missing] lazy.nvim ($lazyFile; rerun: $runtimesScript)"; $failures++
         } else {
             Write-Host "  [ok] Neovim $version"
             Write-Host '  [ok] lazy.nvim'
@@ -744,8 +748,8 @@ function Invoke-DotfilesDoctor {
                         switch ($Matches[1]) {
                             'ok' { Write-Host "  [ok] $label" }
                             'skipped' { Write-Host "  [skip] $label$($Matches[4])" }
-                            'stale' { Write-Host "  [stale] $label is not at the commit lazy-lock.json pins (rerun: scripts\install_runtimes.ps1)"; $failures++ }
-                            default { Write-Host "  [missing] $label (rerun: scripts\install_runtimes.ps1)"; $failures++ }
+                            'stale' { Write-Host "  [stale] $label is not at the commit lazy-lock.json pins (rerun: $runtimesScript)"; $failures++ }
+                            default { Write-Host "  [missing] $label (rerun: $runtimesScript)"; $failures++ }
                         }
                     } else { Write-Host "  [missing] Neovim check: $line"; $failures++ }
                 }
@@ -761,7 +765,7 @@ function Invoke-DotfilesDoctor {
     } catch { Write-Host "  [failed] $($_.Exception.Message)"; $failures++ }
     if (Test-DotfilesNerdFont) { Write-Host '  [ok] CaskaydiaCove Nerd Font' }
     else { Write-Host '  [missing] CaskaydiaCove Nerd Font'; $failures++ }
-    if ($failures) { throw "$failures check(s) need attention. Rerun install.ps1 to repair the setup, then run scripts/doctor.ps1 again." }
+    if ($failures) { throw "$failures check(s) need attention. Rerun $installScript to repair the setup, then run $doctorScript again." }
     Write-Host 'All checks passed.'
 }
 

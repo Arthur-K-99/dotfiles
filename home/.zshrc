@@ -202,6 +202,14 @@ alias ll='eza -ll --icons=always'
 alias tree='eza --tree --icons=always'
 alias vim='nvim'
 alias c='clear'
+# Neovim for whatever asks for an editor (git, Ctrl-X Ctrl-E), unless one is
+# chosen already; ~/.zshrc.local, loaded last, can choose another.
+if [[ -z "$EDITOR" ]] && (( $+commands[nvim] )); then
+    export EDITOR=nvim
+fi
+if [[ -z "$VISUAL" && -n "$EDITOR" ]]; then
+    export VISUAL="$EDITOR"
+fi
 
 # Shell integrations
 dotfiles_cached_init zoxide zoxide zoxide init --cmd cd zsh

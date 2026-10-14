@@ -902,7 +902,7 @@ test_apt_key_pinning() {
     assert_equal 2 "$(wc -l < "$test_dir/sudo" | tr -d ' ')"
     assert_equal $'--kill all\n--remove-socketdir\n--kill all\n--remove-socketdir' "$(cut -d ' ' -f 2- "$test_dir/gpgconf")"
     assert_equal 2 "$(cut -d ' ' -f 1 "$test_dir/gpgconf" | sort -u | grep -cF "$DOTFILES_GPG_TMPDIR/dotfiles-gpg.")"
-    assert_contains "$(cat "$test_dir/commands")" '--retry 5'
+    assert_contains "$(cat "$test_dir/commands")" '--retry 7'
     assert_contains "$(cat "$test_dir/commands")" 'https://example.invalid/deb.asc'
     assert_equal 0 "$(find "$TMPDIR" "$DOTFILES_GPG_TMPDIR" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
     # The same key again: the keyring is current and needs no sudo.
@@ -1560,7 +1560,7 @@ test_github_release_install() {
     install_github_release owner/tool 'tool-{tag}-{arch}-unknown-linux-musl.tar.gz' tool
     assert_equal 'https://github.com/owner/tool/releases/download/v1.2.3/tool-v1.2.3-x86_64-unknown-linux-musl.tar.gz' "$(tail -n 1 "$test_dir/downloads")"
     # The tag lookup and the download both retry transient HTTP failures.
-    assert_equal 0 "$(grep -c -v -- '--retry 5' "$test_dir/commands")"
+    assert_equal 0 "$(grep -c -v -- '--retry 7' "$test_dir/commands")"
     assert_equal from-release "$("$test_dir/bin/tool")"
     assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-release.*' | wc -l | tr -d ' ')"
     # Several binaries from one zip; {version} drops the v, Go and Debian spellings differ.
@@ -2010,7 +2010,7 @@ JSON
     assert_equal v1.2.3 "$(cat "$record")"
     assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-release.*' | wc -l | tr -d ' ')"
     # Every call, the API's included, retries transient failures.
-    assert_equal 0 "$(grep -c -v -- '--retry 5' "$test_dir/calls")"
+    assert_equal 0 "$(grep -c -v -- '--retry 7' "$test_dir/calls")"
 }
 
 # A release is installed once it is DOTFILES_MINIMUM_RELEASE_AGE old, a day
@@ -3432,6 +3432,11 @@ test_linux_font_update() {
 }
 
 test_doctor_linux_font() {
+    # The doctor's hints name the scripts by a full path, with ~ for the home
+    # directory, so they work from any directory.
+    local parent="${TEST_REPO_DIR%/*}" name="${TEST_REPO_DIR##*/}"
+    assert_equal "~/$name/scripts" "$(HOME="$parent" bash -c 'source "$1/scripts/doctor.sh"; printf %s "$DOTFILES_SCRIPTS"' _ "$TEST_REPO_DIR")"
+    assert_equal "$TEST_REPO_DIR/scripts" "$(HOME="$test_dir/elsewhere" bash -c 'source "$1/scripts/doctor.sh"; printf %s "$DOTFILES_SCRIPTS"' _ "$TEST_REPO_DIR")"
     source "$TEST_REPO_DIR/scripts/doctor.sh"
     export DOTFILES_TEST_FIXTURE="$test_dir"
     uname() { if [ "${1:-}" = -r ]; then cat "$DOTFILES_TEST_FIXTURE/kernel"; else command uname "$@"; fi; }
@@ -3440,7 +3445,7 @@ test_doctor_linux_font() {
     failures=0
     check_linux_font > "$test_dir/output"
     assert_equal 1 "$failures"
-    assert_contains "$(cat "$test_dir/output")" '[missing] CaskaydiaCove Nerd Font Mono (rerun: bash scripts/bootstrap_tools.sh)'
+    assert_contains "$(cat "$test_dir/output")" "[missing] CaskaydiaCove Nerd Font Mono (rerun: bash $DOTFILES_SCRIPTS/bootstrap_tools.sh)"
     : > "$test_dir/registered"
     failures=0
     check_linux_font > "$test_dir/output"
@@ -3462,7 +3467,7 @@ test_doctor_linux_font() {
     printf '6.1.0-25-amd64\n' > "$test_dir/kernel"
     check_linux_font > "$test_dir/output"
     assert_equal 1 "$failures"
-    assert_contains "$(cat "$test_dir/output")" 'fontconfig is not installed; rerun: bash scripts/install_packages.sh'
+    assert_contains "$(cat "$test_dir/output")" "fontconfig is not installed; rerun: bash $DOTFILES_SCRIPTS/install_packages.sh"
 }
 
 # Every apt repository the bootstrap added needs its pinned key, alone, in its
@@ -3503,7 +3508,7 @@ test_doctor_apt_keys() {
     failures=0
     check_apt_keys > "$test_dir/output"
     assert_equal 1 "$failures"
-    assert_equal "  [missing] gierens apt repository key ($keyring is missing or holds no key; run: bash scripts/update.sh)" "$(grep -F ' gierens apt ' "$test_dir/output")"
+    assert_equal "  [missing] gierens apt repository key ($keyring is missing or holds no key; run: bash $DOTFILES_SCRIPTS/update.sh)" "$(grep -F ' gierens apt ' "$test_dir/output")"
     assert_equal '  [ok] charm apt repository key' "$(grep -F ' charm apt ' "$test_dir/output")"
     # A keyring nobody may read fails whatever it holds. Root reads it all
     # the same, so only another user can check this.
@@ -3515,7 +3520,7 @@ test_doctor_apt_keys() {
         failures=0
         check_apt_keys > "$test_dir/output"
         assert_equal 1 "$failures"
-        assert_equal "  [missing] gierens apt repository key ($keyring is not readable, so apt cannot read it either; run: bash scripts/update.sh)" "$(grep -F ' gierens apt ' "$test_dir/output")"
+        assert_equal "  [missing] gierens apt repository key ($keyring is not readable, so apt cannot read it either; run: bash $DOTFILES_SCRIPTS/update.sh)" "$(grep -F ' gierens apt ' "$test_dir/output")"
         rm -f "$keyring"
     fi
     # Another key, or a second key beside the pinned one.
@@ -3524,14 +3529,14 @@ test_doctor_apt_keys() {
         failures=0
         check_apt_keys > "$test_dir/output"
         assert_equal 1 "$failures"
-        assert_equal "  [stale] gierens apt repository key ($keyring does not hold exactly the pinned key $gierens; run: bash scripts/update.sh)" "$(grep -F ' gierens apt ' "$test_dir/output")"
+        assert_equal "  [stale] gierens apt repository key ($keyring does not hold exactly the pinned key $gierens; run: bash $DOTFILES_SCRIPTS/update.sh)" "$(grep -F ' gierens apt ' "$test_dir/output")"
     done
     # Expired yesterday.
     printf '%s %s\n' "$gierens" $((now - 86400)) > "$test_dir/keys/gierens"
     failures=0
     check_apt_keys > "$test_dir/output"
     assert_equal 1 "$failures"
-    assert_equal '  [stale] gierens apt repository key (expired on 2027-07-12; run: bash scripts/update.sh, which fetches it again)' "$(grep -F ' gierens apt ' "$test_dir/output")"
+    assert_equal "  [stale] gierens apt repository key (expired on 2027-07-12; run: bash $DOTFILES_SCRIPTS/update.sh, which fetches it again)" "$(grep -F ' gierens apt ' "$test_dir/output")"
     # Expiring in 10 days.
     printf '%s %s\n' "$gierens" $((now + 10 * 86400)) > "$test_dir/keys/gierens"
     failures=0
@@ -3557,8 +3562,8 @@ test_doctor_apt_keys() {
     failures=0
     check_apt_keys > "$test_dir/output"
     assert_equal 2 "$failures"
-    assert_equal '  [missing] gierens apt repository key (gnupg is not installed; rerun: bash scripts/install_packages.sh)' "$(grep -F ' gierens apt ' "$test_dir/output")"
-    assert_equal '  [missing] charm apt repository key (gnupg is not installed; rerun: bash scripts/install_packages.sh)' "$(grep -F ' charm apt ' "$test_dir/output")"
+    assert_equal "  [missing] gierens apt repository key (gnupg is not installed; rerun: bash $DOTFILES_SCRIPTS/install_packages.sh)" "$(grep -F ' gierens apt ' "$test_dir/output")"
+    assert_equal "  [missing] charm apt repository key (gnupg is not installed; rerun: bash $DOTFILES_SCRIPTS/install_packages.sh)" "$(grep -F ' charm apt ' "$test_dir/output")"
 }
 
 # plugins() against local repositories: missing plugins are cloned at the
@@ -3758,10 +3763,10 @@ test_doctor_neovim_checks() {
     failures=0
     check_nvim_plugins > "$test_dir/output"
     assert_equal 4 "$failures"
-    assert_contains "$(cat "$test_dir/output")" '[missing] Neovim plugin gitsigns.nvim (rerun: bash scripts/bootstrap_tools.sh)'
+    assert_contains "$(cat "$test_dir/output")" "[missing] Neovim plugin gitsigns.nvim (rerun: bash $DOTFILES_SCRIPTS/bootstrap_tools.sh)"
     assert_contains "$(cat "$test_dir/output")" '[stale] Neovim plugin which-key.nvim is not at the commit lazy-lock.json pins'
-    assert_contains "$(cat "$test_dir/output")" '[missing] Neovim parser yaml (rerun: bash scripts/bootstrap_tools.sh)'
-    assert_contains "$(cat "$test_dir/output")" '[missing] Neovim language server marksman (rerun: bash scripts/bootstrap_tools.sh)'
+    assert_contains "$(cat "$test_dir/output")" "[missing] Neovim parser yaml (rerun: bash $DOTFILES_SCRIPTS/bootstrap_tools.sh)"
+    assert_contains "$(cat "$test_dir/output")" "[missing] Neovim language server marksman (rerun: bash $DOTFILES_SCRIPTS/bootstrap_tools.sh)"
     assert_contains "$(cat "$test_dir/output")" '[skip] Neovim parser python (no C compiler'
     rm "$test_dir/tools-missing"
     # A failing start is reported once and the report is not attempted.
@@ -3797,7 +3802,7 @@ test_doctor_neovim_checks() {
     failures=0
     check_tree_sitter > "$test_dir/output"
     assert_equal 1 "$failures"
-    assert_contains "$(cat "$test_dir/output")" 'built for a newer glibc than this system'"'"'s (rerun: bash scripts/bootstrap_tools.sh)'
+    assert_contains "$(cat "$test_dir/output")" "built for a newer glibc than this system's (rerun: bash $DOTFILES_SCRIPTS/bootstrap_tools.sh)"
     unset -f tree-sitter
     command() {
         case "$*" in
@@ -3993,6 +3998,28 @@ LOCAL
             source "$DOTFILES_TEST_PROFILE" || exit 1
             [[ "${path[1]}" == "$DOTFILES_LOCAL_BIN" ]] || exit 1
             [[ "${path[2]}" == "$DOTFILES_TEST_HOME/.local/bin" ]] || exit 1
+        '
+    # Neovim is the editor programs ask for, unless one is chosen already.
+    mkdir -p "$test_dir/editor-bin"
+    printf '#!/bin/sh\n' > "$test_dir/editor-bin/nvim"
+    chmod +x "$test_dir/editor-bin/nvim"
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/editor-bin:/usr/bin:/bin" \
+        "$zsh_binary" -df -c '
+            unset EDITOR VISUAL
+            autoload() { :; }
+            compinit() { :; }
+            source "$DOTFILES_TEST_PROFILE" || exit 1
+            [[ "$EDITOR" == nvim && "$VISUAL" == nvim ]] || { print -u2 "EDITOR=$EDITOR VISUAL=$VISUAL"; exit 1; }
+        '
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/editor-bin:/usr/bin:/bin" \
+        EDITOR=hx "$zsh_binary" -df -c '
+            unset VISUAL
+            autoload() { :; }
+            compinit() { :; }
+            source "$DOTFILES_TEST_PROFILE" || exit 1
+            [[ "$EDITOR" == hx && "$VISUAL" == hx ]] || { print -u2 "EDITOR=$EDITOR VISUAL=$VISUAL"; exit 1; }
         '
 }
 

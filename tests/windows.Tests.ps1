@@ -707,7 +707,7 @@ try {
             [IO.File]::WriteAllText($stub, "#!/bin/sh`n[ -n `"`$DOTFILES_TEST_DIRENV_FAIL`" ] && exit 1`necho `"\`$env:DOTFILES_TEST_DIRENV_LINES = 'one'`"`necho `"\`$env:DOTFILES_TEST_DIRENV_LINES += ' two'; \`$env:DOTFILES_TEST_CALLS += 'direnv `$*;'`"`nexit 0`n")
             & chmod +x $stub
         }
-        foreach ($tool in @('eza', 'bat', 'fzf') + $integrations) {
+        foreach ($tool in @('eza', 'bat', 'fzf', 'nvim') + $integrations) {
             if ($env:OS -eq 'Windows_NT') {
                 $body = "@echo off`r`n"
                 if ($tool -in $integrations) { $body += "echo $($prefixes[$tool])`$env:DOTFILES_TEST_CALLS += '$tool %*;'`r`n" }
@@ -729,7 +729,13 @@ if ($env:DOTFILES_TEST_READLINE -eq 'yes') {
 }
 if ($env:DOTFILES_TEST_UNSET_HOME) { Remove-Item Env:HOME -ErrorAction SilentlyContinue }
 $homeBefore = [Environment]::GetEnvironmentVariable('HOME')
+$editorBefore = $env:EDITOR
 . $env:DOTFILES_TEST_PROFILE
+# Neovim is the editor programs ask for, unless one is chosen already.
+if ((Get-Alias vim).Definition -ne 'nvim') { throw "vim resolves to $((Get-Alias vim).Definition), not nvim" }
+$expectedEditor = if ($editorBefore) { $editorBefore } else { 'nvim' }
+if ($env:EDITOR -ne $expectedEditor) { throw "EDITOR is '$env:EDITOR', expected '$expectedEditor'" }
+if (-not $env:VISUAL) { throw 'VISUAL is not set' }
 if ((Get-Alias ls).Definition -ne 'eza') { throw "ls resolves to $((Get-Alias ls).Definition), not eza" }
 if ((Get-Alias cat).Definition -ne 'bat') { throw "cat resolves to $((Get-Alias cat).Definition), not bat" }
 foreach ($name in @('la', 'll', 'tree')) {
@@ -880,6 +886,8 @@ exit 0
     }
 
     Invoke-Test 'Doctor validates both editions, copied contents, fonts and runtimes' {
+        # Hints name the scripts by full path, so they work from any directory.
+        $runtimesScript = Join-Path (Join-Path $repository 'scripts') 'install_runtimes.ps1'
         $fixture = New-Fixture
         function Get-DotfilesProfilePaths {
             [ordered]@{ PowerShell = Join-Path $fixture.Directory 'modern/profile.ps1'; WindowsPowerShell = Join-Path $fixture.Directory 'legacy/profile.ps1' }
@@ -939,7 +947,7 @@ exit 0
         # An old Neovim is one failure that names the upgrade and skips the start and the report.
         $neovimVersion = [version]'0.9.5'
         $report.Clear()
-        Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } '1 check\(s\) need attention'
+        Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } ('1 check\(s\) need attention\. Rerun ' + [regex]::Escape((Join-Path $repository 'install.ps1')) + ' to repair the setup, then run ' + [regex]::Escape((Join-Path (Join-Path $repository 'scripts') 'doctor.ps1')) + ' again')
         Assert-True (@($report | Where-Object { $_ -match '^  \[missing\] Neovim 0\.12\.0 or newer \(found: 0\.9\.5; winget upgrade' }).Count -eq 1) 'An old Neovim names the upgrade'
         Assert-True (-not ($report -contains '  [ok] Neovim starts without errors')) 'An old Neovim is not started'
         $neovimVersion = [version]'0.12.6'
@@ -948,17 +956,17 @@ exit 0
         $startsBefore = $script:neovimStarts
         $report.Clear()
         Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } '1 check\(s\) need attention'
-        Assert-True (@($report | Where-Object { $_ -match '^  \[missing\] lazy\.nvim \(.*rerun: scripts\\install_runtimes\.ps1\)$' }).Count -eq 1) 'A missing lazy.nvim names the stage that installs it'
+        Assert-True (@($report | Where-Object { $_ -match ('^  \[missing\] lazy\.nvim \(.*rerun: ' + [regex]::Escape($runtimesScript) + '\)$') }).Count -eq 1) 'A missing lazy.nvim names the stage that installs it'
         Assert-True ($script:neovimStarts -eq $startsBefore) 'Neovim is not started without lazy.nvim'
         [IO.File]::WriteAllText($lazyFile, '-- lazy')
         # Missing and stale items fail and name the stage; skipped parsers do not count.
         $neovimCheck = @{ Lines = @('ok plugin catppuccin', 'missing plugin gitsigns.nvim', 'stale plugin which-key.nvim', 'missing parser yaml', 'missing package marksman', 'skipped parser python (no C compiler or tree-sitter CLI; see docs/troubleshooting.md in the dotfiles repository)'); ExitCode = 1 }
         $report.Clear()
         Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } '4 check\(s\) need attention'
-        foreach ($line in @('  [missing] Neovim plugin gitsigns.nvim (rerun: scripts\install_runtimes.ps1)',
-                '  [stale] Neovim plugin which-key.nvim is not at the commit lazy-lock.json pins (rerun: scripts\install_runtimes.ps1)',
-                '  [missing] Neovim parser yaml (rerun: scripts\install_runtimes.ps1)',
-                '  [missing] Neovim language server marksman (rerun: scripts\install_runtimes.ps1)',
+        foreach ($line in @("  [missing] Neovim plugin gitsigns.nvim (rerun: $runtimesScript)",
+                "  [stale] Neovim plugin which-key.nvim is not at the commit lazy-lock.json pins (rerun: $runtimesScript)",
+                "  [missing] Neovim parser yaml (rerun: $runtimesScript)",
+                "  [missing] Neovim language server marksman (rerun: $runtimesScript)",
                 '  [skip] Neovim parser python (no C compiler or tree-sitter CLI; see docs/troubleshooting.md in the dotfiles repository)')) {
             Assert-True ($report -contains $line) "The report line is shown: $line"
         }
@@ -988,13 +996,13 @@ exit 0
         $runtimeExitCode = 1
         $report.Clear()
         Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } '1 check\(s\) need attention'
-        Assert-True ($report -contains '  [missing] Node.js via mise (rerun: scripts\install_runtimes.ps1)') 'A missing runtime names the stage that installs it'
+        Assert-True ($report -contains "  [missing] Node.js via mise (rerun: $runtimesScript)") 'A missing runtime names the stage that installs it'
         $runtimeExitCode = 0
         Invoke-DotfilesDoctor $repository $fixture.Directory
         Remove-Item -LiteralPath $latteFlavor
         $report.Clear()
         Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } '1 check\(s\) need attention'
-        Assert-True ($report -contains '  [missing] yazi flavor catppuccin-latte (rerun: scripts\install_runtimes.ps1)') 'A missing yazi flavor names the stage that installs it'
+        Assert-True ($report -contains "  [missing] yazi flavor catppuccin-latte (rerun: $runtimesScript)") 'A missing yazi flavor names the stage that installs it'
         [IO.File]::WriteAllText($latteFlavor, '# flavor')
         Invoke-DotfilesDoctor $repository $fixture.Directory
         # Without mise the runtime is missing too, and nothing is executed to find out;
@@ -1005,7 +1013,7 @@ exit 0
         function Get-DotfilesNeovimCheck { throw 'Unexpected report' }
         $report.Clear()
         Assert-Throws { Invoke-DotfilesDoctor $repository $fixture.Directory } '4 check\(s\) need attention'
-        Assert-True (($report -contains '  [missing] mise') -and ($report -contains '  [missing] Node.js via mise (rerun: scripts\install_runtimes.ps1)')) 'Both mise and its runtime are reported'
+        Assert-True (($report -contains '  [missing] mise') -and ($report -contains "  [missing] Node.js via mise (rerun: $runtimesScript)")) 'Both mise and its runtime are reported'
         Assert-True (($report -contains '  [missing] nvim') -and (@($report | Where-Object { $_ -match '^  \[missing\] Neovim 0\.12\.0 or newer \(found: ;' }).Count -eq 1)) 'Both nvim and its version are reported'
     }
 
