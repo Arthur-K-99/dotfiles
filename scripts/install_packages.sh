@@ -2,6 +2,8 @@
 DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/environment.sh
 source "$DOTFILES_DIR/scripts/lib/environment.sh"
+# shellcheck source=lib/apt_repositories.sh
+source "$DOTFILES_DIR/scripts/lib/apt_repositories.sh"
 
 parse_list() {
     awk '!/^[[:space:]]*#/ && NF' "$1"
@@ -107,14 +109,39 @@ check_linux_distribution() {
     esac
 }
 
+# refresh_apt_keys: fetches the signing key of every repository in
+# lib/apt_repositories.sh that the bootstrap added and checks it against its
+# pin, before apt reads the repositories. An expired key makes apt-get update
+# fail on fresh lists, and otherwise apt warns and keeps the old index, so a
+# key whose expiry the project extended has to reach the keyring first; a
+# keyring holding any other key, such as one from before the pins existed, is
+# replaced. A key that no longer matches its pin stops the update; one that
+# cannot be downloaded leaves the keyring as it is, with a warning. Without
+# gnupg the keys cannot be checked, and the apt install below brings it back
+# (packages/apt.txt), so the update goes on and checks them next time.
+refresh_apt_keys() {
+    local name
+    for name in $DOTFILES_APT_REPOSITORIES; do
+        dotfiles_apt_repository_added "$name" || continue
+        if ! command -v gpg >/dev/null 2>&1; then
+            echo "gnupg is not installed, so the apt repository keys are checked on the next update, after apt installs it."
+            return 0
+        fi
+        install_apt_key "$name" refresh || return
+    done
+}
+
 # apt-get install upgrades a listed package that is installed and has a newer
 # candidate, so after the index refresh this both installs and updates the
 # list. Held packages are left out: one with an upgrade fails the whole
-# command.
+# command. Updating, the third-party repositories' keys are fetched again first.
 install_linux() {
     local package held
     local packages=()
     check_linux_distribution || return
+    if dotfiles_updating; then
+        refresh_apt_keys || return
+    fi
     echo "Updating apt..."
     sudo apt-get update -qq || return
     held="$(apt-mark showhold)" || return

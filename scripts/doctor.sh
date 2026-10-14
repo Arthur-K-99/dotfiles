@@ -3,6 +3,8 @@
 DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/environment.sh
 source "$DOTFILES_DIR/scripts/lib/environment.sh"
+# shellcheck source=lib/apt_repositories.sh
+source "$DOTFILES_DIR/scripts/lib/apt_repositories.sh"
 failures=0
 
 ok() { printf '  [ok] %s\n' "$1"; }
@@ -53,6 +55,43 @@ check_linux_font() {
     else
         fail "$DOTFILES_FONT_FAMILY (rerun: bash scripts/bootstrap_tools.sh)"
     fi
+}
+
+# Each apt repository the bootstrap added must have its pinned key in its
+# keyring, and that key must not have expired: an expired key makes apt-get
+# update fail on fresh lists, and otherwise apt warns and keeps the old index,
+# so nothing else would notice. A key expiring within 30 days passes, with its
+# date shown.
+check_apt_keys() {
+    local name fingerprint keyring details expiry now soon
+    now="$(date +%s)"
+    soon=$((now + 30 * 86400))
+    for name in $DOTFILES_APT_REPOSITORIES; do
+        dotfiles_apt_repository_added "$name" || continue
+        read -r _ fingerprint _ <<<"$(dotfiles_apt_repository "$name")"
+        keyring="$DOTFILES_APT_ETC/keyrings/$name.gpg"
+        if ! command -v gpg >/dev/null 2>&1; then
+            fail "$name apt repository key (gnupg is not installed; rerun: bash scripts/install_packages.sh)"
+            continue
+        fi
+        details="$(key_details "$keyring" 2>/dev/null)" || :
+        if [ -e "$keyring" ] && [ ! -r "$keyring" ]; then
+            fail "$name apt repository key ($keyring is not readable, so apt cannot read it either; run: bash scripts/update.sh)"
+        elif [ -z "$details" ]; then
+            fail "$name apt repository key ($keyring is missing or holds no key; run: bash scripts/update.sh)"
+        elif [ "$(printf '%s\n' "$details" | cut -d ' ' -f 1)" != "$fingerprint" ]; then
+            stale "$name apt repository key ($keyring does not hold exactly the pinned key $fingerprint; run: bash scripts/update.sh)"
+        else
+            expiry="$(printf '%s\n' "$details" | cut -s -d ' ' -f 2)"
+            if [ -n "$expiry" ] && [ "$expiry" -le "$now" ]; then
+                stale "$name apt repository key (expired on $(dotfiles_date "$expiry"); run: bash scripts/update.sh, which fetches it again)"
+            elif [ -n "$expiry" ] && [ "$expiry" -le "$soon" ]; then
+                ok "$name apt repository key (expires on $(dotfiles_date "$expiry"); scripts/update.sh fetches it again)"
+            else
+                ok "$name apt repository key"
+            fi
+        fi
+    done
 }
 
 check_macos_app() {
@@ -294,6 +333,8 @@ doctor_main() {
     else
         echo "Checking font..."
         check_linux_font
+        echo "Checking apt repository keys..."
+        check_apt_keys
         echo "Ghostty has no Debian package; its configuration is linked for when it is installed."
     fi
 

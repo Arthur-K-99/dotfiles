@@ -578,6 +578,7 @@ test_update_stages_and_failure_reporting() {
 test_eza_index_and_download_failures() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
     export DOTFILES_LOCAL_BIN="$test_dir/bin"
+    export DOTFILES_APT_ETC="$test_dir/etc-apt"
     command() {
         case "$*" in
             '-v eza') return 1 ;;
@@ -592,7 +593,7 @@ test_eza_index_and_download_failures() {
     sudo() {
         printf '%s\n' "$*" >> "$test_dir/commands"
         case "$1" in
-            gpg|tee) cat >/dev/null ;;
+            tee) cat >/dev/null ;;
             apt-get)
                 if [ "$2" = update ] && [ ! -f "$test_dir/retry" ]; then
                     return 44
@@ -605,7 +606,7 @@ test_eza_index_and_download_failures() {
     local status=0
     install_eza > "$test_dir/output" 2>&1 || status=$?
     assert_equal 1 "$status"
-    assert_equal 'install_apt_key gierens https://raw.githubusercontent.com/eza-community/eza/main/deb.asc 1548BC8A4B4D2688F9B0DAF7EC29E2090CE3FD43' "$(cat "$test_dir/commands")"
+    assert_equal 'install_apt_key gierens' "$(cat "$test_dir/commands")"
     rm "$test_dir/wrong-key"
     status=0
     install_eza > "$test_dir/output" 2>&1 || status=$?
@@ -614,7 +615,7 @@ test_eza_index_and_download_failures() {
     : > "$test_dir/retry"
     install_eza
     assert_equal 'apt-get install -y eza' "$(tail -n 1 "$test_dir/commands")"
-    assert_contains "$(cat "$test_dir/commands")" 'tee /etc/apt/sources.list.d/gierens.list'
+    assert_contains "$(cat "$test_dir/commands")" "tee $test_dir/etc-apt/sources.list.d/gierens.list"
     # The shared helper installs only the missing packages of a repository.
     command() {
         case "$*" in
@@ -626,7 +627,8 @@ test_eza_index_and_download_failures() {
     : > "$test_dir/commands"
     install_charm_tools
     assert_equal 'apt-get install -y glow' "$(tail -n 1 "$test_dir/commands")"
-    assert_contains "$(cat "$test_dir/commands")" 'install_apt_key charm https://repo.charm.sh/apt/gpg.key ED927B38BE981E53CA09153D03BBF595D4DFD35C'
+    assert_equal 'install_apt_key charm' "$(grep '^install_apt_key' "$test_dir/commands")"
+    assert_contains "$(cat "$test_dir/commands")" "tee $test_dir/etc-apt/sources.list.d/charm.list"
     command() {
         case "$*" in
             '-v glow'|'-v gum') return 0 ;;
@@ -639,66 +641,193 @@ test_eza_index_and_download_failures() {
 }
 
 # A repository's signing key is installed only when the downloaded file holds
-# exactly the pinned key. The fingerprints come from gpg --show-keys in a
-# throwaway home, so no ~/.gnupg appears; where gpg is installed, real keys
-# check that, and that a second key or no key at all is refused.
+# exactly the pinned key. A keyring that already holds the pinned key gets
+# the download merged into it in throwaway gpg homes, so an extended key
+# keeps its older self-signature beside the new one; it needs no sudo when
+# the download adds nothing. A keyring holding anything else is replaced.
+# The update's refresh keeps an existing keyring when the key cannot be
+# downloaded, but not when it fails its pin.
+# The mocked gpg models a home as the lines imported into it: an export is a
+# marker line and the sorted union of that key's lines, so a merge shows.
+# Where gpg and curl are installed, real keys check key_details on armored
+# and binary files without leaving a ~/.gnupg, and a real extension goes
+# through the whole install. The gpg homes live in a short directory under
+# /tmp, as an agent's socket path inside a home under a long TMPDIR (macOS)
+# would be too long.
 test_apt_key_pinning() {
-    source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    source "$TEST_REPO_DIR/scripts/lib/apt_repositories.sh"
     export DOTFILES_TEST_FIXTURE="$test_dir"
     export TMPDIR="$test_dir/tmp"
+    export DOTFILES_APT_ETC="$test_dir/etc-apt"
     mkdir -p "$TMPDIR"
+    DOTFILES_GPG_TMPDIR="$(mktemp -d /tmp/dk.XXXXXX)"
+    export DOTFILES_GPG_TMPDIR
+    trap '{ dotfiles_gpg_home_remove "$DOTFILES_GPG_TMPDIR"/* || :; } 2>/dev/null; rm -rf "$test_dir" "$DOTFILES_GPG_TMPDIR"' EXIT
     local pinned=1548BC8A4B4D2688F9B0DAF7EC29E2090CE3FD43
+    local other=0123456789ABCDEF0123456789ABCDEF01234567
+    local keyring="$DOTFILES_APT_ETC/keyrings/gierens.gpg"
+    local found mode status
+    dotfiles_apt_repository() {
+        [ "$1" = gierens ] || return 1
+        echo "https://example.invalid/deb.asc $pinned deb [signed-by=/etc/apt/keyrings/gierens.gpg] https://example.invalid stable main"
+    }
     curl() {
-        local output="" url=""
-        printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        local output=''
+        printf 'curl %s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
         while [ "$#" -gt 0 ]; do
             case "$1" in
                 -o) output="$2"; shift ;;
-                -*) ;;
-                *) url="$1" ;;
             esac
             shift
         done
         [ ! -f "$DOTFILES_TEST_FIXTURE/offline" ] || return 22
-        printf 'key from %s\n' "$url" > "$output"
+        cp "$DOTFILES_TEST_FIXTURE/served" "$output"
     }
-    sudo() {
-        printf 'sudo %s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
-        case "$1" in
-            gpg) cat > "$DOTFILES_TEST_FIXTURE/dearmored" ;;
+    # A key file here is lines of "key <fingerprint> <material>".
+    key_details() { awk '$1 == "key" && !seen[$2]++ { print $2 }' "$1"; }
+    gpg() {
+        local mode='' file='' fpr=''
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                --batch|--quiet) ;;
+                --import) mode=import ;;
+                --export) mode=export; fpr="$2"; shift ;;
+                --) file="$2"; shift ;;
+                *) echo "unexpected gpg argument: $1" >&2; return 99 ;;
+            esac
+            shift
+        done
+        case "${GNUPGHOME:-}" in
+            "$DOTFILES_GPG_TMPDIR"/*) [ -d "$GNUPGHOME" ] || { echo "gpg home $GNUPGHOME does not exist" >&2; return 99; } ;;
+            *) echo "gpg ran outside a throwaway home: ${GNUPGHOME:-unset}" >&2; return 99 ;;
+        esac
+        case "$mode" in
+            import)
+                if [ -f "$DOTFILES_TEST_FIXTURE/import-fails" ]; then
+                    echo 'gpg: no valid OpenPGP data found.' >&2
+                    return 2
+                fi
+                cat "$file" >> "$GNUPGHOME/imported"
+                ;;
+            export)
+                echo "exported $fpr"
+                if [ ! -f "$DOTFILES_TEST_FIXTURE/export-nothing" ]; then
+                    { grep "^key $fpr " "$GNUPGHOME/imported" || :; } | sort -u
+                fi
+                ;;
+            *) echo 'gpg was asked neither to import nor to export' >&2; return 99 ;;
         esac
     }
-    gpg() { echo 'gpg runs only through the mocked key_fingerprints here' >&2; return 99; }
-    key_fingerprints() { cat "$DOTFILES_TEST_FIXTURE/fingerprints"; }
-    # The pinned key: dearmored into the repository's keyring from the file checked.
-    printf '%s\n' "$pinned" > "$test_dir/fingerprints"
-    install_apt_key gierens https://example.invalid/deb.asc "$pinned"
-    assert_equal 'key from https://example.invalid/deb.asc' "$(cat "$test_dir/dearmored")"
-    assert_contains "$(cat "$test_dir/commands")" 'sudo gpg --dearmor --yes -o /etc/apt/keyrings/gierens.gpg'
-    assert_contains "$(head -n 1 "$test_dir/commands")" '--retry 5'
-    assert_equal 0 "$(find "$TMPDIR" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
-    # Another key, a second key beside the pinned one, or none: nothing reaches apt.
-    local found status
-    for found in 0123456789ABCDEF0123456789ABCDEF01234567 "$pinned"$'\n'0123456789ABCDEF0123456789ABCDEF01234567 ''; do
-        printf '%s' "$found" > "$test_dir/fingerprints"
-        : > "$test_dir/commands"
-        status=0
-        install_apt_key gierens https://example.invalid/deb.asc "$pinned" > "$test_dir/output" 2>&1 || status=$?
-        assert_equal 1 "$status"
-        assert_contains "$(cat "$test_dir/output")" 'is not the one pinned for the gierens repository'
-        assert_contains "$(cat "$test_dir/output")" "expected $pinned"
-        assert_equal 0 "$(grep -c '^sudo' "$test_dir/commands" || :)"
+    gpgconf() { printf '%s %s\n' "${GNUPGHOME:-unset}" "$*" >> "$DOTFILES_TEST_FIXTURE/gpgconf"; }
+    # sudo runs the two commands that install the keyring, within the test directory.
+    sudo() {
+        printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/sudo"
+        case "$*" in
+            "install -d -m 755 $DOTFILES_APT_ETC/keyrings"|"install -m 644 $TMPDIR/"*" $DOTFILES_APT_ETC/keyrings/gierens.gpg") "$@" ;;
+            *) echo "unexpected sudo $*" >&2; return 98 ;;
+        esac
+    }
+    # No keyring yet: the pinned key is installed, and both throwaway homes
+    # lose their agents and go away.
+    printf 'key %s signed-2024\n' "$pinned" > "$test_dir/served"
+    : > "$test_dir/sudo"
+    install_apt_key gierens > "$test_dir/output"
+    assert_equal "Installing the gierens repository's signing key from https://example.invalid/deb.asc..." "$(cat "$test_dir/output")"
+    assert_equal "exported $pinned"$'\n'"key $pinned signed-2024" "$(cat "$keyring")"
+    assert_equal "install -d -m 755 $DOTFILES_APT_ETC/keyrings" "$(sed -n 1p "$test_dir/sudo")"
+    assert_contains "$(sed -n 2p "$test_dir/sudo")" "install -m 644 $TMPDIR/"
+    assert_equal "$keyring" "$(sed -n 2p "$test_dir/sudo" | awk '{ print $NF }')"
+    assert_equal 2 "$(wc -l < "$test_dir/sudo" | tr -d ' ')"
+    assert_equal $'--kill all\n--remove-socketdir\n--kill all\n--remove-socketdir' "$(cut -d ' ' -f 2- "$test_dir/gpgconf")"
+    assert_equal 2 "$(cut -d ' ' -f 1 "$test_dir/gpgconf" | sort -u | grep -cF "$DOTFILES_GPG_TMPDIR/dotfiles-gpg.")"
+    assert_contains "$(cat "$test_dir/commands")" '--retry 5'
+    assert_contains "$(cat "$test_dir/commands")" 'https://example.invalid/deb.asc'
+    assert_equal 0 "$(find "$TMPDIR" "$DOTFILES_GPG_TMPDIR" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+    # The same key again: the keyring is current and needs no sudo.
+    : > "$test_dir/sudo"
+    install_apt_key gierens > "$test_dir/output"
+    assert_equal "The gierens repository's signing key is current." "$(cat "$test_dir/output")"
+    assert_equal '' "$(cat "$test_dir/sudo")"
+    # The project extended the key: the new copy is merged into the keyring,
+    # which keeps the old material beside it, and then the update's refresh
+    # finds it current.
+    printf 'key %s signed-2026\n' "$pinned" > "$test_dir/served"
+    : > "$test_dir/sudo"
+    install_apt_key gierens > "$test_dir/output"
+    assert_equal "Merging the gierens repository's key from https://example.invalid/deb.asc into its keyring..." "$(cat "$test_dir/output")"
+    assert_equal "exported $pinned"$'\n'"key $pinned signed-2024"$'\n'"key $pinned signed-2026" "$(cat "$keyring")"
+    assert_equal 2 "$(wc -l < "$test_dir/sudo" | tr -d ' ')"
+    : > "$test_dir/sudo"
+    install_apt_key gierens refresh > "$test_dir/output"
+    assert_equal "The gierens repository's signing key is current." "$(cat "$test_dir/output")"
+    assert_equal '' "$(cat "$test_dir/sudo")"
+    # A keyring holding another key is replaced, and none of it is kept.
+    printf 'key %s from-before-the-pins\n' "$other" > "$keyring"
+    : > "$test_dir/sudo"
+    install_apt_key gierens > "$test_dir/output"
+    assert_equal "Replacing the gierens repository's keyring with the pinned key from https://example.invalid/deb.asc..." "$(cat "$test_dir/output")"
+    assert_equal "exported $pinned"$'\n'"key $pinned signed-2026" "$(cat "$keyring")"
+    assert_equal 2 "$(wc -l < "$test_dir/sudo" | tr -d ' ')"
+    # Another key, a second key beside the pinned one, or none, refreshing or
+    # not: the keyring stays as it was, and sudo is not needed.
+    printf 'key %s from-before-the-pins\n' "$other" > "$keyring"
+    for mode in '' refresh; do
+        for found in "key $other signed" "key $pinned signed"$'\n'"key $other signed" 'not a key'; do
+            printf '%s\n' "$found" > "$test_dir/served"
+            : > "$test_dir/sudo"
+            status=0
+            install_apt_key gierens ${mode:+"$mode"} > "$test_dir/output" 2>&1 || status=$?
+            assert_equal 1 "$status"
+            assert_contains "$(cat "$test_dir/output")" 'is not the one pinned for the gierens repository'
+            assert_contains "$(cat "$test_dir/output")" "expected $pinned"
+            assert_equal '' "$(cat "$test_dir/sudo")"
+            assert_equal "key $other from-before-the-pins" "$(cat "$keyring")"
+        done
+        assert_contains "$(cat "$test_dir/output")" 'received no OpenPGP key'
     done
-    assert_contains "$(cat "$test_dir/output")" 'received no OpenPGP key'
-    # A failed download and a missing gpg stop before sudo as well.
-    printf '%s\n' "$pinned" > "$test_dir/fingerprints"
-    : > "$test_dir/offline"
-    : > "$test_dir/commands"
+    # A failed import shows what gpg said, and an export without the pinned
+    # key is refused; neither reaches sudo.
+    printf 'key %s signed-2026\n' "$pinned" > "$test_dir/served"
+    : > "$test_dir/import-fails"
     status=0
-    install_apt_key gierens https://example.invalid/deb.asc "$pinned" > "$test_dir/output" 2>&1 || status=$?
+    install_apt_key gierens > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(sed -n 1p "$test_dir/output")" "gpg could not import $TMPDIR/dotfiles-key."
+    assert_equal 'key:' "$(sed -n 1p "$test_dir/output" | sed 's|.*/||')"
+    assert_equal 'gpg: no valid OpenPGP data found.' "$(sed -n 2p "$test_dir/output")"
+    assert_equal 2 "$(wc -l < "$test_dir/output" | tr -d ' ')"
+    assert_equal '' "$(cat "$test_dir/sudo")"
+    assert_equal "key $other from-before-the-pins" "$(cat "$keyring")"
+    rm "$test_dir/import-fails"
+    : > "$test_dir/export-nothing"
+    status=0
+    install_apt_key gierens > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_equal "gpg did not export the gierens repository's key $pinned." "$(cat "$test_dir/output")"
+    assert_equal '' "$(cat "$test_dir/sudo")"
+    assert_equal "key $other from-before-the-pins" "$(cat "$keyring")"
+    rm "$test_dir/export-nothing"
+    # A failed download stops the install with curl's status. Refreshing, it
+    # leaves an existing keyring as it is, with a warning; without a keyring
+    # it stops all the same.
+    : > "$test_dir/offline"
+    status=0
+    install_apt_key gierens > "$test_dir/output" 2>&1 || status=$?
     assert_equal 22 "$status"
-    assert_equal 0 "$(grep -c '^sudo' "$test_dir/commands" || :)"
+    assert_equal '' "$(cat "$test_dir/sudo")"
+    assert_equal "key $other from-before-the-pins" "$(cat "$keyring")"
+    install_apt_key gierens refresh > "$test_dir/output" 2>&1
+    assert_equal "Could not fetch the gierens repository's key from https://example.invalid/deb.asc; its keyring stays as it is." "$(cat "$test_dir/output")"
+    assert_equal '' "$(cat "$test_dir/sudo")"
+    assert_equal "key $other from-before-the-pins" "$(cat "$keyring")"
+    rm "$keyring"
+    status=0
+    install_apt_key gierens refresh > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 22 "$status"
+    assert_equal '' "$(cat "$test_dir/sudo")"
+    [ ! -e "$keyring" ]
     rm "$test_dir/offline"
+    # A missing gpg stops before the download.
     unset -f gpg
     command() {
         case "$*" in
@@ -706,35 +835,142 @@ test_apt_key_pinning() {
             *) builtin command "$@" ;;
         esac
     }
+    : > "$test_dir/commands"
     status=0
-    install_apt_key gierens https://example.invalid/deb.asc "$pinned" > "$test_dir/output" 2>&1 || status=$?
+    install_apt_key gierens > "$test_dir/output" 2>&1 || status=$?
     assert_equal 1 "$status"
     assert_contains "$(cat "$test_dir/output")" 'gnupg is not installed'
+    assert_equal '' "$(cat "$test_dir/commands")"
+    assert_equal '' "$(cat "$test_dir/sudo")"
     unset -f command
-    # Sourcing again brings back the real key_fingerprints.
-    source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
-    if ! command -v gpg >/dev/null 2>&1; then
-        echo "  (gpg is not installed; skipped the real-key part)"
+    assert_equal 0 "$(find "$TMPDIR" "$DOTFILES_GPG_TMPDIR" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+    # Sourcing again brings back the real table, key_details and
+    # key_fingerprints; the real curl and gpgconf come back as well.
+    source "$TEST_REPO_DIR/scripts/lib/apt_repositories.sh"
+    unset -f curl gpgconf
+    # Every repository's key comes over HTTPS under a full fingerprint, and its
+    # sources line trusts that keyring alone.
+    local name key_url pin sources_line
+    for name in $DOTFILES_APT_REPOSITORIES; do
+        read -r key_url pin sources_line <<<"$(dotfiles_apt_repository "$name")"
+        assert_equal 'https://' "${key_url:0:8}"
+        assert_equal 40 "${#pin}"
+        assert_equal '' "$(printf '%s' "$pin" | tr -d '0-9A-F')"
+        assert_contains "$sources_line" "deb [signed-by=/etc/apt/keyrings/$name.gpg] https://"
+    done
+    if ! command -v gpg >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+        echo "  (gpg or curl is not installed; skipped the real-key part)"
         return 0
     fi
-    # Real keys: one fingerprint per key, primaries only, and no keyring left behind.
-    local keyring="$test_dir/keyring" fpr_one fpr_two
-    mkdir -m 700 "$keyring"
-    GNUPGHOME="$keyring" gpg --batch --quiet --passphrase '' --quick-gen-key 'Fixture One <one@example.invalid>' ed25519 cert,sign never 2>/dev/null
-    GNUPGHOME="$keyring" gpg --batch --quiet --passphrase '' --quick-gen-key 'Fixture Two <two@example.invalid>' ed25519 cert,sign never 2>/dev/null
-    fpr_one="$(GNUPGHOME="$keyring" gpg --batch --with-colons --list-keys one@example.invalid | awk -F: '$1 == "fpr" { print $10; exit }')"
-    fpr_two="$(GNUPGHOME="$keyring" gpg --batch --with-colons --list-keys two@example.invalid | awk -F: '$1 == "fpr" { print $10; exit }')"
-    GNUPGHOME="$keyring" gpg --batch --armor --export one@example.invalid > "$test_dir/one.asc"
-    GNUPGHOME="$keyring" gpg --batch --armor --export one@example.invalid two@example.invalid > "$test_dir/both.asc"
-    printf 'not a key\n' > "$test_dir/garbage.asc"
-    local home="$test_dir/home"
+    # Real keys: one expiring in a year, one that never expires, made and
+    # exported in a throwaway home, which then goes away with its agent even
+    # when something failed.
+    local gen home="$test_dir/home" fpr_one='' fpr_two='' expiry_one='' now
     mkdir -p "$home"
+    gen="$(dotfiles_gpg_home)"
+    status=0
+    {
+        GNUPGHOME="$gen" gpg --batch --quiet --passphrase '' --quick-gen-key 'Fixture One <one@example.invalid>' ed25519 cert,sign 1y 2>/dev/null &&
+            GNUPGHOME="$gen" gpg --batch --quiet --passphrase '' --quick-gen-key 'Fixture Two <two@example.invalid>' ed25519 cert,sign never 2>/dev/null &&
+            fpr_one="$(GNUPGHOME="$gen" gpg --batch --with-colons --list-keys one@example.invalid 2>/dev/null | awk -F: '$1 == "fpr" && !n++ { print $10 }')" &&
+            fpr_two="$(GNUPGHOME="$gen" gpg --batch --with-colons --list-keys two@example.invalid 2>/dev/null | awk -F: '$1 == "fpr" && !n++ { print $10 }')" &&
+            expiry_one="$(GNUPGHOME="$gen" gpg --batch --with-colons --list-keys one@example.invalid 2>/dev/null | awk -F: '$1 == "pub" && !n++ { print $7 }')" &&
+            GNUPGHOME="$gen" gpg --batch --armor --export one@example.invalid > "$test_dir/one.asc" &&
+            GNUPGHOME="$gen" gpg --batch --armor --export two@example.invalid > "$test_dir/two.asc" &&
+            GNUPGHOME="$gen" gpg --batch --armor --export one@example.invalid two@example.invalid > "$test_dir/both.asc" &&
+            GNUPGHOME="$gen" gpg --batch --dearmor -o "$test_dir/both.gpg" -- "$test_dir/both.asc"
+    } || status=$?
+    dotfiles_gpg_home_remove "$gen" || :
+    assert_equal 0 "$status"
+    printf 'not a key\n' > "$test_dir/garbage.asc"
+    # One fingerprint per key, primaries only.
     assert_equal "$fpr_one" "$(HOME="$home" key_fingerprints "$test_dir/one.asc")"
     assert_equal "$fpr_one"$'\n'"$fpr_two" "$(HOME="$home" key_fingerprints "$test_dir/both.asc")"
     assert_equal '' "$(HOME="$home" key_fingerprints "$test_dir/garbage.asc" 2>/dev/null || :)"
-    GNUPGHOME="$keyring" gpgconf --kill all 2>/dev/null || :
+    # key_details adds the expiry gpg lists, about a year away, and nothing
+    # for a key that never expires; a binary keyring reads the same.
+    now="$(date +%s)"
+    if ! { [ "$expiry_one" -gt $((now + 300 * 86400)) ] && [ "$expiry_one" -lt $((now + 400 * 86400)) ]; } 2>/dev/null; then
+        echo "Expected an expiry about a year away, got <$expiry_one>." >&2
+        return 1
+    fi
+    assert_equal "$fpr_one $expiry_one" "$(HOME="$home" key_details "$test_dir/one.asc")"
+    assert_equal "$fpr_two" "$(HOME="$home" key_details "$test_dir/two.asc")"
+    assert_equal "$fpr_one $expiry_one"$'\n'"$fpr_two" "$(HOME="$home" key_details "$test_dir/both.gpg")"
+    # A real extension: a key made on 2024-01-01 to expire after three years,
+    # exported, then extended to five years from now and exported again. The
+    # second copy carries only the new self-signature.
+    local ext fpr_ext=''
+    ext="$(dotfiles_gpg_home)"
+    status=0
+    {
+        GNUPGHOME="$ext" gpg --batch --quiet --passphrase '' --faked-system-time '20240101T000000!' \
+            --quick-gen-key 'Fixture Repository <repository@example.invalid>' rsa3072 sign 3y 2>/dev/null &&
+            fpr_ext="$(GNUPGHOME="$ext" gpg --batch --with-colons --list-keys repository@example.invalid 2>/dev/null | awk -F: '$1 == "fpr" && !n++ { print $10 }')" &&
+            GNUPGHOME="$ext" gpg --batch --armor --export "$fpr_ext" > "$test_dir/extended-old.asc" &&
+            GNUPGHOME="$ext" gpg --batch --quiet --passphrase '' --pinentry-mode loopback --quick-set-expire "$fpr_ext" 5y 2>/dev/null &&
+            GNUPGHOME="$ext" gpg --batch --armor --export "$fpr_ext" > "$test_dir/extended-new.asc"
+    } || status=$?
+    dotfiles_gpg_home_remove "$ext" || :
+    assert_equal 0 "$status"
+    # The real install_apt_key fetches it over file:// through the real curl:
+    # installed, current, merged with the extension, then current again.
+    pinned="$fpr_ext"
+    dotfiles_apt_repository() {
+        echo "file://$DOTFILES_TEST_FIXTURE/served.asc $pinned deb [signed-by=/etc/apt/keyrings/gierens.gpg] https://example.invalid stable main"
+    }
+    cp "$test_dir/extended-old.asc" "$test_dir/served.asc"
+    : > "$test_dir/sudo"
+    HOME="$home" install_apt_key gierens > "$test_dir/output" 2>&1
+    assert_equal "Installing the gierens repository's signing key from file://$test_dir/served.asc..." "$(cat "$test_dir/output")"
+    assert_equal 2 "$(wc -l < "$test_dir/sudo" | tr -d ' ')"
+    : > "$test_dir/sudo"
+    HOME="$home" install_apt_key gierens > "$test_dir/output" 2>&1
+    assert_equal "The gierens repository's signing key is current." "$(cat "$test_dir/output")"
+    assert_equal '' "$(cat "$test_dir/sudo")"
+    cp "$test_dir/extended-new.asc" "$test_dir/served.asc"
+    HOME="$home" install_apt_key gierens refresh > "$test_dir/output" 2>&1
+    assert_equal "Merging the gierens repository's key from file://$test_dir/served.asc into its keyring..." "$(cat "$test_dir/output")"
+    assert_equal 2 "$(wc -l < "$test_dir/sudo" | tr -d ' ')"
+    : > "$test_dir/sudo"
+    HOME="$home" install_apt_key gierens refresh > "$test_dir/output" 2>&1
+    assert_equal "The gierens repository's signing key is current." "$(cat "$test_dir/output")"
+    assert_equal '' "$(cat "$test_dir/sudo")"
+    # The keyring holds one key with both user ID self-signatures, where the
+    # new copy had one, and the expiry read from it is the extended one; the
+    # old copy expired sooner.
+    local list packets new_packets details
+    list="$(dotfiles_gpg_home)"
+    packets="$(GNUPGHOME="$list" gpg --batch --list-packets "$keyring" 2>/dev/null || :)"
+    new_packets="$(GNUPGHOME="$list" gpg --batch --list-packets "$test_dir/extended-new.asc" 2>/dev/null || :)"
+    dotfiles_gpg_home_remove "$list" || :
+    assert_equal 1 "$(printf '%s\n' "$new_packets" | grep -c 'sigclass 0x13' || :)"
+    assert_equal 1 "$(printf '%s\n' "$packets" | grep -c '^:public key packet:' || :)"
+    assert_equal 2 "$(printf '%s\n' "$packets" | grep -c 'sigclass 0x13' || :)"
+    details="$(HOME="$home" key_details "$keyring")"
+    assert_equal "$fpr_ext" "${details%% *}"
+    if ! [ "${details#* }" -gt $((now + 4 * 365 * 86400)) ] 2>/dev/null; then
+        echo "Expected the extended expiry, more than four years away, got <$details>." >&2
+        return 1
+    fi
+    details="$(HOME="$home" key_details "$test_dir/extended-old.asc")"
+    if ! [ "${details#* }" -lt $((now + 4 * 365 * 86400)) ] 2>/dev/null; then
+        echo "Expected the old copy to expire within four years, got <$details>." >&2
+        return 1
+    fi
+    # A real file with a second key is refused, and one that cannot be
+    # fetched leaves the keyring to the refresh.
+    cp "$test_dir/both.asc" "$test_dir/served.asc"
+    status=0
+    HOME="$home" install_apt_key gierens > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" "received $fpr_one $fpr_two"
+    rm "$test_dir/served.asc"
+    HOME="$home" install_apt_key gierens refresh > "$test_dir/output" 2>&1
+    assert_contains "$(cat "$test_dir/output")" "Could not fetch the gierens repository's key from file://$test_dir/served.asc; its keyring stays as it is."
+    assert_equal '' "$(cat "$test_dir/sudo")"
     [ ! -e "$home/.gnupg" ]
-    assert_equal 0 "$(find "$TMPDIR" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+    assert_equal 0 "$(find "$TMPDIR" "$DOTFILES_GPG_TMPDIR" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
 }
 
 # Held packages are left out of every apt-get install: one with an upgrade
@@ -743,13 +979,16 @@ test_apt_key_pinning() {
 test_apt_held_packages_left_alone() {
     source "$TEST_REPO_DIR/scripts/install_packages.sh"
     export DOTFILES_TEST_FIXTURE="$test_dir"
+    # No repository has been added here, so updating refreshes no keys;
+    # test_apt_keys_refreshed_before_updating covers that.
+    export DOTFILES_APT_ETC="$test_dir/etc-apt"
     check_linux_distribution() { return 0; }
     parse_list() { printf 'tmux\nbat\nfzf\n'; }
     apt-mark() { [ "$1" = showhold ] && cat "$DOTFILES_TEST_FIXTURE/held"; }
     sudo() {
         printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
         case "$1" in
-            gpg|tee) cat >/dev/null ;;
+            tee) cat >/dev/null ;;
         esac
         case "$*" in
             *--only-upgrade*) [ -f "$DOTFILES_TEST_FIXTURE/retry" ] || return 57 ;;
@@ -788,11 +1027,13 @@ test_apt_held_packages_left_alone() {
             *) builtin command "$@" ;;
         esac
     }
-    install_apt_key() { :; }
+    install_apt_key() { printf 'install_apt_key %s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"; }
     printf '\n' > "$test_dir/held"
     : > "$test_dir/commands"
     install_charm_tools > "$test_dir/output"
     assert_equal 'apt-get install -y glow gum' "$(tail -n 1 "$test_dir/commands")"
+    assert_equal 'install_apt_key charm' "$(grep '^install_apt_key' "$test_dir/commands")"
+    assert_contains "$(cat "$test_dir/commands")" "tee $test_dir/etc-apt/sources.list.d/charm.list"
     printf 'gum\n' > "$test_dir/held"
     install_charm_tools > "$test_dir/output"
     assert_equal 'apt-get install -y glow' "$(tail -n 1 "$test_dir/commands")"
@@ -809,6 +1050,65 @@ test_apt_held_packages_left_alone() {
     unset DOTFILES_UPDATE
     install_charm_tools > "$test_dir/output"
     assert_equal '' "$(cat "$test_dir/commands")"
+}
+
+# Updating, the signing key of every apt repository the bootstrap added is
+# fetched again before apt reads the repositories, so a key whose expiry the
+# project extended reaches the keyring first. A key that fails its pin stops
+# the update before apt runs. A plain install leaves the keys alone.
+test_apt_keys_refreshed_before_updating() {
+    source "$TEST_REPO_DIR/scripts/install_packages.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    export DOTFILES_APT_ETC="$test_dir/etc-apt"
+    mkdir -p "$DOTFILES_APT_ETC/sources.list.d"
+    : > "$DOTFILES_APT_ETC/sources.list.d/charm.list"
+    check_linux_distribution() { return 0; }
+    parse_list() { printf 'tmux\n'; }
+    apt-mark() { :; }
+    sudo() { printf 'sudo %s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"; }
+    install_apt_key() {
+        printf 'install_apt_key %s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        [ ! -f "$DOTFILES_TEST_FIXTURE/wrong-key" ] || return 1
+    }
+    # The refresh needs gpg, which the mocked install_apt_key never runs.
+    gpg() { return 99; }
+    install_linux > "$test_dir/output"
+    assert_equal $'sudo apt-get update -qq\nsudo apt-get install -y tmux' "$(cat "$test_dir/commands")"
+    # Only the repositories added have their keys fetched, in refresh mode
+    # (test_apt_key_pinning covers it), before apt-get update.
+    export DOTFILES_UPDATE=1
+    : > "$test_dir/commands"
+    install_linux > "$test_dir/output"
+    assert_equal $'install_apt_key charm refresh\nsudo apt-get update -qq\nsudo apt-get install -y tmux' "$(cat "$test_dir/commands")"
+    : > "$DOTFILES_APT_ETC/sources.list.d/gierens.list"
+    : > "$test_dir/commands"
+    install_linux > "$test_dir/output"
+    assert_equal $'install_apt_key gierens refresh\ninstall_apt_key charm refresh\nsudo apt-get update -qq\nsudo apt-get install -y tmux' "$(cat "$test_dir/commands")"
+    # The first key that fails stops the update: no other key, and no apt.
+    : > "$test_dir/wrong-key"
+    : > "$test_dir/commands"
+    local status=0
+    install_linux > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_equal 'install_apt_key gierens refresh' "$(cat "$test_dir/commands")"
+    rm "$DOTFILES_APT_ETC/sources.list.d/gierens.list"
+    : > "$test_dir/commands"
+    status=0
+    install_linux > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_equal 'install_apt_key charm refresh' "$(cat "$test_dir/commands")"
+    # Without gnupg the keys wait for the next update; apt installs it meanwhile.
+    unset -f gpg
+    command() {
+        case "$*" in
+            '-v gpg') return 1 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    : > "$test_dir/commands"
+    install_linux > "$test_dir/output"
+    assert_equal $'sudo apt-get update -qq\nsudo apt-get install -y tmux' "$(cat "$test_dir/commands")"
+    assert_contains "$(cat "$test_dir/output")" 'checked on the next update, after apt installs it'
 }
 
 # oh-my-posh and zoxide come from GitHub releases like the other release tools,
@@ -2601,6 +2901,102 @@ test_doctor_linux_font() {
     assert_contains "$(cat "$test_dir/output")" 'fontconfig is not installed; rerun: bash scripts/install_packages.sh'
 }
 
+# Every apt repository the bootstrap added needs its pinned key, alone, in its
+# keyring, and that key must not have expired: apt-get update fails on an
+# expired key. One expiring within 30 days passes with its date named. Dates
+# print in UTC whatever the time zone, with GNU or BSD date; "now" is
+# 2027-07-13 here. Each case below varies gierens's keyring, while charm's
+# holds its pinned key, which never expires.
+test_doctor_apt_keys() {
+    source "$TEST_REPO_DIR/scripts/doctor.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    export DOTFILES_APT_ETC="$test_dir/etc-apt"
+    assert_equal 2027-07-13 "$(dotfiles_date 1815436800)"
+    assert_equal 2027-07-13 "$(TZ=WEST+10 dotfiles_date 1815436800)"
+    assert_equal 2027-07-13 "$(TZ=EAST-14 dotfiles_date $((1815436800 + 86399)))"
+    local now=1815436800 gierens charm found
+    local other=0123456789ABCDEF0123456789ABCDEF01234567
+    local keyring="$DOTFILES_APT_ETC/keyrings/gierens.gpg"
+    read -r _ gierens _ <<<"$(dotfiles_apt_repository gierens)"
+    read -r _ charm _ <<<"$(dotfiles_apt_repository charm)"
+    # check_apt_keys has a "now" of its own, so the mock spells the time out.
+    date() { if [ "$*" = +%s ]; then echo 1815436800; else command date "$@"; fi; }
+    gpg() { echo 'gpg runs only through the mocked key_details here' >&2; return 99; }
+    # A keyring's details come from keys/<name>; without that file there are none.
+    key_details() {
+        local name="${1#"$DOTFILES_APT_ETC/keyrings/"}"
+        cat "$DOTFILES_TEST_FIXTURE/keys/${name%.gpg}" 2>/dev/null
+    }
+    mkdir -p "$test_dir/keys" "$DOTFILES_APT_ETC/sources.list.d"
+    printf '%s\n' "$charm" > "$test_dir/keys/charm"
+    # No repository added: nothing to check.
+    failures=0
+    check_apt_keys > "$test_dir/output"
+    assert_equal '' "$(cat "$test_dir/output")"
+    assert_equal 0 "$failures"
+    : > "$DOTFILES_APT_ETC/sources.list.d/gierens.list"
+    : > "$DOTFILES_APT_ETC/sources.list.d/charm.list"
+    failures=0
+    check_apt_keys > "$test_dir/output"
+    assert_equal 1 "$failures"
+    assert_equal "  [missing] gierens apt repository key ($keyring is missing or holds no key; run: bash scripts/update.sh)" "$(grep -F ' gierens apt ' "$test_dir/output")"
+    assert_equal '  [ok] charm apt repository key' "$(grep -F ' charm apt ' "$test_dir/output")"
+    # A keyring nobody may read fails whatever it holds. Root reads it all
+    # the same, so only another user can check this.
+    if [ "$(id -u)" -ne 0 ]; then
+        mkdir -p "$DOTFILES_APT_ETC/keyrings"
+        : > "$keyring"
+        chmod 000 "$keyring"
+        printf '%s\n' "$gierens" > "$test_dir/keys/gierens"
+        failures=0
+        check_apt_keys > "$test_dir/output"
+        assert_equal 1 "$failures"
+        assert_equal "  [missing] gierens apt repository key ($keyring is not readable, so apt cannot read it either; run: bash scripts/update.sh)" "$(grep -F ' gierens apt ' "$test_dir/output")"
+        rm -f "$keyring"
+    fi
+    # Another key, or a second key beside the pinned one.
+    for found in "$other" "$gierens"$'\n'"$other"; do
+        printf '%s\n' "$found" > "$test_dir/keys/gierens"
+        failures=0
+        check_apt_keys > "$test_dir/output"
+        assert_equal 1 "$failures"
+        assert_equal "  [stale] gierens apt repository key ($keyring does not hold exactly the pinned key $gierens; run: bash scripts/update.sh)" "$(grep -F ' gierens apt ' "$test_dir/output")"
+    done
+    # Expired yesterday.
+    printf '%s %s\n' "$gierens" $((now - 86400)) > "$test_dir/keys/gierens"
+    failures=0
+    check_apt_keys > "$test_dir/output"
+    assert_equal 1 "$failures"
+    assert_equal '  [stale] gierens apt repository key (expired on 2027-07-12; run: bash scripts/update.sh, which fetches it again)' "$(grep -F ' gierens apt ' "$test_dir/output")"
+    # Expiring in 10 days.
+    printf '%s %s\n' "$gierens" $((now + 10 * 86400)) > "$test_dir/keys/gierens"
+    failures=0
+    check_apt_keys > "$test_dir/output"
+    assert_equal 0 "$failures"
+    assert_equal '  [ok] gierens apt repository key (expires on 2027-07-23; scripts/update.sh fetches it again)' "$(grep -F ' gierens apt ' "$test_dir/output")"
+    # Expiring in two years, or never.
+    for found in "$gierens $((now + 2 * 365 * 86400))" "$gierens"; do
+        printf '%s\n' "$found" > "$test_dir/keys/gierens"
+        failures=0
+        check_apt_keys > "$test_dir/output"
+        assert_equal 0 "$failures"
+        assert_equal '  [ok] gierens apt repository key' "$(grep -F ' gierens apt ' "$test_dir/output")"
+    done
+    # Without gnupg no keyring can be read; the package step installs it.
+    unset -f gpg
+    command() {
+        case "$*" in
+            '-v gpg') return 1 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    failures=0
+    check_apt_keys > "$test_dir/output"
+    assert_equal 2 "$failures"
+    assert_equal '  [missing] gierens apt repository key (gnupg is not installed; rerun: bash scripts/install_packages.sh)' "$(grep -F ' gierens apt ' "$test_dir/output")"
+    assert_equal '  [missing] charm apt repository key (gnupg is not installed; rerun: bash scripts/install_packages.sh)' "$(grep -F ' charm apt ' "$test_dir/output")"
+}
+
 # plugins() against local repositories: missing plugins are cloned at the
 # pinned commit, drifted ones return to it, a failed clone fails the run, and
 # the lockfile bytes never change. Needs an installed lazy.nvim to copy.
@@ -3162,6 +3558,7 @@ run_tests() {
         eza_index_and_download_failures
         apt_held_packages_left_alone
         apt_key_pinning
+        apt_keys_refreshed_before_updating
         macos_update_upgrades_declared
         script_installers_install_and_update
         github_release_install
@@ -3177,6 +3574,7 @@ run_tests() {
         linux_font_install
         linux_font_update
         doctor_linux_font
+        doctor_apt_keys
         neovim_plugins_install_and_retry
         doctor_neovim_checks
         tmux_plugin_failure_and_retry
