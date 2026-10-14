@@ -17,58 +17,28 @@ jobs:
       run:
         shell: powershell -NoLogo -NoProfile -NonInteractive -Command ". '{0}'"
     steps:
-      - name: Environment
+      - name: How winget lists Carapace after installing it
         continue-on-error: true
         run: |
-          Get-CimInstance Win32_OperatingSystem | Format-List Caption, Version, BuildNumber
-          whoami; whoami /groups | Select-String 'High Mandatory|Administrators'
-          Get-ExecutionPolicy -List | Out-Host
-          "PSExecutionPolicyPreference=$env:PSExecutionPolicyPreference"
-          "Machine PATH:"; [Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';'
-          "User PATH:"; [Environment]::GetEnvironmentVariable('Path', 'User') -split ';'
-          "Process PATH has WindowsApps: $($env:PATH -match 'WindowsApps')"
-          Get-Command winget -ErrorAction SilentlyContinue | Format-List Source, Version
-          winget --info
-          winget source list
-          Get-AppxPackage | Where-Object { $_.Name -match 'DesktopAppInstaller|WindowsTerminal|UI\.Xaml|VCLibs|WindowsAppRuntime' } | Format-Table Name, Version -AutoSize
-          Get-Command git, pwsh, gh, fzf, nvim, wt -ErrorAction SilentlyContinue | Format-Table Name, Source -AutoSize
-          Test-Path 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
-      - name: winget list exit codes for preinstalled tools
-        continue-on-error: true
-        run: |
-          foreach ($id in 'Git.Git', 'Microsoft.PowerShell', 'GitHub.cli', 'Microsoft.WindowsTerminal', 'junegunn.fzf') {
+          foreach ($id in 'rsteube.Carapace', 'charmbracelet.gum') {
             winget list --id $id --exact --accept-source-agreements | Out-Host
-            "== list $id -> $LASTEXITCODE"
+            "== before: list $id -> $LASTEXITCODE"
+            winget install --id $id --exact --silent --accept-package-agreements --accept-source-agreements | Out-Host
+            "== install $id -> $LASTEXITCODE"
+            winget list --id $id --exact --accept-source-agreements | Out-Host
+            "== after: list --id $id --exact -> $LASTEXITCODE"
             winget list --id $id --exact --source winget --accept-source-agreements | Out-Host
-            "== list --source winget $id -> $LASTEXITCODE"
+            "== after: list --id $id --exact --source winget -> $LASTEXITCODE"
+            winget list --id $id --accept-source-agreements | Out-Host
+            "== after: list --id $id -> $LASTEXITCODE"
           }
-          winget pin add --id chmln.sd --exact --source winget --accept-source-agreements | Out-Host
-          "== pin add sd (not installed) -> $LASTEXITCODE"
-          winget pin list --accept-source-agreements | Out-Host
-          "== pin list -> $LASTEXITCODE"
-          winget show --id junegunn.fzf --exact --versions --source winget --accept-source-agreements | Out-Host
-      - name: Windows Terminal
-        continue-on-error: true
-        run: |
-          winget install --id Microsoft.WindowsTerminal --exact --silent --accept-package-agreements --accept-source-agreements --source winget | Out-Host
-          "== install WT -> $LASTEXITCODE"
-          Get-AppxPackage | Where-Object { $_.Name -match 'WindowsTerminal|UI\.Xaml|VCLibs' } | Format-Table Name, Version -AutoSize
-          $env:PATH = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
-          Get-Command wt -ErrorAction SilentlyContinue | Format-List Source
-          Test-Path "$env:LOCALAPPDATA\Microsoft\WindowsApps\wt.exe"
-      - name: oh-my-posh and its font
-        continue-on-error: true
-        run: |
-          winget install --id JanDeDobbeleer.OhMyPosh --exact --silent --accept-package-agreements --accept-source-agreements --source winget | Out-Host
-          "== install oh-my-posh -> $LASTEXITCODE"
-          $env:PATH = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
-          Get-Command oh-my-posh -ErrorAction SilentlyContinue | Format-List Source
-          "WindowsApps alias: $(Test-Path "$env:LOCALAPPDATA\Microsoft\WindowsApps\oh-my-posh.exe")"
-          $omp = (Get-Command oh-my-posh -ErrorAction SilentlyContinue).Source
-          if (-not $omp) { $omp = "$env:LOCALAPPDATA\Microsoft\WindowsApps\oh-my-posh.exe" }
-          & $omp version
-          & $omp font install https://github.com/ryanoasis/nerd-fonts/releases/latest/download/CascadiaCode.zip | Out-Host
-          "== font install -> $LASTEXITCODE"
-          Get-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts' -ErrorAction SilentlyContinue | Format-List
-          Get-ChildItem "$env:LOCALAPPDATA\Microsoft\Windows\Fonts" -ErrorAction SilentlyContinue | Select-Object -First 5 | Format-Table Name, Length
-          Get-ChildItem "$env:LOCALAPPDATA\Packages\ohmyposh.cli_96v55e8n804z4" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 20 | Format-Table FullName
+          winget list carapace --accept-source-agreements | Out-Host
+          "== list carapace -> $LASTEXITCODE"
+          winget list --name Carapace --accept-source-agreements | Out-Host
+          "== list --name Carapace -> $LASTEXITCODE"
+          winget list --accept-source-agreements | Select-String -Pattern 'carapace|gum' | Out-Host
+          Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' | Where-Object { $_.PSChildName -match 'carapace|gum' } | ForEach-Object { $_.PSChildName; Get-ItemProperty $_.PSPath | Format-List DisplayName, DisplayVersion, Publisher, WinGet* } | Out-Host
+          Get-ChildItem 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall' | Where-Object { (Get-ItemProperty $_.PSPath).DisplayName -match 'carapace' } | ForEach-Object { $_.PSPath; Get-ItemProperty $_.PSPath | Format-List DisplayName, DisplayVersion, Publisher } | Out-Host
+          winget list --id rsteube.Carapace --exact --accept-source-agreements --verbose-logs | Out-Host
+          $logs = "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir"
+          Get-ChildItem $logs | Sort-Object LastWriteTime | Select-Object -Last 1 | Get-Content | Select-Object -Last 80
