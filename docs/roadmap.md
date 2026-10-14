@@ -109,7 +109,7 @@ Not tied to a phase; pick up when convenient.
 
 Done:
 
-- **A minimum release age** (PR link to follow). mise.run installed the newest mise release at least a day old and `mise self-update` waits a day, while every other release tool took a release minutes after it was published. Now every GitHub release download of the Unix bootstrap waits.
+- **A minimum release age** ([#15](https://github.com/Arthur-K-99/dotfiles/pull/15)). mise.run installed the newest mise release at least a day old and `mise self-update` waits a day, while every other release tool took a release minutes after it was published. Now every GitHub release download of the Unix bootstrap waits.
   - **The setting.** `DOTFILES_MINIMUM_RELEASE_AGE` is a whole number of at most nine digits with a unit, `s`, `m`, `h`, `d` or `w` (the grammar of mise's installer, `^[0-9]+[smhdw]$`), plus a bare `0` for off. It is a day when unset or empty. `install.sh`, `scripts/update.sh` and the bootstrap stop before their first stage on anything else.
   - **Which release** (`release_tag` in `scripts/bootstrap_tools.sh`), for the release tools, oh-my-posh, zoxide, mise's first install, Neovim, the tree-sitter CLI and the Linux font, on a first install and in the update:
     - **The latest release once it is old enough.** "Latest" stays what the `releases/latest` redirect names: the release the project marks so.
