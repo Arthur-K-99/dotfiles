@@ -595,27 +595,6 @@ function Invoke-DotfilesNeovimWithNode {
     } finally { $env:PATH = $savedPath }
 }
 
-# Runs plugins() and returns the exit status. Each pinned checkout would print
-# git's detached-HEAD advice, so git's environment configuration turns it off
-# for this one run and the previous values come back afterwards.
-function Invoke-DotfilesNeovimPlugins {
-    param([string]$NvimCommand)
-    $quiet = [ordered]@{ GIT_CONFIG_COUNT = '1'; GIT_CONFIG_KEY_0 = 'advice.detachedHead'; GIT_CONFIG_VALUE_0 = 'false' }
-    $saved = @{}
-    foreach ($name in $quiet.Keys) {
-        $saved[$name] = [Environment]::GetEnvironmentVariable($name)
-        [Environment]::SetEnvironmentVariable($name, $quiet[$name])
-    }
-    try {
-        return Invoke-DotfilesNativeCommand $NvimCommand @('--headless', '-c', $script:DotfilesNeovimPluginsLua, '-c', 'cquit 1')
-    } finally {
-        foreach ($name in $quiet.Keys) {
-            if ($null -eq $saved[$name]) { Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue }
-            else { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
-        }
-    }
-}
-
 # The report decides which of the two installs runs and verifies the result.
 # Updating, the plugins stay at the commits lazy-lock.json pins; update()
 # then brings the parsers to the revisions the pinned nvim-treesitter names
@@ -628,7 +607,7 @@ function Install-DotfilesNeovim {
     else {
         if (@($check.Lines | Where-Object { $_ -match '^(missing|stale) plugin ' }).Count) {
             Write-Host '  installing: Neovim plugins from lazy-lock.json'
-            $code = Invoke-DotfilesNeovimPlugins $nvimCommand
+            $code = Invoke-DotfilesNativeCommand $nvimCommand @('--headless', '-c', $script:DotfilesNeovimPluginsLua, '-c', 'cquit 1')
             if ($code -ne 0) { throw "The Neovim plugin install failed (exit code $code). Rerun install.ps1 to retry." }
         }
         if (@($check.Lines | Where-Object { $_ -match '^missing (parser|package) ' }).Count) {
