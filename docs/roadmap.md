@@ -120,7 +120,7 @@ Not tied to a phase; pick up when convenient.
 
 Done:
 
-- **A fresh install on Windows** (PR link to follow). Until now nobody had run `install.ps1` or `scripts/update.ps1` on a clean machine; only the mocked suite covered them.
+- **A fresh install on Windows** ([#19](https://github.com/Arthur-K-99/dotfiles/pull/19)). Until now nobody had run `install.ps1` or `scripts/update.ps1` on a clean machine; only the mocked suite covered them.
   - **`tests/fresh_install.ps1`**, the Windows side of `tests/fresh_install.sh --here`, runs in stages. Each starts its shells with `PATH` read from the registry, as a reopened terminal has it, under a transcript:
     - **Prepare:** records the runner, installs the newest version but one of fzf and of Carapace, and writes placeholder profiles.
     - **Install:** from Windows PowerShell after `Set-ExecutionPolicy`, as the README says; the older packages stay and each placeholder profile is backed up once.
