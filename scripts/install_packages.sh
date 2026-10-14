@@ -53,7 +53,8 @@ brew_upgrade_declared() {
 }
 
 install_macos() {
-    local installer package
+    local installer package installed=""
+    local declared=() present=() missing=()
     if ! command -v brew &>/dev/null; then
         echo "Installing Homebrew..."
         installer="$(curl -fsSL --retry 5 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || return
@@ -72,12 +73,32 @@ install_macos() {
         brew_upgrade_declared --cask "$DOTFILES_DIR/packages/brew-casks.txt" || return
         export HOMEBREW_NO_INSTALL_UPGRADE=1
     fi
+    # Only the missing formulae go to one `brew install`: naming an installed
+    # one costs about a second and prints a warning that it is installed, and
+    # a rerun only adds what is missing (the update has upgraded above).
+    # Names in packages/brew.txt are the ones `brew list` prints, not aliases.
     # The loops read the package lists from stdin; brew must not inherit that
     # stream, or an install step that reads input swallows the remaining names.
     echo "Installing Homebrew formulae..."
     while IFS= read -r package; do
-        brew install "$package" </dev/null || return
+        declared+=("$package")
     done < <(parse_list "$DOTFILES_DIR/packages/brew.txt")
+    if [ "${#declared[@]}" -gt 0 ]; then
+        installed="$(brew list --formula -1 </dev/null)" || return
+    fi
+    for package in ${declared[@]+"${declared[@]}"}; do
+        if printf '%s\n' "$installed" | grep -qxF -- "$package"; then
+            present+=("$package")
+        else
+            missing+=("$package")
+        fi
+    done
+    if [ "${#present[@]}" -gt 0 ]; then
+        echo "  already installed: ${present[*]}"
+    fi
+    if [ "${#missing[@]}" -gt 0 ]; then
+        brew install "${missing[@]}" </dev/null || return
+    fi
     echo "Installing Homebrew casks..."
     while IFS= read -r package; do
         if macos_cask_is_satisfied "$package"; then
@@ -131,13 +152,19 @@ refresh_apt_keys() {
     done
 }
 
+# Listed packages installed without the packages they recommend.
+# wl-clipboard recommends xdg-utils, which on a fresh Debian 13 brings Mesa,
+# Vulkan, Perl's LWP and a terminal emulator that registers itself as
+# x-terminal-emulator: 280 packages with it, 167 without.
+DOTFILES_APT_WITHOUT_RECOMMENDS="wl-clipboard"
+
 # apt-get install upgrades a listed package that is installed and has a newer
 # candidate, so after the index refresh this both installs and updates the
 # list. Held packages are left out: one with an upgrade fails the whole
 # command. Updating, the third-party repositories' keys are fetched again first.
 install_linux() {
     local package held
-    local packages=()
+    local packages=() lean=()
     check_linux_distribution || return
     if dotfiles_updating; then
         refresh_apt_keys || return
@@ -151,9 +178,18 @@ install_linux() {
         echo "Installing apt packages..."
     fi
     while IFS= read -r package; do
-        dotfiles_apt_unheld "$held" "$package" && packages+=("$package")
+        dotfiles_apt_unheld "$held" "$package" || continue
+        case " $DOTFILES_APT_WITHOUT_RECOMMENDS " in
+            *" $package "*) lean+=("$package") ;;
+            *) packages+=("$package") ;;
+        esac
     done < <(parse_list "$DOTFILES_DIR/packages/apt.txt")
-    sudo apt-get install -y "${packages[@]}" || return
+    if [ "${#packages[@]}" -gt 0 ]; then
+        sudo apt-get install -y "${packages[@]}" || return
+    fi
+    if [ "${#lean[@]}" -gt 0 ]; then
+        sudo apt-get install -y --no-install-recommends "${lean[@]}" || return
+    fi
 }
 
 install_packages_main() {

@@ -239,6 +239,33 @@ test_tmux_config_declares_plugins_in_order() {
     done
 }
 
+# oh-my-posh exports its built-in theme, with status 0, for a configuration it
+# cannot read; the check compares the export's palette and segments with the
+# file's.
+test_oh_my_posh_config_check() {
+    source "$TEST_REPO_DIR/scripts/test.sh"
+    local status
+    printf '{"palette": {"os": "#A5ADCB"}, "blocks": [{"type": "prompt", "segments": [{"type": "os"}, {"type": "path"}]}]}\n' > "$test_dir/config.json"
+    oh-my-posh() {
+        # Filled-in defaults, as the real export adds, must not matter.
+        printf '{"palette": {"os": "#A5ADCB"}, "version": 3, "blocks": [{"type": "prompt", "alignment": "left", "segments": [{"type": "os", "style": "plain"}, {"type": "path"}]}]}\n'
+    }
+    check_oh_my_posh_config "$test_dir/config.json"
+    oh-my-posh() { printf '{"palette": {"black": "#262B44"}, "blocks": [{"segments": [{"type": "session"}]}]}\n'; }
+    status=0
+    check_oh_my_posh_config "$test_dir/config.json" > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'it cannot read the file'
+    status=0
+    check_oh_my_posh_config "$test_dir/absent.json" > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_contains "$(cat "$test_dir/output")" 'Cannot read'
+    oh-my-posh() { return 9; }
+    status=0
+    check_oh_my_posh_config "$test_dir/config.json" > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 9 "$status"
+}
+
 test_tmux_config_loads_and_errors_are_reported() {
     source "$TEST_REPO_DIR/scripts/test.sh"
     export TMPDIR="$test_dir/tmp"
@@ -485,7 +512,7 @@ test_macos_font_install_and_repair() {
     assert_contains "$(cat "$test_dir/commands")" 'install --cask font-caskaydia-cove-nerd-font'
     : > "$test_dir/commands"
     install_macos
-    assert_equal 'install git' "$(cat "$test_dir/commands")"
+    assert_equal $'list --formula -1\ninstall git' "$(cat "$test_dir/commands")"
     rm "$test_dir/font-present"
     : > "$test_dir/fail-font"
     local status=0
@@ -510,12 +537,34 @@ test_macos_formulae_survive_stdin_consumers() {
     brew() {
         printf '%s\n' "$*" >> "$test_dir/commands"
         case "$*" in
+            'list --formula -1') printf 'second\nsecond-helper\n' ;;
             'list --cask '*) return 1 ;;
             *) cat >/dev/null ;;
         esac
     }
-    install_macos
-    assert_equal $'install first\ninstall second\ninstall third\nlist --cask ghostty\ninstall --cask ghostty' "$(cat "$test_dir/commands")"
+    install_macos > "$test_dir/output"
+    # Only the missing formulae are named, in one install.
+    assert_equal $'list --formula -1\ninstall first third\nlist --cask ghostty\ninstall --cask ghostty' "$(cat "$test_dir/commands")"
+    assert_contains "$(cat "$test_dir/output")" '  already installed: second'
+    # With everything installed, brew install is not run at all.
+    brew() {
+        printf '%s\n' "$*" >> "$test_dir/commands"
+        case "$*" in
+            'list --formula -1') printf 'first\nsecond\nthird\n' ;;
+            'list --cask '*) return 0 ;;
+            *) cat >/dev/null ;;
+        esac
+    }
+    dotfiles_macos_app_installed() { return 0; }
+    : > "$test_dir/commands"
+    install_macos > "$test_dir/output"
+    assert_equal 'list --formula -1' "$(cat "$test_dir/commands")"
+    assert_contains "$(cat "$test_dir/output")" '  already installed: first second third'
+    # A failed listing stops the stage.
+    brew() { [ "$*" != 'list --formula -1' ]; }
+    local status=0
+    install_macos > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
 }
 
 # Updating, Homebrew refreshes its index and upgrades the declared formulae
@@ -543,14 +592,14 @@ test_macos_update_upgrades_declared() {
         esac
     }
     install_macos > "$test_dir/output"
-    assert_equal $'install git\ninstall neovim\ninstall lazygit' "$(cat "$test_dir/commands")"
+    assert_equal $'list --formula -1\ninstall git neovim lazygit' "$(cat "$test_dir/commands")"
     assert_equal unset "$(sort -u "$test_dir/no-install-upgrade")"
     # Current: the index is refreshed and nothing is upgraded.
     export DOTFILES_UPDATE=1
     : > "$test_dir/commands"
     : > "$test_dir/no-install-upgrade"
     install_macos > "$test_dir/output"
-    assert_equal $'update\noutdated --formula --quiet\nlist --pinned --formula\noutdated --cask --quiet\nlist --pinned --cask\ninstall git\ninstall neovim\ninstall lazygit' "$(cat "$test_dir/commands")"
+    assert_equal $'update\noutdated --formula --quiet\nlist --pinned --formula\noutdated --cask --quiet\nlist --pinned --cask\nlist --formula -1\ninstall git neovim lazygit' "$(cat "$test_dir/commands")"
     # The install loop only adds what is missing; the upgrades above decide.
     assert_equal 1 "$(sort -u "$test_dir/no-install-upgrade")"
     # Newer releases: a pinned formula and an undeclared one stay; a failed
@@ -1095,7 +1144,7 @@ test_apt_held_packages_left_alone() {
     # test_apt_keys_refreshed_before_updating covers that.
     export DOTFILES_APT_ETC="$test_dir/etc-apt"
     check_linux_distribution() { return 0; }
-    parse_list() { printf 'tmux\nbat\nfzf\n'; }
+    parse_list() { printf 'tmux\nbat\nwl-clipboard\nfzf\n'; }
     apt-mark() { [ "$1" = showhold ] && cat "$DOTFILES_TEST_FIXTURE/held"; }
     sudo() {
         printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
@@ -1108,12 +1157,13 @@ test_apt_held_packages_left_alone() {
     }
     printf 'bat\nunrelated\n' > "$test_dir/held"
     install_linux > "$test_dir/output"
-    assert_equal $'apt-get update -qq\napt-get install -y tmux fzf' "$(cat "$test_dir/commands")"
+    # wl-clipboard comes without its recommends (a desktop stack on Debian 13).
+    assert_equal $'apt-get update -qq\napt-get install -y tmux fzf\napt-get install -y --no-install-recommends wl-clipboard' "$(cat "$test_dir/commands")"
     assert_contains "$(cat "$test_dir/output")" 'held, left alone: bat (sudo apt-mark unhold bat to upgrade it)'
     : > "$test_dir/commands"
     export DOTFILES_UPDATE=1
     install_linux > "$test_dir/output"
-    assert_equal $'apt-get update -qq\napt-get install -y tmux fzf' "$(cat "$test_dir/commands")"
+    assert_equal $'apt-get update -qq\napt-get install -y tmux fzf\napt-get install -y --no-install-recommends wl-clipboard' "$(cat "$test_dir/commands")"
     assert_contains "$(cat "$test_dir/output")" 'Installing and upgrading apt packages'
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
     command() {
@@ -1354,6 +1404,10 @@ TPM
 printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/update-runs"
 # Like TPM itself: a failed git pull is reported, and the status stays 0.
 [ -f "$DOTFILES_TEST_FIXTURE/update-retry" ] || echo '  "tmux-yank" update fail' >&2
+echo '  "tpm" update success'
+echo '    | Already up to date.'
+echo '  "tmux-sensible" update success'
+echo '    | Already up to date.'
 exit 0
 TPM
     chmod +x "$test_dir/tpm/bin/update_plugins"
@@ -1369,8 +1423,14 @@ TPM
     assert_equal "${expected% }" "$(cat "$test_dir/update-runs")"
     assert_contains "$(cat "$test_dir/output")" "tmux plugin ${pinned%%#*} is pinned to ${pinned#*#}; left alone"
     assert_contains "$(tail -n 1 "$test_dir/tmux-commands")" 'kill-server'
+    assert_contains "$(cat "$test_dir/output")" 'Already up to date.'
     : > "$test_dir/update-retry"
     bootstrap_tmux "$test_dir/tpm" > "$test_dir/output"
+    # A success is one line.
+    assert_contains "$(cat "$test_dir/output")" '  TPM and its plugins pulled: 2 succeeded'
+    case "$(cat "$test_dir/output")" in
+        *'Already up to date'*) echo "TPM's per-plugin output was printed on success." >&2; return 1 ;;
+    esac
     assert_equal 4 "$(wc -l < "$test_dir/plugin-runs" | tr -d ' ')"
     assert_equal 2 "$(wc -l < "$test_dir/update-runs" | tr -d ' ')"
     case " $(tail -n 1 "$test_dir/update-runs") " in
@@ -1388,6 +1448,10 @@ zinit() {
         # Like zinit itself: a failed plugin update is a warning and status 0.
         print -r -- "$*" >> "$DOTFILES_TEST_FIXTURE/update-runs"
         [[ -f $DOTFILES_TEST_FIXTURE/update-retry ]] || print -r -- "Warning: zsh-users/zsh-completions update returned 1"
+        # An updated plugin's header (colored) and its git log.
+        print -r -- $'\e[1mUpdating zsh-users/zsh-autosuggestions\e[0m'
+        print -r -- "85919cd Fix a widget"
+        print -r -- "Fast-forward"
         return 0
     fi
     printf '%s\n' "$2" >> "$DOTFILES_TEST_FIXTURE/plugin-runs"
@@ -1413,9 +1477,15 @@ ZINIT
     assert_contains "$(cat "$test_dir/output")" 'zinit could not update every plugin'
     assert_equal 'update --all --quiet --no-pager' "$(cat "$test_dir/update-runs")"
     assert_equal 13 "$(wc -l < "$test_dir/plugin-runs" | tr -d ' ')"
+    assert_contains "$(cat "$test_dir/output")" 'Fast-forward'
     : > "$test_dir/update-retry"
     bootstrap_zinit "$test_dir/zinit" > "$test_dir/output"
     assert_equal 2 "$(wc -l < "$test_dir/update-runs" | tr -d ' ')"
+    # A success names the updated plugins and leaves out their git logs.
+    assert_contains "$(cat "$test_dir/output")" '  Updating zsh-users/zsh-autosuggestions'
+    case "$(cat "$test_dir/output")" in
+        *Fast-forward*|*85919cd*) echo "zinit's git log was printed on success." >&2; return 1 ;;
+    esac
 }
 
 test_github_release_install() {
@@ -2800,6 +2870,7 @@ test_neovim_plugins_install_and_retry() {
                 ;;
             *'bootstrap").plugins()'*)
                 case "$*" in *' -c cquit 1') ;; *) return 99 ;; esac
+                printf '%s=%s %s\n' "${GIT_CONFIG_KEY_0:-}" "${GIT_CONFIG_VALUE_0:-}" "${GIT_CONFIG_COUNT:-}" > "$DOTFILES_TEST_FIXTURE/plugins-git-config"
                 [ -f "$DOTFILES_TEST_FIXTURE/plugins-ok" ] || { echo 'missing plugin catppuccin'; return 1; }
                 : > "$DOTFILES_TEST_FIXTURE/plugins-installed"
                 ;;
@@ -2825,6 +2896,8 @@ test_neovim_plugins_install_and_retry() {
     bootstrap_neovim > "$test_dir/output" 2>&1 || status=$?
     assert_equal 1 "$status"
     assert_equal "$(printf '%s\n' --version "$check" "$plugins")" "$(cat "$test_dir/nvim-args")"
+    # The pinned checkouts run without git's detached-HEAD advice.
+    assert_equal 'advice.detachedHead=false 1' "$(cat "$test_dir/plugins-git-config")"
     assert_contains "$(cat "$test_dir/output")" 'missing plugin catppuccin'
     [ ! -f "$test_dir/plugins-installed" ]
     # The retry installs the plugins; the parsers and servers fail and are retried in turn.
@@ -3583,6 +3656,16 @@ test_nvim_config_check() {
 # update() against stand-ins for mason-registry and nvim-treesitter (see
 # tests/nvim_bootstrap_update.lua): current, newer, failed and retried,
 # missing, and the parser update with and without a compiler.
+# Parsers count as skipped, not missing, exactly when the tree-sitter CLI is
+# not on PATH (as on Debian 12, whose glibc no release supports).
+test_nvim_bootstrap_missing() {
+    if ! nvim -l "$TEST_REPO_DIR/tests/nvim_bootstrap_missing.lua" "$TEST_REPO_DIR/config/nvim" > "$test_dir/output" 2>&1; then
+        cat "$test_dir/output" >&2
+        return 1
+    fi
+    assert_contains "$(cat "$test_dir/output")" '2 parser skip cases pass.'
+}
+
 test_nvim_bootstrap_update() {
     if ! nvim -l "$TEST_REPO_DIR/tests/nvim_bootstrap_update.lua" "$TEST_REPO_DIR/config/nvim" > "$test_dir/output" 2>&1; then
         cat "$test_dir/output" >&2
@@ -4102,15 +4185,20 @@ run_tests() {
     else
         echo "  SKIP zinit_plugin_failure_and_retry, zsh_portable_overrides and zsh_tool_hooks (zsh is not installed)."
     fi
+    if command -v python3 >/dev/null 2>&1; then
+        tests+=(oh_my_posh_config_check)
+    else
+        echo "  SKIP oh_my_posh_config_check (python3 is not installed)."
+    fi
     if command -v tmux >/dev/null 2>&1; then
         tests+=(tmux_config_loads_and_errors_are_reported)
     else
         echo "  SKIP tmux_config_loads_and_errors_are_reported (tmux is not installed)."
     fi
     if command -v nvim >/dev/null 2>&1; then
-        tests+=(nvim_config_check nvim_bootstrap_update)
+        tests+=(nvim_config_check nvim_bootstrap_update nvim_bootstrap_missing)
     else
-        echo "  SKIP nvim_config_check and nvim_bootstrap_update (nvim is not installed)."
+        echo "  SKIP nvim_config_check, nvim_bootstrap_update and nvim_bootstrap_missing (nvim is not installed)."
     fi
     # The plugin bootstrap runs against local repositories but needs a copy of
     # lazy.nvim, which only a machine that applied the configuration has.

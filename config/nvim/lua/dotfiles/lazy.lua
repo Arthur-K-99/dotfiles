@@ -20,6 +20,24 @@ if not vim.uv.fs_stat(lazypath) then
 end
 vim.opt.rtp:prepend(lazypath)
 
+-- The bootstrap's own headless runs (nvim --headless -c 'lua
+-- require("dotfiles.bootstrap")...') start before the plugins they install
+-- exist, and lazy.nvim reports every plugin that loads at startup as "not
+-- installed" first. Those runs check the plugins themselves, so the message
+-- is dropped there; any other start still shows it.
+local bootstrapping = #vim.api.nvim_list_uis() == 0
+  and vim.iter(vim.v.argv):any(function(arg)
+    return arg:find("dotfiles.bootstrap", 1, true) ~= nil
+  end)
+local notify = vim.notify
+if bootstrapping then
+  vim.notify = function(msg, ...)
+    if not (type(msg) == "string" and msg:match("^Plugin %S+ is not installed$")) then
+      return notify(msg, ...)
+    end
+  end
+end
+
 require("lazy").setup({
   spec = { { import = "plugins" } },
   -- Plugins are installed by the bootstrap from the lockfile, never on start.
@@ -30,6 +48,8 @@ require("lazy").setup({
   change_detection = { notify = false },
   rocks = { enabled = false },
   ui = { border = "rounded" },
+  -- Headless runs print each task's result, not git's progress meter.
+  headless = { process = false, task = false },
   performance = {
     rtp = {
       -- Stock plugins this configuration replaces or never uses.
@@ -37,3 +57,4 @@ require("lazy").setup({
     },
   },
 })
+vim.notify = notify

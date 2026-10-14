@@ -31,6 +31,8 @@ record_release() {
 # Updating, zinit updates itself and every plugin it has cloned. Its update
 # returns 0 when a plugin fails and only warns ("update returned <status>"),
 # so the output decides; --no-pager keeps it from waiting in less for a key.
+# A failure shows the whole output; a success only the plugins zinit names
+# as updated, since it prints each one's git log even with --quiet.
 bootstrap_zinit() {
     local zinit_home="${1:-${XDG_DATA_HOME:-$HOME/.local/share}/zinit/zinit.git}"
     local output status
@@ -62,14 +64,15 @@ bootstrap_zinit() {
     else
         status=$?
     fi
-    printf '%s\n' "$output"
-    [ "$status" -eq 0 ] || return "$status"
-    case "$output" in
-        *"update returned"*)
-            echo "zinit could not update every plugin; see the warnings above." >&2
-            return 1
-            ;;
+    case "$status $output" in
+        "0 "*"update returned"*) status=1 ;;
     esac
+    if [ "$status" -ne 0 ]; then
+        printf '%s\n' "$output"
+        echo "zinit could not update every plugin; see the warnings above." >&2
+        return "$status"
+    fi
+    printf '%s\n' "$output" | sed "s/$(printf '\033')\\[[0-9;]*m//g" | grep -E '^Updating [^/ ]+/[^ ]+$' | sed 's/^/  /' || :
 }
 
 # dotfiles_tmux_plugins <tmux.conf>: each declared plugin, as written after
@@ -80,7 +83,8 @@ dotfiles_tmux_plugins() {
 
 # Updating, TPM pulls itself and every plugin except those pinned to a tag
 # (catppuccin/tmux#v2.3.1): git pull fails on their detached checkout, and the
-# tag is the point.
+# tag is the point. A failure shows TPM's whole output; a success one line,
+# since TPM prints "Already up to date" for every plugin.
 bootstrap_tmux() (
     # TPM installs plugins beside itself. With the configuration at
     # ~/.config/tmux/tmux.conf, TPM itself defaults to this directory.
@@ -125,14 +129,15 @@ bootstrap_tmux() (
     else
         status=$?
     fi
-    printf '%s\n' "$output"
-    [ "$status" -eq 0 ] || return "$status"
-    case "$output" in
-        *"update fail"*)
-            echo "TPM could not update every plugin; see above." >&2
-            return 1
-            ;;
+    case "$status $output" in
+        "0 "*"update fail"*) status=1 ;;
     esac
+    if [ "$status" -ne 0 ]; then
+        printf '%s\n' "$output"
+        echo "TPM could not update every plugin; see above." >&2
+        return "$status"
+    fi
+    echo "  TPM and its plugins pulled: $(printf '%s\n' "$output" | grep -c 'update success' || :) succeeded"
 )
 
 # bootstrap_owns <path>: a regular executable file. The bootstrap installs
@@ -1149,7 +1154,9 @@ bootstrap_neovim() {
         case "$report" in
             *"missing plugin "*|*"stale plugin "*)
                 echo "Installing Neovim plugins from lazy-lock.json..."
-                nvim --headless -c 'lua require("dotfiles.bootstrap").plugins()' -c 'cquit 1' || return
+                # Each pinned checkout would print git's detached-HEAD advice.
+                GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=advice.detachedHead GIT_CONFIG_VALUE_0=false \
+                    nvim --headless -c 'lua require("dotfiles.bootstrap").plugins()' -c 'cquit 1' || return
                 ;;
         esac
         case "$report" in
