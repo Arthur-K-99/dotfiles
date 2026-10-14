@@ -248,6 +248,25 @@ try {
         Assert-Throws { Invoke-DotfilesPackageInstall $repository } 'failed to install.*exit code 7'
     }
 
+    Invoke-Test 'An install that needs a restart to finish counts as installed, as an upgrade does' {
+        $report = [Collections.Generic.List[string]]::new()
+        $calls = [Collections.Generic.List[string]]::new()
+        function Get-DotfilesCommandPath { param($Name) $Name }
+        function Update-DotfilesProcessPath { }
+        function Invoke-DotfilesFontInstall { $calls.Add('font') }
+        function Write-Host { param($Object) $report.Add([string]$Object) }
+        function Invoke-DotfilesNativeCommand {
+            param($Command, $Arguments, [switch]$Quiet)
+            if ($Arguments[0] -eq 'list') { return $WingetNoApplicationsFound }
+            $calls.Add("install $($Arguments[2])")
+            if ($Arguments[2] -eq 'Git.Git') { return $WingetRebootRequiredToFinish }
+            return 0
+        }
+        Invoke-DotfilesPackageInstall $repository
+        Assert-True ($report -contains '  installed: Git.Git (restart Windows to finish)') "The restart is reported: $($report -join ' | ')"
+        Assert-True ($calls[-1] -eq 'font' -and $calls.Count -gt 2) 'The remaining packages and the font follow'
+    }
+
     Invoke-Test 'Updating upgrades installed winget packages and leaves pinned, unknown and running ones alone' {
         $fixture = New-Fixture
         New-Item -ItemType Directory -Path (Join-Path $fixture.Directory 'packages') | Out-Null

@@ -403,7 +403,9 @@ function Invoke-DotfilesPackageInstall {
         if ($code -ne $script:WingetNoApplicationsFound) { throw "winget could not check $package (exit code $code). Rerun install.ps1 after correcting the error." }
         Write-Host "  installing: $package"
         $code = Invoke-DotfilesNativeCommand $wingetCommand @('install', '--id', $package, '--exact', '--silent', '--accept-package-agreements', '--accept-source-agreements')
-        if ($code -ne 0) { throw "winget failed to install $package (exit code $code). Rerun install.ps1 to retry." }
+        # The package is in place, as for an upgrade; the doctor finds out whether it already works.
+        if ($code -eq $script:WingetRebootRequiredToFinish) { Write-Host "  installed: $package (restart Windows to finish)" }
+        elseif ($code -ne 0) { throw "winget failed to install $package (exit code $code). Rerun install.ps1 to retry." }
     }
     Update-DotfilesProcessPath
     Invoke-DotfilesFontInstall
