@@ -735,7 +735,6 @@ $editorBefore = $env:EDITOR
 if ((Get-Alias vim).Definition -ne 'nvim') { throw "vim resolves to $((Get-Alias vim).Definition), not nvim" }
 $expectedEditor = if ($editorBefore) { $editorBefore } else { 'nvim' }
 if ($env:EDITOR -ne $expectedEditor) { throw "EDITOR is '$env:EDITOR', expected '$expectedEditor'" }
-if (-not $env:VISUAL) { throw 'VISUAL is not set' }
 if ((Get-Alias ls).Definition -ne 'eza') { throw "ls resolves to $((Get-Alias ls).Definition), not eza" }
 if ((Get-Alias cat).Definition -ne 'bat') { throw "cat resolves to $((Get-Alias cat).Definition), not bat" }
 foreach ($name in @('la', 'll', 'tree')) {
@@ -836,7 +835,14 @@ exit 0
         }
         Assert-True ([bool]$surface0) "The palette must list $flavorName surface0"
         $env:DOTFILES_TEST_EXPECTED_BG = $surface0
+        $savedEditor = $env:EDITOR
         try {
+            # Without an editor chosen, Neovim; one chosen already is kept.
+            $env:EDITOR = 'hx'
+            $env:DOTFILES_TEST_READLINE = 'no'
+            $probeResult = Invoke-ProfileProbe
+            Assert-True ($probeResult.ExitCode -eq 0) "An EDITOR set already must be kept: $($probeResult.Lines -join "`n")"
+            $env:EDITOR = $null
             foreach ($readLine in @('no', 'yes')) {
                 $env:DOTFILES_TEST_READLINE = $readLine
                 $probeResult = Invoke-ProfileProbe
@@ -879,10 +885,16 @@ exit 0
             $probeResult = Invoke-ProfileProbe
             Assert-True ($probeResult.ExitCode -eq 0) "Local override failed: $($probeResult.Lines -join "`n")"
         } finally {
+            $env:EDITOR = $savedEditor
             foreach ($name in @('DOTFILES_TEST_HOME', 'DOTFILES_TEST_PROFILE', 'DOTFILES_TEST_BIN', 'DOTFILES_TEST_READLINE', 'DOTFILES_TEST_EXPECTED_FZF', 'DOTFILES_TEST_EXPECTED_BG', 'DOTFILES_TEST_DIRENV_FAIL')) {
                 [Environment]::SetEnvironmentVariable($name, $null)
             }
         }
+    }
+
+    Invoke-Test 'Hints quote a script path that holds whitespace' {
+        Assert-True ((Format-DotfilesCommandPath 'C:\dotfiles\install.ps1') -eq 'C:\dotfiles\install.ps1') 'A plain path stays as it is'
+        Assert-True ((Format-DotfilesCommandPath "C:\Users\Jane O'Neil\dotfiles\install.ps1") -eq "& 'C:\Users\Jane O''Neil\dotfiles\install.ps1'") 'A path with a space is quoted, its quote doubled'
     }
 
     Invoke-Test 'Doctor validates both editions, copied contents, fonts and runtimes' {

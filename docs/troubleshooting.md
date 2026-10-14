@@ -1,6 +1,6 @@
 # Troubleshooting
 
-The installer prints a `==>` line per stage and stops at the first stage that fails, with `Setup stopped during: <stage>` (Windows: `<stage> failed:`) and the command to rerun; completed steps and backups stay. The doctor (`~/dotfiles/scripts/doctor.sh`, Windows `~\dotfiles\scripts\doctor.ps1`) lists every check as `[ok]`, `[skip]` or a failure (`[missing]`, `[stale]`; Windows also `[missing or stale]` and `[failed]`), with a hint for most failures that names the script to run by its full path.
+The installer prints a `==>` line per stage and stops at the first stage that fails, with `Setup stopped during: <stage>` (Windows: `<stage> failed:`) and the command to rerun; completed steps and backups stay. The doctor (`~/dotfiles/scripts/doctor.sh`, Windows `~\dotfiles\scripts\doctor.ps1`) lists every check as `[ok]`, `[skip]` or a failure (`[missing]`, `[stale]`; Windows also `[missing or stale]` and `[failed]`), with a hint for most failures; a hint that names a script gives its full path.
 
 Behaviour that is not fully explained, or caused upstream, is under [Known issues](roadmap.md#known-issues) in the roadmap.
 
@@ -43,7 +43,7 @@ None of these is a failure.
 - **sudo asks for the password again** during the bootstrap: it remembers it only for some minutes ([Linux](linux.md#sudo)).
 - **"Unsupported Linux distribution":** only Debian, Ubuntu and their derivatives are supported.
 - **The doctor reports `~/.tmux.conf`:** run the `link_dotfiles.sh` command it names, which backs the file up, and keep what you need in `~/.config/tmux/local.conf`.
-- **tmux shows "TPM is missing":** run `bash ~/dotfiles/scripts/bootstrap_tools.sh` (or wherever you cloned the repository).
+- **tmux shows "TPM is missing":** run `bash ~/dotfiles/scripts/bootstrap_tools.sh`, with your clone's path if it is elsewhere.
 - **"Could not initialize the tool environment. Check Homebrew":** `brew shellenv` failed; check that Homebrew runs, then rerun.
 - **Neovim is older than 0.12 on macOS:** `brew upgrade neovim`, then rerun.
 - **An old oh-my-posh stays on macOS:** the update says `oh-my-posh not installed by the bootstrap; left alone` and `oh-my-posh version` prints an old release. A copy from Homebrew's former `jandedobbeleer/oh-my-posh` tap, which Homebrew 7 refuses to load, still sits in `/opt/homebrew/bin`. Remove that file, then `brew uninstall oh-my-posh`, `brew untap jandedobbeleer/oh-my-posh`, and rerun `scripts/bootstrap_tools.sh`, which installs the current release into `~/.local/bin`.

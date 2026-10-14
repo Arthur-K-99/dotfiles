@@ -17,7 +17,7 @@ What each managed tool does after install and where its configuration lives. The
   - PowerShell support needs atuin 18.11 or newer, which winget installs.
 - **fzf:** `Ctrl+T` inserts files and `Alt+C` changes directory, both from fd, so ignored files stay out of the way; `Tab` completion opens the same fzf window. `Ctrl+/` hides `Ctrl+T`'s preview.
 - **Directories and files:** `y` opens yazi and changes to the directory you quit in. `fd` and `rg` replace `find` and `grep`.
-- **Editing the command line:** `Ctrl+X Ctrl+E` opens it in `$EDITOR`. Both shells set `EDITOR` and `VISUAL` to `nvim` when Neovim is installed and no editor is chosen already, which git uses as well; set your own in `~/.zshrc.local` (`~/.powershell.local.ps1`).
+- **Editor:** both shells set `EDITOR` to `nvim` when Neovim is installed and `EDITOR` is not set already. `Ctrl+X Ctrl+E` and git use it unless `VISUAL` is set, which they read first. To use another editor, set `EDITOR` in `~/.zshrc.local` (Windows: `~\.powershell.local.ps1`).
 - **SSH agent:** the shared configuration leaves `SSH_AUTH_SOCK` alone. To use Bitwarden on a particular machine, add `export SSH_AUTH_SOCK="$HOME/.bitwarden-ssh-agent.sock"` to that machine's `~/.zshrc.local`.
 
 ## fastfetch

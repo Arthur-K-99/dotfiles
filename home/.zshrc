@@ -81,6 +81,12 @@ if [[ -n ${dotfiles_fd:-} ]]; then
 fi
 unset dotfiles_fd
 
+# The emacs keymap, chosen before anything binds keys: zsh starts in the vi
+# keymap when EDITOR or VISUAL names vi or vim (EDITOR=nvim below, in every
+# shell started from this one), and a key bound without -M, such as
+# zsh-abbr's Space, would land in that keymap and be lost when switching.
+bindkey -e
+
 # fzf keybindings (Ctrl-T files, Ctrl-R history, Alt-C directories) and
 # completion. This runs before the plugins so fzf-tab wraps fzf's own Tab
 # widget instead of being replaced by it. `fzf --zsh` needs fzf 0.48+ and is
@@ -136,8 +142,7 @@ autoload -Uz compinit && compinit
 # calls compdef, so it runs after compinit; fzf-tab still draws the menu.
 dotfiles_cached_init carapace carapace carapace _carapace zsh
 
-# Keybindings
-bindkey -e
+# Keybindings (the emacs keymap is chosen above)
 bindkey '^p' history-search-backward
 bindkey '^n' history-search-forward
 bindkey '^[w' kill-region
@@ -203,12 +208,10 @@ alias tree='eza --tree --icons=always'
 alias vim='nvim'
 alias c='clear'
 # Neovim for whatever asks for an editor (git, Ctrl-X Ctrl-E), unless one is
-# chosen already; ~/.zshrc.local, loaded last, can choose another.
+# chosen already; ~/.zshrc.local, loaded last, can choose another. VISUAL is
+# left alone: both read it before EDITOR.
 if [[ -z "$EDITOR" ]] && (( $+commands[nvim] )); then
     export EDITOR=nvim
-fi
-if [[ -z "$VISUAL" && -n "$EDITOR" ]]; then
-    export VISUAL="$EDITOR"
 fi
 
 # Shell integrations

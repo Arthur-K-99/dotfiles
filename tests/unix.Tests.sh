@@ -279,6 +279,14 @@ test_tmux_config_loads_and_errors_are_reported() {
     assert_contains "$(cat "$test_dir/output")" 'broken.conf'
     # Both runs clean up their private server directories.
     assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-tmux-check.*' | wc -l | tr -d ' ')"
+    # The command prompt keeps emacs keys, which tmux would switch to vi when
+    # EDITOR names vim.
+    local keys_socket="dotfiles-keys-$$" status_keys
+    EDITOR=nvim HOME="$test_dir/keys-home" tmux -L "$keys_socket" -f /dev/null start-server \; set-option -g exit-empty off \; \
+        source-file "$TEST_REPO_DIR/config/tmux/tmux.conf" > "$test_dir/output" 2>&1 || :
+    status_keys="$(tmux -L "$keys_socket" show-options -gv status-keys 2>&1)" || :
+    tmux -L "$keys_socket" kill-server >/dev/null 2>&1 || :
+    assert_equal emacs "$status_keys"
     # A machine-local file is loaded when it exists.
     local socket="dotfiles-local-$$" value
     mkdir -p "$test_dir/home/.config/tmux"
@@ -3437,6 +3445,16 @@ test_doctor_linux_font() {
     local parent="${TEST_REPO_DIR%/*}" name="${TEST_REPO_DIR##*/}"
     assert_equal "~/$name/scripts" "$(HOME="$parent" bash -c 'source "$1/scripts/doctor.sh"; printf %s "$DOTFILES_SCRIPTS"' _ "$TEST_REPO_DIR")"
     assert_equal "$TEST_REPO_DIR/scripts" "$(HOME="$test_dir/elsewhere" bash -c 'source "$1/scripts/doctor.sh"; printf %s "$DOTFILES_SCRIPTS"' _ "$TEST_REPO_DIR")"
+    assert_equal "~/$name/scripts" "$(HOME="$parent/" bash -c 'source "$1/scripts/doctor.sh"; printf %s "$DOTFILES_SCRIPTS"' _ "$TEST_REPO_DIR")"
+    assert_equal "$TEST_REPO_DIR/scripts" "$(HOME= bash -c 'source "$1/scripts/doctor.sh"; printf %s "$DOTFILES_SCRIPTS"' _ "$TEST_REPO_DIR")"
+    # A clone whose path holds a space is quoted, so the hint runs as pasted.
+    mkdir -p "$test_dir/my dotfiles"
+    cp -R "$TEST_REPO_DIR/scripts" "$test_dir/my dotfiles/scripts"
+    local test_home
+    test_home="$(cd "$test_dir" && pwd)"
+    assert_equal '~/my\ dotfiles/scripts' "$(HOME="$test_home" bash -c 'source "$1/scripts/doctor.sh"; printf %s "$DOTFILES_SCRIPTS"' _ "$test_home/my dotfiles")"
+    # No hint names a script by a path relative to the repository.
+    assert_equal 0 "$(grep -c -E '(bash|rerun:?|run:) scripts/' "$TEST_REPO_DIR/scripts/doctor.sh" || :)"
     source "$TEST_REPO_DIR/scripts/doctor.sh"
     export DOTFILES_TEST_FIXTURE="$test_dir"
     uname() { if [ "${1:-}" = -r ]; then cat "$DOTFILES_TEST_FIXTURE/kernel"; else command uname "$@"; fi; }
@@ -3542,7 +3560,7 @@ test_doctor_apt_keys() {
     failures=0
     check_apt_keys > "$test_dir/output"
     assert_equal 0 "$failures"
-    assert_equal '  [ok] gierens apt repository key (expires on 2027-07-23; scripts/update.sh fetches it again)' "$(grep -F ' gierens apt ' "$test_dir/output")"
+    assert_equal "  [ok] gierens apt repository key (expires on 2027-07-23; $DOTFILES_SCRIPTS/update.sh fetches it again)" "$(grep -F ' gierens apt ' "$test_dir/output")"
     # Expiring in two years, or never.
     for found in "$gierens $((now + 2 * 365 * 86400))" "$gierens"; do
         printf '%s\n' "$found" > "$test_dir/keys/gierens"
@@ -4010,8 +4028,30 @@ LOCAL
             autoload() { :; }
             compinit() { :; }
             source "$DOTFILES_TEST_PROFILE" || exit 1
-            [[ "$EDITOR" == nvim && "$VISUAL" == nvim ]] || { print -u2 "EDITOR=$EDITOR VISUAL=$VISUAL"; exit 1; }
+            [[ "$EDITOR" == nvim && -z "$VISUAL" ]] || { print -u2 "EDITOR=$EDITOR VISUAL=$VISUAL"; exit 1; }
         '
+    # Without Neovim nothing is set.
+    mkdir -p "$test_dir/empty-bin"
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/empty-bin" \
+        "$zsh_binary" -df -c '
+            unset EDITOR VISUAL
+            autoload() { :; }
+            compinit() { :; }
+            source "$DOTFILES_TEST_PROFILE" || exit 1
+            [[ -z "$EDITOR" ]] || { print -u2 "EDITOR=$EDITOR without nvim"; exit 1; }
+        '
+    # With EDITOR=nvim inherited, zsh starts in the vi keymap; the emacs keymap
+    # must be chosen before the plugins bind keys, or zsh-abbr's Space is lost.
+    DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
+        XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/editor-bin:/usr/bin:/bin" \
+        EDITOR=nvim DOTFILES_TEST_KEYMAP="$test_dir/keymap" "$zsh_binary" -df -c '
+            autoload() { :; }
+            compinit() { :; }
+            zinit() { [[ "$2" == olets/zsh-abbr ]] && bindkey -lL main > "$DOTFILES_TEST_KEYMAP"; return 0; }
+            source "$DOTFILES_TEST_PROFILE" || exit 1
+        '
+    assert_equal 'bindkey -A emacs main' "$(cat "$test_dir/keymap")"
     DOTFILES_TEST_HOME="$test_dir/fixture" DOTFILES_TEST_PROFILE="$test_dir/profile.zsh" \
         XDG_DATA_HOME="$test_dir/data" ZDOTDIR="$test_dir/zdot" PATH="$test_dir/editor-bin:/usr/bin:/bin" \
         EDITOR=hx "$zsh_binary" -df -c '
@@ -4019,7 +4059,7 @@ LOCAL
             autoload() { :; }
             compinit() { :; }
             source "$DOTFILES_TEST_PROFILE" || exit 1
-            [[ "$EDITOR" == hx && "$VISUAL" == hx ]] || { print -u2 "EDITOR=$EDITOR VISUAL=$VISUAL"; exit 1; }
+            [[ "$EDITOR" == hx && -z "$VISUAL" ]] || { print -u2 "EDITOR=$EDITOR VISUAL=$VISUAL"; exit 1; }
         '
 }
 

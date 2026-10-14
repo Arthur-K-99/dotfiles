@@ -688,13 +688,22 @@ function Get-DotfilesDoctorCommands {
         'rg', 'fd', 'dust', 'duf', 'procs', 'sd', 'xh', 'hyperfine', 'glow', 'tldr', 'gum', 'direnv')
 }
 
+# Format-DotfilesCommandPath <path>: a script path as a hint names it, ready
+# to paste: as it is, or as `& '<path>'` when it holds whitespace, which
+# PowerShell would otherwise read as the end of the command name.
+function Format-DotfilesCommandPath {
+    param([string]$Path)
+    if ($Path -notmatch '\s') { return $Path }
+    return "& '$($Path.Replace("'", "''"))'"
+}
+
 function Invoke-DotfilesDoctor {
     param([string]$DotfilesDir, [string]$HomeDirectory)
     $failures = 0
     # Hints name the scripts by full path, so they work from any directory.
-    $runtimesScript = Join-Path (Join-Path $DotfilesDir 'scripts') 'install_runtimes.ps1'
-    $doctorScript = Join-Path (Join-Path $DotfilesDir 'scripts') 'doctor.ps1'
-    $installScript = Join-Path $DotfilesDir 'install.ps1'
+    $runtimesScript = Format-DotfilesCommandPath (Join-Path (Join-Path $DotfilesDir 'scripts') 'install_runtimes.ps1')
+    $doctorScript = Format-DotfilesCommandPath (Join-Path (Join-Path $DotfilesDir 'scripts') 'doctor.ps1')
+    $installScript = Format-DotfilesCommandPath (Join-Path $DotfilesDir 'install.ps1')
     Write-Host 'Checking commands...'
     foreach ($name in Get-DotfilesDoctorCommands) {
         if (Get-DotfilesCommandPath $name) { Write-Host "  [ok] $name" }

@@ -211,10 +211,10 @@ bootstrap_bat_theme() {
 # enough (release_tag), verified and installed into ~/.local/bin
 # (DOTFILES_LOCAL_BIN). No installer script is piped into a shell:
 # oh-my-posh's and zoxide's verified nothing they fetched.
-# Every curl call here retries timeouts and HTTP 408, 429 and 5xx answers,
-# seven times over about two minutes (--retry 7, waiting 1, 2, 4 ... 64
-# seconds): GitHub returns a 500 or 502 now and then, at times for half a
-# minute, and an update looks up the latest tag of every release tool.
+# Every curl call here retries timeouts and HTTP 408, 429, 500, 502, 503 and
+# 504 answers seven times over about two minutes (--retry 7, waiting 1, 2,
+# 4 ... 64 seconds): GitHub returns a 500 or 502 now and then, at times for
+# half a minute, and an update looks up the latest tag of every release tool.
 
 # install_apt_repository <name> <package>...: installs packages from one of
 # the repositories in lib/apt_repositories.sh, adding it with its pinned key

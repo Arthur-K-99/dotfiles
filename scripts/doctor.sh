@@ -8,11 +8,15 @@ source "$DOTFILES_DIR/scripts/lib/apt_repositories.sh"
 failures=0
 
 # The repository's scripts directory as the hints below name it: a full path,
-# so a hint works from any directory, with ~ for the home directory.
-DOTFILES_SCRIPTS="$DOTFILES_DIR/scripts"
-case "$DOTFILES_SCRIPTS" in
-    "$HOME"/*) DOTFILES_SCRIPTS="~${DOTFILES_SCRIPTS#"$HOME"}" ;;
-esac
+# so a hint works from any directory, with ~ for the home directory and the
+# rest quoted for the shell where it needs it (a space, say).
+dotfiles_home="${HOME%/}"
+if [ -n "$dotfiles_home" ] && [ "${DOTFILES_DIR#"$dotfiles_home"/}" != "$DOTFILES_DIR" ]; then
+    DOTFILES_SCRIPTS="~/$(printf '%q' "${DOTFILES_DIR#"$dotfiles_home"/}/scripts")"
+else
+    DOTFILES_SCRIPTS="$(printf '%q' "$DOTFILES_DIR/scripts")"
+fi
+unset dotfiles_home
 
 ok() { printf '  [ok] %s\n' "$1"; }
 fail() { printf '  [missing] %s\n' "$1"; failures=$((failures + 1)); }
@@ -93,7 +97,7 @@ check_apt_keys() {
             if [ -n "$expiry" ] && [ "$expiry" -le "$now" ]; then
                 stale "$name apt repository key (expired on $(dotfiles_date "$expiry"); run: bash $DOTFILES_SCRIPTS/update.sh, which fetches it again)"
             elif [ -n "$expiry" ] && [ "$expiry" -le "$soon" ]; then
-                ok "$name apt repository key (expires on $(dotfiles_date "$expiry"); scripts/update.sh fetches it again)"
+                ok "$name apt repository key (expires on $(dotfiles_date "$expiry"); $DOTFILES_SCRIPTS/update.sh fetches it again)"
             else
                 ok "$name apt repository key"
             fi
