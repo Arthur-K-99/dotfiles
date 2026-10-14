@@ -677,6 +677,7 @@ $env:PATH = $env:DOTFILES_TEST_BIN
 if ($env:DOTFILES_TEST_READLINE -eq 'yes') {
     try { Import-Module PSReadLine } catch { Write-Output 'SKIP-READLINE'; exit 0 }
 }
+$homeBefore = [Environment]::GetEnvironmentVariable('HOME')
 . $env:DOTFILES_TEST_PROFILE
 if ((Get-Alias ls).Definition -ne 'eza') { throw "ls resolves to $((Get-Alias ls).Definition), not eza" }
 if ((Get-Alias cat).Definition -ne 'bat') { throw "cat resolves to $((Get-Alias cat).Definition), not bat" }
@@ -695,7 +696,17 @@ if ($env:ProgramFiles) {
 }
 if (-not (Get-Command y -CommandType Function -ErrorAction SilentlyContinue)) { throw 'y function is missing' }
 $calls = [string]$env:DOTFILES_TEST_CALLS
-$expectedCalls = @('mise activate pwsh;', 'direnv hook pwsh;')
+$expectedCalls = @('mise activate pwsh;')
+# direnv's hook throws below PowerShell 7.2; where it runs, direnv gets HOME and Git's bash.
+if ($PSVersionTable.PSVersion.Major -gt 7 -or ($PSVersionTable.PSVersion.Major -eq 7 -and $PSVersionTable.PSVersion.Minor -ge 2)) {
+    $expectedCalls += 'direnv hook pwsh;'
+    if ($homeBefore -and $env:HOME -ne $homeBefore) { throw "The profile changed HOME from '$homeBefore' to '$env:HOME'" }
+    if (-not $homeBefore -and $env:HOME -ne $env:DOTFILES_TEST_HOME) { throw "HOME is '$env:HOME', expected the home directory for direnv" }
+    if ($env:ProgramFiles) {
+        $gitBash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'
+        if ((Test-Path -LiteralPath $gitBash) -and $env:DIRENV_BASH -ne $gitBash) { throw "DIRENV_BASH is '$env:DIRENV_BASH', expected '$gitBash'" }
+    }
+} elseif ($calls -match 'direnv') { throw "direnv's hook must not run in PowerShell $($PSVersionTable.PSVersion). Recorded: $calls" }
 if (Get-Module PSReadLine) { $expectedCalls += @('carapace _carapace;', 'atuin init powershell --disable-up-arrow;') }
 foreach ($call in $expectedCalls) {
     if (-not $calls.Contains($call)) { throw "The profile did not evaluate '$call'. Recorded: $calls" }

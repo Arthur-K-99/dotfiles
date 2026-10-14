@@ -27,8 +27,18 @@ if (Get-Command mise -ErrorAction SilentlyContinue) {
 }
 
 # direnv loads and unloads .envrc files on directory changes (direnv 2.33+).
-if (Get-Command direnv -ErrorAction SilentlyContinue) {
-    Invoke-Expression "$(direnv hook pwsh)"
+# Its hook needs PowerShell 7.2 and throws in Windows PowerShell. direnv finds
+# its configuration, cache and data directories through HOME, which Windows
+# does not set, and runs .envrc files with bash: Git for Windows' bash, which
+# is not on PATH by default (and a bash on PATH may be WSL's).
+$direnvShell = $PSVersionTable.PSVersion.Major -gt 7 -or ($PSVersionTable.PSVersion.Major -eq 7 -and $PSVersionTable.PSVersion.Minor -ge 2)
+if ($direnvShell -and (Get-Command direnv -ErrorAction SilentlyContinue)) {
+    if (-not (Test-Path Env:HOME)) { Set-Item Env:HOME $HOME }
+    if ($env:ProgramFiles -and -not $env:DIRENV_BASH) {
+        $gitBash = Join-Path $env:ProgramFiles "Git\bin\bash.exe"
+        if (Test-Path -LiteralPath $gitBash) { $env:DIRENV_BASH = $gitBash }
+    }
+    direnv hook pwsh | Out-String | Invoke-Expression
 }
 
 if (Get-Command nvim -ErrorAction SilentlyContinue) {
