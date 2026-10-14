@@ -10,7 +10,7 @@ permissions:
 jobs:
   probe:
     runs-on: windows-2025
-    timeout-minutes: 40
+    timeout-minutes: 50
     env:
       GITHUB_TOKEN: ${{ github.token }}
     defaults:
@@ -20,51 +20,62 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Install the tools the profile initialises
-        run: |
-          foreach ($id in 'JanDeDobbeleer.OhMyPosh', 'ajeetdsouza.zoxide', 'jdx.mise', 'direnv.direnv') {
-            winget install --id $id --exact --silent --accept-package-agreements --accept-source-agreements | Out-Null
-            "$id -> $LASTEXITCODE"
-          }
-          pwsh -NoProfile -Command "Install-Module Terminal-Icons, posh-git -Scope CurrentUser -Force -AllowClobber"
-      - name: Which integration keeps PowerShell 7 from exiting
+      - name: Prepare
+        run: ./tests/fresh_install.ps1 -Stage Prepare
+      - name: Install
+        run: ./tests/fresh_install.ps1 -Stage Install
+      - name: Which part of the installed profile keeps PowerShell 7 from exiting
         run: |
           $env:PATH = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
-          $config = (Resolve-Path config/oh-my-posh/config.omp.json).Path
-          $cases = [ordered]@{
-            'nothing' = ''
-            'oh-my-posh' = "oh-my-posh init pwsh --config '$config' | Invoke-Expression"
-            'zoxide' = 'zoxide init powershell --cmd cd | Out-String | Invoke-Expression'
-            'mise' = '(& mise activate pwsh) | Out-String | Invoke-Expression'
-            'direnv' = "`$env:HOME = `$HOME; direnv hook pwsh | Out-String | Invoke-Expression"
-            'Terminal-Icons' = 'Import-Module Terminal-Icons'
-            'posh-git' = 'Import-Module posh-git'
-            'whole profile' = ". '$((Resolve-Path config/powershell/profile.ps1).Path)'"
-          }
-          foreach ($name in $cases.Keys) {
-            $script = Join-Path $env:RUNNER_TEMP "case.ps1"
-            [IO.File]::WriteAllText($script, $cases[$name] + "`nWrite-Output 'script done'`n")
-            foreach ($stdin in 'closed', 'inherited') {
-              $info = New-Object Diagnostics.ProcessStartInfo
-              $info.FileName = (Get-Command pwsh.exe).Source
-              $info.Arguments = "-NoLogo -NoProfile -NonInteractive -File `"$script`""
-              $info.UseShellExecute = $false
-              $info.RedirectStandardOutput = $true
-              $info.RedirectStandardError = $true
-              $info.RedirectStandardInput = ($stdin -eq 'closed')
-              $clock = [Diagnostics.Stopwatch]::StartNew()
-              $p = [Diagnostics.Process]::Start($info)
-              if ($stdin -eq 'closed') { $p.StandardInput.Close() }
-              $out = $p.StandardOutput.ReadToEndAsync(); $err = $p.StandardError.ReadToEndAsync()
-              if ($p.WaitForExit(45000)) { $result = "exited $($p.ExitCode) in $([int]$clock.Elapsed.TotalSeconds) s" }
-              else {
-                $result = 'HUNG'
-                Get-CimInstance Win32_Process -Filter "ParentProcessId = $($p.Id)" | ForEach-Object { "    child: $($_.Name) $($_.CommandLine)" }
-                $threads = $p.Threads.Count
-                $result += " ($threads threads)"
-                Stop-Process -Id $p.Id -Force
-              }
-              $null = $out.Wait(5000); $null = $err.Wait(5000)
-              "${name}, stdin ${stdin}: $result; stdout: $(if ($out.IsCompleted) { $out.Result.Trim() }); stderr: $(if ($err.IsCompleted) { $err.Result.Trim() })"
+          $profilePath = (& pwsh -NoProfile -Command '$PROFILE.CurrentUserAllHosts')
+          $source = [IO.File]::ReadAllText($profilePath)
+          "omp command: $((Get-Command oh-my-posh).Source)"
+          $work = Join-Path $env:RUNNER_TEMP 'hang'
+          New-Item -ItemType Directory -Path $work -Force | Out-Null
+          function Test-Case {
+            param([string]$Name, [string]$Shell, [string[]]$Arguments)
+            $info = New-Object Diagnostics.ProcessStartInfo
+            $info.FileName = (Get-Command $Shell).Source
+            $info.Arguments = $Arguments -join ' '
+            $info.UseShellExecute = $false
+            $info.RedirectStandardInput = $true
+            $info.RedirectStandardOutput = $true
+            $info.RedirectStandardError = $true
+            $clock = [Diagnostics.Stopwatch]::StartNew()
+            $p = [Diagnostics.Process]::Start($info)
+            $p.StandardInput.Close()
+            $out = $p.StandardOutput.ReadToEndAsync(); $err = $p.StandardError.ReadToEndAsync()
+            if ($p.WaitForExit(60000)) { $result = "exited $($p.ExitCode) in $([int]$clock.Elapsed.TotalSeconds) s" }
+            else {
+              $result = "HUNG ($($p.Threads.Count) threads)"
+              Get-CimInstance Win32_Process -Filter "ParentProcessId = $($p.Id)" | ForEach-Object { "    child: $($_.Name) $($_.CommandLine)" }
+              Stop-Process -Id $p.Id -Force
             }
+            $null = $out.Wait(5000); $null = $err.Wait(5000)
+            "== ${Name}: $result"
+            if ($out.IsCompleted) { "   stdout: $($out.Result.Trim())" }
+            if ($err.IsCompleted) { "   stderr: $(($err.Result -replace '\x1b\[[0-9;]*m', '').Trim())" }
+          }
+          $probe = Join-Path $work 'probe.ps1'
+          [IO.File]::WriteAllText($probe, "Write-Output ('omp executable: ' + `$global:_ompExecutable)`nWrite-Output 'script done'`n")
+          Test-Case 'pwsh, profile loaded at start' 'pwsh.exe' @('-NoLogo', '-NonInteractive', '-File', $probe)
+          Test-Case 'pwsh, profile loaded at start, interactive switch off' 'pwsh.exe' @('-NoLogo', '-File', $probe)
+          Test-Case 'powershell, profile loaded at start' 'powershell.exe' @('-NoLogo', '-NonInteractive', '-File', $probe)
+          $variants = [ordered]@{
+            'whole profile' = $source
+            'without oh-my-posh' = $source.Replace('oh-my-posh init pwsh --config $promptConfig | Invoke-Expression', '')
+            'without zoxide' = $source.Replace('zoxide init powershell --cmd cd | Out-String | Invoke-Expression', '')
+            'without mise' = $source.Replace('(& mise activate pwsh) | Out-String | Invoke-Expression', '')
+            'without direnv' = $source.Replace('direnv hook pwsh | Out-String | Invoke-Expression', '')
+            'without modules' = $source.Replace('Import-Module Terminal-Icons -ErrorAction SilentlyContinue', '').Replace('Import-Module posh-git -ErrorAction SilentlyContinue', '')
+            'only oh-my-posh' = '$promptConfig = Join-Path $HOME ".config\oh-my-posh\config.omp.json"; oh-my-posh init pwsh --config $promptConfig | Invoke-Expression'
+            'only oh-my-posh, POSH_DISABLE_STREAMING' = '$env:POSH_DISABLE_STREAMING = 1; $promptConfig = Join-Path $HOME ".config\oh-my-posh\config.omp.json"; oh-my-posh init pwsh --config $promptConfig | Invoke-Expression'
+            'only modules' = 'Import-Module Terminal-Icons; Import-Module posh-git'
+          }
+          $index = 0
+          foreach ($name in $variants.Keys) {
+            $index++
+            $file = Join-Path $work "variant$index.ps1"
+            [IO.File]::WriteAllText($file, $variants[$name] + "`nWrite-Output ('omp executable: ' + `$global:_ompExecutable)`nWrite-Output 'script done'`n")
+            Test-Case "pwsh -NoProfile, $name" 'pwsh.exe' @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $file)
           }
