@@ -2,6 +2,12 @@
 # is optional, so the file also loads in Windows PowerShell, whose module path
 # and PSReadLine version differ. It stays ASCII (glyphs as code points) because
 # Windows PowerShell reads scripts without a byte-order mark as ANSI.
+
+# The console host imports PSReadLine before the profile runs only for an
+# interactive shell. oh-my-posh's init imports it too (for the transient
+# prompt's keys), so the shell's own answer is read before anything else.
+$interactiveReadLine = [bool](Get-Module PSReadLine)
+
 $localBin = Join-Path $HOME ".local\bin"
 if (Test-Path -LiteralPath $localBin) {
     $env:PATH = "$localBin$([IO.Path]::PathSeparator)$env:PATH"
@@ -106,9 +112,11 @@ $env:FZF_DEFAULT_OPTS = @(
 Import-Module Terminal-Icons -ErrorAction SilentlyContinue
 Import-Module posh-git -ErrorAction SilentlyContinue
 
-# PSReadLine. The console host imports it before the profile runs, so this block
-# is skipped in non-interactive shells such as `pwsh -Command`.
-if (Get-Module PSReadLine) {
+# PSReadLine, in interactive shells only (see $interactiveReadLine above). In a
+# shell such as `pwsh -Command` or `pwsh -File`, CompletionPredictor would
+# deadlock PowerShell 7 when the command finishes: its runspace handler runs a
+# pipeline while the host waits for the command.
+if ($interactiveReadLine) {
     $esc = [char]27
     # Catppuccin Macchiato. Foregrounds are hex strings; the two backgrounds
     # need the escape-sequence form.

@@ -656,15 +656,20 @@ try {
         # probe can tell that the profile evaluated each integration with the expected command line.
         $stubBin = Join-Path $fixture.Directory 'bin'
         New-Item -ItemType Directory -Path $stubBin | Out-Null
-        $integrations = @('mise', 'carapace', 'atuin', 'direnv', 'yazi', 'fastfetch')
+        # oh-my-posh's init imports PSReadLine for the transient prompt's keys, interactive or not.
+        $promptConfig = Join-Path $fixture.Directory '.config/oh-my-posh/config.omp.json'
+        New-Item -ItemType Directory -Path (Split-Path -Parent $promptConfig) -Force | Out-Null
+        [IO.File]::WriteAllText($promptConfig, '{}')
+        $prefixes = @{ 'oh-my-posh' = 'Import-Module PSReadLine -ErrorAction SilentlyContinue; ' }
+        $integrations = @('oh-my-posh', 'mise', 'carapace', 'atuin', 'direnv', 'yazi', 'fastfetch')
         foreach ($tool in @('eza', 'bat', 'fzf') + $integrations) {
             if ($env:OS -eq 'Windows_NT') {
                 $body = "@echo off`r`n"
-                if ($tool -in $integrations) { $body += "echo `$env:DOTFILES_TEST_CALLS += '$tool %*;'`r`n" }
+                if ($tool -in $integrations) { $body += "echo $($prefixes[$tool])`$env:DOTFILES_TEST_CALLS += '$tool %*;'`r`n" }
                 [IO.File]::WriteAllText((Join-Path $stubBin "$tool.cmd"), $body + "exit 0`r`n")
             } else {
                 $body = "#!/bin/sh`n"
-                if ($tool -in $integrations) { $body += "echo `"\`$env:DOTFILES_TEST_CALLS += '$tool `$*;'`"`n" }
+                if ($tool -in $integrations) { $body += "echo `"$($prefixes[$tool])\`$env:DOTFILES_TEST_CALLS += '$tool `$*;'`"`n" }
                 $stub = Join-Path $stubBin $tool
                 [IO.File]::WriteAllText($stub, $body + "exit 0`n")
                 & chmod +x $stub
@@ -696,6 +701,7 @@ if ($env:ProgramFiles) {
 }
 if (-not (Get-Command y -CommandType Function -ErrorAction SilentlyContinue)) { throw 'y function is missing' }
 $calls = [string]$env:DOTFILES_TEST_CALLS
+if (-not $calls.Contains('oh-my-posh init pwsh --config')) { throw "The profile did not initialise oh-my-posh. Recorded: $calls" }
 $expectedCalls = @('mise activate pwsh;')
 # direnv's hook throws below PowerShell 7.2; where it runs, direnv gets HOME and Git's bash.
 if ($PSVersionTable.PSVersion.Major -gt 7 -or ($PSVersionTable.PSVersion.Major -eq 7 -and $PSVersionTable.PSVersion.Minor -ge 2)) {
@@ -707,7 +713,10 @@ if ($PSVersionTable.PSVersion.Major -gt 7 -or ($PSVersionTable.PSVersion.Major -
         if ((Test-Path -LiteralPath $gitBash) -and $env:DIRENV_BASH -ne $gitBash) { throw "DIRENV_BASH is '$env:DIRENV_BASH', expected '$gitBash'" }
     }
 } elseif ($calls -match 'direnv') { throw "direnv's hook must not run in PowerShell $($PSVersionTable.PSVersion). Recorded: $calls" }
-if (Get-Module PSReadLine) { $expectedCalls += @('carapace _carapace;', 'atuin init powershell --disable-up-arrow;') }
+# The PSReadLine block follows the host's PSReadLine, not the one oh-my-posh's init imported:
+# CompletionPredictor would deadlock PowerShell 7 at the end of a non-interactive command.
+if ($env:DOTFILES_TEST_READLINE -eq 'yes') { $expectedCalls += @('carapace _carapace;', 'atuin init powershell --disable-up-arrow;') }
+elseif ($calls -match 'carapace|atuin') { throw "The PSReadLine block ran in a shell whose host had not loaded PSReadLine. Recorded: $calls" }
 foreach ($call in $expectedCalls) {
     if (-not $calls.Contains($call)) { throw "The profile did not evaluate '$call'. Recorded: $calls" }
 }
