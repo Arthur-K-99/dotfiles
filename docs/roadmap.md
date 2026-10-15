@@ -119,7 +119,7 @@ Not tied to a phase; pick up when convenient.
 
 Done:
 
-- **`ssh host cmd` ran `cmd` twice in Ghostty** (found trying 1.0.0 on this Mac, 2026-10-15; PR link to follow):
+- **`ssh host cmd` ran `cmd` twice in Ghostty** (found trying 1.0.0 on this Mac, 2026-10-15; [#23](https://github.com/Arthur-K-99/dotfiles/pull/23)):
   - **Symptom:** every `ssh deployer@<host> '<cmd>'` printed `Setting up xterm-ghostty terminfo on <host>...`, the command's output, `Warning: Failed to install terminfo.`, and the output again. The host is an OrbStack Rocky Linux machine; Ghostty hides why the install failed (no `tic` is the likely cause).
   - **Cause:** `shell-integration-features` turned on `ssh-terminfo`. Ghostty 1.3.1's zsh `ssh` wrapper then installs its terminfo entry over a first connection that gets all of `ssh`'s arguments plus its install script. ssh joins them into one command line and the script starts on a new line, so the user's command runs first, with its stdout shown and the terminfo text as its stdin. The wrapper always ends with a second `ssh` carrying the command. A successful install is cached, so only the first call to that host runs the command twice; a failed one is not, so every call does.
   - **Fix:** `ssh-terminfo` is off; `ssh-env` still sends `TERM=xterm-256color`, and `COLORTERM` where the host accepts it. Ghostty's own wrapper, sourced with a stand-in `ssh` that simulates a host without `tic` and counts the runs, ran the command twice with the old features and once with the new ones. Hosts already in Ghostty's cache now get `xterm-256color` too (none on this Mac).
