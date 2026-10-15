@@ -34,7 +34,9 @@ record_release() {
 # A failure shows the whole output; a success only the plugins zinit names
 # as updated, since it prints each one's git log even with --quiet. zinit
 # prints a dot per plugin and a carriage return before "Updating
-# owner/plugin", and its own changelog after "[self-update]".
+# owner/plugin", and its own changelog after "[self-update]". Links to
+# completions a plugin no longer ships are removed after installing and after
+# updating; `zinit cclear` would also delete files it does not recognise.
 bootstrap_zinit() {
     local zinit_home="${1:-${XDG_DATA_HOME:-$HOME/.local/share}/zinit/zinit.git}"
     local output status
@@ -56,6 +58,7 @@ bootstrap_zinit() {
         zinit light olets/zsh-abbr || exit
         zinit light MichaelAquilina/zsh-you-should-use || exit
     ' || return
+    remove_stale_zinit_completions "$(dirname "$zinit_home")" || return
     dotfiles_updating || return 0
     echo "Updating Zinit and its plugins..."
     if output="$(ZINIT_HOME="$zinit_home" zsh -c '
@@ -79,6 +82,19 @@ bootstrap_zinit() {
     case "$output" in
         *"[self-update]"*) echo "  zinit updated itself" ;;
     esac
+    remove_stale_zinit_completions "$(dirname "$zinit_home")"
+}
+
+# remove_stale_zinit_completions <zinit data directory>
+remove_stale_zinit_completions() {
+    local link count=0
+    while IFS= read -r link; do
+        rm -f "$link" || return
+        count=$((count + 1))
+    done < <(dotfiles_stale_zinit_completions "$1")
+    if [ "$count" -gt 0 ]; then
+        echo "  removed $count zinit completion link(s) to files their plugins no longer ship"
+    fi
 }
 
 # dotfiles_tmux_plugins <tmux.conf>: each declared plugin, as written after

@@ -121,6 +121,12 @@ Not tied to a phase; pick up when convenient.
 
 Done:
 
+- **compinit errors from stale zinit completions** (found checking this Mac after trying 1.0.0, 2026-10-15; PR link to follow):
+  - **Symptom:** a shell that rebuilt `~/.zcompdump` printed 18 lines of `compinit:527: no such file or directory: ~/.local/share/zinit/completions/_android` (and `_artisan`, `_console`, ...). compinit rebuilds the dump when the number of completion files changes, so this came once after an update or a `brew install`, not on every start.
+  - **Cause:** zinit links each plugin's `_*` files into its completions directory. zsh-completions removed those 18 completions (`_android` on 2026-03-08), `zinit update` pulled the removal, and the links stayed. Neither the update nor the doctor looked.
+  - **Fix:** after installing and after updating the plugins, the bootstrap removes links into zinit's plugins whose files are gone, and prints how many. `zinit cclear` was not used: it also deletes completion files it does not recognise. The doctor reports any such link (`[stale] zinit completions`). On this Mac the doctor found 18, the bootstrap removed them, the doctor passed (119 checks), and a rebuilt dump printed nothing.
+  - **Noted, harmless:** zinit also links zsh-abbr's test files (`_add.ztr.zsh` and others under `tests/`) into the completions directory; compinit skips them, as they have no `#compdef` line.
+
 - **`ssh host cmd` ran `cmd` twice in Ghostty** (found trying 1.0.0 on this Mac, 2026-10-15; [#23](https://github.com/Arthur-K-99/dotfiles/pull/23)):
   - **Symptom:** every `ssh deployer@<host> '<cmd>'` printed `Setting up xterm-ghostty terminfo on <host>...`, the command's output, `Warning: Failed to install terminfo.`, and the output again. The host is an OrbStack Rocky Linux machine; Ghostty hides why the install failed (no `tic` is the likely cause).
   - **Cause:** `shell-integration-features` turned on `ssh-terminfo`. Ghostty 1.3.1's zsh `ssh` wrapper then installs its terminfo entry over a first connection that gets all of `ssh`'s arguments plus its install script. ssh joins them into one command line and the script starts on a new line, so the user's command runs first, with its stdout shown and the terminfo text as its stdin. The wrapper always ends with a second `ssh` carrying the command. A successful install is cached, so only the first call to that host runs the command twice; a failed one is not, so every call does.

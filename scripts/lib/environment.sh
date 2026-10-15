@@ -169,6 +169,23 @@ dotfiles_yazi_flavors() {
     sed -E -n 's/^(dark|light) = "([^"]*)"[[:space:]]*$/\2/p' "$1" | awk '!seen[$0]++'
 }
 
+# dotfiles_stale_zinit_completions <zinit data directory>: each link in
+# zinit's completions directory that points into its plugins at a file that
+# is gone. zinit links a plugin's completion files there and keeps the links
+# when the plugin drops a file, and compinit then prints "no such file or
+# directory" for each one whenever it rebuilds ~/.zcompdump. Links elsewhere
+# and plain files are someone else's.
+dotfiles_stale_zinit_completions() {
+    local link target
+    for link in "$1/completions"/*; do
+        if [ ! -L "$link" ] || [ -e "$link" ]; then continue; fi
+        target="$(readlink "$link")" || continue
+        case "$target" in
+            "$1/plugins/"*) printf '%s\n' "$link" ;;
+        esac
+    done
+}
+
 # The Neovim configuration needs the nvim-treesitter main branch, which
 # requires Neovim 0.12 (vim.lsp.config, the other 0.11 feature it relies on,
 # is older). Debian 12 (0.7), Debian 13 (0.10), Ubuntu 24.04 (0.9) and Ubuntu

@@ -1500,6 +1500,54 @@ ZINIT
   zinit updated itself" "$(sed -n '/^Updating Zinit and its plugins/,$p' "$test_dir/output" | sed 1d)"
 }
 
+# zinit keeps a link in its completions directory when a plugin drops the
+# file behind it (zsh-completions removed _android and 17 others in 2026), and
+# compinit then complains about each whenever it rebuilds its dump. Installing
+# and updating remove those links, and only those; the doctor reports any left.
+test_zinit_stale_completions() {
+    source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    export XDG_DATA_HOME="$test_dir/xdg" DOTFILES_TEST_FIXTURE="$test_dir"
+    local data="$XDG_DATA_HOME/zinit" link
+    local plugin="$XDG_DATA_HOME/zinit/plugins/owner---plugin"
+    mkdir -p "$data/zinit.git" "$data/completions" "$plugin"
+    cat > "$data/zinit.git/zinit.zsh" <<'ZINIT'
+zinit() {
+    # Like zsh-completions dropping a completion in an update.
+    [[ $1 == update ]] && rm -f "$DOTFILES_TEST_FIXTURE/xdg/zinit/plugins/owner---plugin/_dropped"
+    return 0
+}
+ZINIT
+    : > "$plugin/_kept"
+    : > "$plugin/_dropped"
+    for link in _kept _dropped _gone; do
+        ln -s "$plugin/$link" "$data/completions/$link"
+    done
+    ln -s "$test_dir/elsewhere/_other" "$data/completions/_other"
+    : > "$data/completions/_mine"
+    bootstrap_zinit "$data/zinit.git" > "$test_dir/output"
+    assert_contains "$(cat "$test_dir/output")" '  removed 1 zinit completion link(s) to files their plugins no longer ship'
+    [ ! -L "$data/completions/_gone" ] || { echo "The link to a dropped file stayed." >&2; return 1; }
+    for link in _kept _dropped _other; do
+        [ -L "$data/completions/$link" ] || { echo "$link was removed." >&2; return 1; }
+    done
+    [ -f "$data/completions/_mine" ] || { echo "A plain file was removed." >&2; return 1; }
+    # Nothing stale, nothing printed.
+    bootstrap_zinit "$data/zinit.git" > "$test_dir/output"
+    assert_equal 0 "$(grep -c 'completion link' "$test_dir/output" || :)"
+    # The doctor names what is left, and passes once it is gone.
+    source "$TEST_REPO_DIR/scripts/doctor.sh"
+    ln -s "$plugin/_gone" "$data/completions/_gone"
+    check_plugins > "$test_dir/output" || :
+    assert_equal "  [stale] zinit completions (1 link(s) to files their plugins no longer ship, which compinit reports; rerun: bash $DOTFILES_SCRIPTS/bootstrap_tools.sh)" "$(grep -F 'zinit completions' "$test_dir/output")"
+    # Updating, the links the update leaves dangling go too.
+    export DOTFILES_UPDATE=1
+    bootstrap_zinit "$data/zinit.git" > "$test_dir/output"
+    assert_equal 2 "$(grep -c 'removed 1 zinit completion link' "$test_dir/output" || :)"
+    [ ! -L "$data/completions/_dropped" ] || { echo "The update's dangling link stayed." >&2; return 1; }
+    check_plugins > "$test_dir/output" || :
+    assert_equal '  [ok] zinit completions' "$(grep -F 'zinit completions' "$test_dir/output")"
+}
+
 test_github_release_install() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
     trust_release_downloads
@@ -4255,9 +4303,9 @@ run_tests() {
         doctor_rejects_stale_configuration
     )
     if command -v zsh >/dev/null 2>&1; then
-        tests+=(zinit_plugin_failure_and_retry zsh_portable_overrides zsh_tool_hooks)
+        tests+=(zinit_plugin_failure_and_retry zinit_stale_completions zsh_portable_overrides zsh_tool_hooks)
     else
-        echo "  SKIP zinit_plugin_failure_and_retry, zsh_portable_overrides and zsh_tool_hooks (zsh is not installed)."
+        echo "  SKIP zinit_plugin_failure_and_retry, zinit_stale_completions, zsh_portable_overrides and zsh_tool_hooks (zsh is not installed)."
     fi
     if command -v python3 >/dev/null 2>&1; then
         tests+=(oh_my_posh_config_check)
