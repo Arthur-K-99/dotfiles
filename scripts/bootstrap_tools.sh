@@ -191,7 +191,7 @@ bootstrap_bat_theme() {
     theme_dir="$("$bat_command" --config-dir)/themes" || return
     theme_file="$theme_dir/$theme_name.tmTheme"
     mkdir -p "$theme_dir" || return
-    curl -fsSL --retry 7 -o "$theme_file.part" "$theme_url" || {
+    dotfiles_curl -o "$theme_file.part" "$theme_url" || {
         status=$?
         rm -f "$theme_file.part"
         return "$status"
@@ -211,10 +211,9 @@ bootstrap_bat_theme() {
 # enough (release_tag), verified and installed into ~/.local/bin
 # (DOTFILES_LOCAL_BIN). No installer script is piped into a shell:
 # oh-my-posh's and zoxide's verified nothing they fetched.
-# Every curl call here retries timeouts and HTTP 408, 429, 500, 502, 503 and
-# 504 answers seven times over about two minutes (--retry 7, waiting 1, 2,
-# 4 ... 64 seconds): GitHub returns a 500 or 502 now and then, at times for
-# half a minute, and an update looks up the latest tag of every release tool.
+# Every download goes through dotfiles_curl (lib/environment.sh), which
+# retries GitHub's occasional 500 and 502 answers, at times half a minute
+# long, for about two minutes, and bounds a host that does not answer.
 
 # install_apt_repository <name> <package>...: installs packages from one of
 # the repositories in lib/apt_repositories.sh, adding it with its pinned key
@@ -280,7 +279,7 @@ dotfiles_arch() {
 # project marks so, never a prerelease or a draft.
 github_latest_tag() {
     local url
-    url="$(curl -fsSL --retry 7 -o /dev/null -w '%{url_effective}' "https://github.com/$1/releases/latest")" || return
+    url="$(dotfiles_curl -o /dev/null -w '%{url_effective}' "https://github.com/$1/releases/latest")" || return
     case "$url" in
         */releases/tag/?*) printf '%s\n' "${url##*/releases/tag/}" ;;
         *) echo "Could not resolve the latest release of $1: $url" >&2; return 1 ;;
@@ -303,10 +302,12 @@ github_latest_tag() {
 # age) stays well under. GITHUB_TOKEN raises the limit when set;
 # it goes to curl on stdin, so it never shows in the process list. GitHub
 # answers a token it does not accept (expired, or for another host) with 401
-# instead of answering anonymously, so a failed request is made once more
-# without it. Over the limit GitHub answers 403 or 429. curl retries a 429 and
-# would wait as long as a Retry-After asks; with --retry-max-time, a longer
-# one makes it give up at once instead.
+# instead of answering anonymously, and a token over its limit or kept out of
+# an organization with 403, so after either the request is made once more
+# without it; after an outage or a timeout it is not, since that would only
+# double the wait. Over the limit GitHub answers 403 or 429. curl retries a
+# 429 and would wait as long as a Retry-After asks; with --retry-max-time, a
+# longer one makes it give up at once instead.
 #
 # With DOTFILES_GITHUB_API_CACHE set to a directory (bootstrap_tools_main makes
 # one per run), each answer is kept there and a second request for the same
@@ -336,15 +337,31 @@ github_api_cache() {
 
 # The answers are compressed on the way (--compressed): a list of releases
 # with all their assets runs to megabytes of JSON, a tenth of that gzipped.
+# The status comes from %{http_code}: macOS's curl 8.7.1 exits 56 rather than
+# 22 for an HTTP error over HTTP/2.
 github_api_request() {
-    local args=(-fsSL --compressed --retry 7 --retry-max-time 120 -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28')
+    local args=(--compressed --retry-max-time 120 -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28')
+    local answer code="" status=0
+    answer="$(mktemp "${TMPDIR:-/tmp}/dotfiles-api.XXXXXX")" || return
     if [ -n "${GITHUB_TOKEN:-}" ]; then
-        if printf 'Authorization: Bearer %s\n' "$GITHUB_TOKEN" | curl "${args[@]}" -H @- "https://api.github.com/$1"; then
-            return 0
-        fi
-        echo "The GitHub API refused the request with GITHUB_TOKEN; trying once without it." >&2
+        code="$(printf 'Authorization: Bearer %s\n' "$GITHUB_TOKEN" |
+            dotfiles_curl "${args[@]}" -H @- -o "$answer" -w '%{http_code}' "https://api.github.com/$1")" || status=$?
     fi
-    curl "${args[@]}" "https://api.github.com/$1"
+    case "$code" in
+        401|403)
+            echo "The GitHub API refused GITHUB_TOKEN (HTTP $code); trying once without it." >&2
+            status=0
+            dotfiles_curl "${args[@]}" -o "$answer" "https://api.github.com/$1" || status=$?
+            ;;
+        "")
+            dotfiles_curl "${args[@]}" -o "$answer" "https://api.github.com/$1" || status=$?
+            ;;
+    esac
+    if [ "$status" -eq 0 ]; then
+        cat "$answer" || status=$?
+    fi
+    rm -f "$answer"
+    return "$status"
 }
 
 # release_asset_digests: reads the releases API's JSON for one release or a
@@ -412,7 +429,7 @@ file_sha256() {
 download_release_asset() {
     local expected actual
     expected="$(release_asset_digest "$1" "$2" "$3")" || return
-    curl -fsSL --retry 7 -o "$4" "https://github.com/$1/releases/download/$2/$3" || return
+    dotfiles_curl -o "$4" "https://github.com/$1/releases/download/$2/$3" || return
     actual="$(file_sha256 "$4")" || return
     if [ "$actual" != "$expected" ]; then
         rm -f "$4"

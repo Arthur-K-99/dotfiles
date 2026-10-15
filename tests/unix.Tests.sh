@@ -825,6 +825,7 @@ test_eza_index_and_download_failures() {
 # /tmp, as an agent's socket path inside a home under a long TMPDIR (macOS)
 # would be too long.
 test_apt_key_pinning() {
+    source "$TEST_REPO_DIR/scripts/lib/environment.sh"
     source "$TEST_REPO_DIR/scripts/lib/apt_repositories.sh"
     export DOTFILES_TEST_FIXTURE="$test_dir"
     export TMPDIR="$test_dir/tmp"
@@ -1500,6 +1501,24 @@ ZINIT
   zinit updated itself" "$(sed -n '/^Updating Zinit and its plugins/,$p' "$test_dir/output" | sed 1d)"
 }
 
+# Every download goes through dotfiles_curl, which bounds an unreachable
+# host and a stalled transfer, and writes to a file: a retry starts a file
+# over but appends to stdout after what the stalled try wrote, so a script or
+# JSON read from stdout could arrive twice, the first copy cut short.
+test_downloads_are_bounded() {
+    local direct unfiled
+    direct="$(grep -n -E '(^|[^_[:alnum:]])curl[[:space:]]' "$TEST_REPO_DIR"/install.sh "$TEST_REPO_DIR"/scripts/*.sh "$TEST_REPO_DIR"/scripts/lib/*.sh |
+        grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#' | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*curl -fsSL --connect-timeout' || :)"
+    assert_equal '' "$direct"
+    unfiled="$(grep -n -E 'dotfiles_curl[[:space:]]' "$TEST_REPO_DIR"/install.sh "$TEST_REPO_DIR"/scripts/*.sh "$TEST_REPO_DIR"/scripts/lib/*.sh |
+        grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#' | grep -v -E '[[:space:]]-o[[:space:]]' || :)"
+    assert_equal '' "$unfiled"
+    source "$TEST_REPO_DIR/scripts/lib/environment.sh"
+    curl() { printf '%s\n' "$*"; }
+    assert_equal '-fsSL --connect-timeout 30 --speed-limit 1 --speed-time 60 --retry 7 -o file https://example.invalid/x' \
+        "$(dotfiles_curl -o file https://example.invalid/x)"
+}
+
 test_github_release_install() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
     trust_release_downloads
@@ -1903,7 +1922,7 @@ JSON
     assert_contains "$(cat "$test_dir/release-min.json")" '"assets":[{"url":"https://api.github.com/repos/owner/tool/releases/assets/11","id":11,'
     uname() { if [ "${1:-}" = -m ]; then printf 'x86_64\n'; else command uname "$@"; fi; }
     curl() {
-        local output="" url="" write_out="" token=""
+        local output="" url="" write_out="" token="" code
         printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/calls"
         while [ "$#" -gt 0 ]; do
             case "$1" in
@@ -1929,9 +1948,17 @@ JSON
                 printf 'https://github.com/owner/tool/releases/tag/v1.2.3'
                 ;;
             https://api.github.com/repos/owner/tool/releases/tags/v1.2.3)
-                [ ! -f "$DOTFILES_TEST_FIXTURE/api-down" ] || return 22
-                [ -z "$token" ] || [ ! -f "$DOTFILES_TEST_FIXTURE/token-rejected" ] || return 22
-                cat "$DOTFILES_TEST_FIXTURE/release.json"
+                # Answers go to a file; -w '%{http_code}' prints the status.
+                [ -n "$output" ] || return 97
+                code=200
+                [ ! -f "$DOTFILES_TEST_FIXTURE/api-down" ] || code=503
+                if [ -n "$token" ] && [ -f "$DOTFILES_TEST_FIXTURE/token-rejected" ]; then
+                    code="$(cat "$DOTFILES_TEST_FIXTURE/token-rejected")"
+                    code="${code:-401}"
+                fi
+                [ "$write_out" != '%{http_code}' ] || printf '%s' "$code"
+                [ "$code" = 200 ] || return 22
+                cat "$DOTFILES_TEST_FIXTURE/release.json" > "$output"
                 ;;
             https://github.com/owner/tool/releases/download/v1.2.3/tool-v1.2.3.tar.gz)
                 printf '%s\n' "$url" >> "$DOTFILES_TEST_FIXTURE/downloads"
@@ -1984,12 +2011,29 @@ JSON
     local calls_before
     calls_before="$(wc -l < "$test_dir/calls" | tr -d ' ')"
     assert_equal "$sum" "$(release_asset_digest owner/tool v1.2.3 tool-v1.2.3.tar.gz 2> "$test_dir/output")"
-    assert_contains "$(cat "$test_dir/output")" 'trying once without it'
+    assert_equal 'The GitHub API refused GITHUB_TOKEN (HTTP 401); trying once without it.' "$(cat "$test_dir/output")"
     assert_equal "$((calls_before + 2))" "$(wc -l < "$test_dir/calls" | tr -d ' ')"
     assert_contains "$(tail -n 2 "$test_dir/calls" | head -n 1)" '-H @-'
     assert_equal 0 "$(tail -n 1 "$test_dir/calls" | grep -c -- '@-' || :)"
+    # So does a 403: a token over its limit, or kept out of an organization.
+    printf 403 > "$test_dir/token-rejected"
+    calls_before="$(wc -l < "$test_dir/calls" | tr -d ' ')"
+    assert_equal "$sum" "$(release_asset_digest owner/tool v1.2.3 tool-v1.2.3.tar.gz 2> "$test_dir/output")"
+    assert_contains "$(cat "$test_dir/output")" '(HTTP 403); trying once without it'
+    assert_equal "$((calls_before + 2))" "$(wc -l < "$test_dir/calls" | tr -d ' ')"
+    rm "$test_dir/token-rejected"
+    # An outage is not the token's fault: no second request, which would
+    # only double the wait, and no word about the token.
+    : > "$test_dir/api-down"
+    calls_before="$(wc -l < "$test_dir/calls" | tr -d ' ')"
+    status=0
+    release_asset_digest owner/tool v1.2.3 tool-v1.2.3.tar.gz > /dev/null 2> "$test_dir/output" || status=$?
+    [ "$status" -ne 0 ]
+    assert_equal "$((calls_before + 1))" "$(wc -l < "$test_dir/calls" | tr -d ' ')"
+    assert_equal 0 "$(grep -c 'refused GITHUB_TOKEN' "$test_dir/output" || :)"
+    rm "$test_dir/api-down"
     unset GITHUB_TOKEN
-    rm "$test_dir/token-rejected" "$test_dir/stdin"
+    rm "$test_dir/stdin"
     # An unreadable release stops the install before anything is downloaded.
     : > "$test_dir/api-down"
     status=0
@@ -2017,8 +2061,11 @@ JSON
     assert_equal verified-release "$("$DOTFILES_LOCAL_BIN/tool")"
     assert_equal v1.2.3 "$(cat "$record")"
     assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-release.*' | wc -l | tr -d ' ')"
-    # Every call, the API's included, retries transient failures.
+    # Every call, the API's included, retries transient failures and bounds
+    # connects and stalls, and none leaves a temporary file behind.
     assert_equal 0 "$(grep -c -v -- '--retry 7' "$test_dir/calls")"
+    assert_equal 0 "$(grep -c -v -- '--connect-timeout 30 --speed-limit 1 --speed-time 60' "$test_dir/calls")"
+    assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-api.*' | wc -l | tr -d ' ')"
 }
 
 # A release is installed once it is DOTFILES_MINIMUM_RELEASE_AGE old, a day
@@ -2191,11 +2238,11 @@ v2.0.0 false false $oldest" "$(release_records < "$test_dir/api/list.json")"
                 ;;
             https://api.github.com/repos/owner/tool/releases/tags/*)
                 [ -f "$DOTFILES_TEST_FIXTURE/api/${url##*/}.json" ] || return 22
-                cat "$DOTFILES_TEST_FIXTURE/api/${url##*/}.json"
+                cat "$DOTFILES_TEST_FIXTURE/api/${url##*/}.json" > "$output"
                 ;;
             'https://api.github.com/repos/owner/tool/releases?per_page=30')
                 [ ! -f "$DOTFILES_TEST_FIXTURE/list-down" ] || return 22
-                cat "$DOTFILES_TEST_FIXTURE/api/list.json"
+                cat "$DOTFILES_TEST_FIXTURE/api/list.json" > "$output"
                 ;;
             https://github.com/owner/tool/releases/download/*) cp "$DOTFILES_TEST_FIXTURE/asset.tar.gz" "$output" ;;
             *) echo "unexpected URL $url" >&2; return 99 ;;
@@ -4231,6 +4278,7 @@ run_tests() {
         apt_keys_refreshed_before_updating
         macos_update_upgrades_declared
         script_installers_install_and_update
+        downloads_are_bounded
         github_release_install
         github_release_update
         release_download_verification

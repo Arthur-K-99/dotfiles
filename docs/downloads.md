@@ -25,7 +25,11 @@ What this proves, and what it does not:
 
 GitHub's API answers 60 requests an hour per address without a token. A Linux install makes one per release download, about 18, plus one for each latest release that is too young to install (see [Release age](#release-age)). Repeated installs behind one address, such as several `tests/fresh_install.sh` runs, can exceed that.
 
-Set `GITHUB_TOKEN` to raise the limit, for example `GITHUB_TOKEN="$(gh auth token)" ~/dotfiles/install.sh`. The token goes to curl on stdin, so it never shows in the process list. A token GitHub does not accept is dropped with a warning and the request is made once more without it.
+Set `GITHUB_TOKEN` to raise the limit, for example `GITHUB_TOKEN="$(gh auth token)" ~/dotfiles/install.sh`. The token goes to curl on stdin, so it never shows in the process list. A token GitHub refuses (HTTP 401, or 403 for one over its limit or kept out of an organization) is dropped with a warning and the request is made once more without it; any other failure is not repeated.
+
+## A slow or unreachable network
+
+Every download (releases, the API, apt keys, the bat theme, the Homebrew installer) retries timeouts and GitHub's passing 500 and 502 answers for about two minutes. It gives up on a host that has not answered after 30 seconds, and on a transfer that has sent nothing for a minute, and retries those too, so a download whose every try stalls fails after about 10 minutes rather than hanging. A host whose name does not resolve, or that refuses the connection, fails at once.
 
 ## Release age
 

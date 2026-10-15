@@ -62,6 +62,19 @@ dotfiles_login_shell() {
 # dotfiles_updating: scripts/update.sh exports DOTFILES_UPDATE=1 for the
 # install stages, which then bring what they installed to the newest release
 # they may take instead of keeping whatever is present.
+# dotfiles_curl <curl arguments>: curl as every download here runs it, into
+# a file (-o): -f fails on an HTTP error, and --retry 7 retries timeouts and
+# HTTP 408, 429, 500, 502, 503 and 504 answers over about two minutes (1, 2,
+# 4 ... 64 seconds apart). --connect-timeout 30 bounds an unreachable host,
+# which curl otherwise gives 300 seconds a try. --speed-limit 1 with
+# --speed-time 60 ends a transfer that has sent nothing for a minute, which
+# curl would otherwise wait out for good; both count as timeouts, so they are
+# retried. A retry starts a file over but appends to stdout, after what the
+# stalled try wrote, so callers that read the answer read it from a file.
+dotfiles_curl() {
+    curl -fsSL --connect-timeout 30 --speed-limit 1 --speed-time 60 --retry 7 "$@"
+}
+
 dotfiles_updating() {
     [ "${DOTFILES_UPDATE:-0}" = 1 ]
 }

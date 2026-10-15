@@ -23,7 +23,7 @@ None of these is a failure.
 - **apt repository keys:**
   - `Could not fetch the <name> repository's key from …; its keyring stays as it is.` during an update: the download failed and the doctor checks the existing keyring.
   - `[ok] charm apt repository key (expires on <date>; scripts/update.sh fetches it again)` within 30 days of the expiry.
-- **`The GitHub API refused the request with GITHUB_TOKEN; trying once without it.`** The token has expired or is for another host; the request goes on without it.
+- **`The GitHub API refused GITHUB_TOKEN (HTTP 401); trying once without it.`** The token has expired or is for another host (401), or is over its limit or kept out of an organization (403); the request goes on without it.
 - **Without a terminal** (cron, some IDE tasks and agent shells), zsh-you-should-use prints `tput: No value for $TERM`, and on Debian 12 fzf 0.38 prints `can't change option: zle`. A real terminal never shows either.
 - **`Warning: The following taps are not trusted:`** when a macOS update upgrades a Homebrew formula. It names taps you added yourself, such as `hashicorp/tap`. Homebrew 7 ignores their formulae until you trust them (`brew trust --formula <tap>/<formula>`); the dotfiles install nothing from a tap, so the update is unaffected.
 - **In a container,** dbus's package script prints `invoke-rc.d: could not determine current runlevel`; that comes from the container, not the installer.
