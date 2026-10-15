@@ -39,6 +39,7 @@ None of these is a failure.
 - **"… is unavailable after package installation. Reopen PowerShell and rerun install.ps1":** the running shell does not see what winget just installed; open a new one and rerun.
 - **"Without a token GitHub answers 60 requests an hour per address":** wait an hour, or set `GITHUB_TOKEN` and rerun ([downloads](downloads.md#the-github-api-limit)).
 - **"No release of … among the 30 most recent is older than 1d":** a tool that is not installed yet has no release old enough, or the clock is behind (the message then says so). Fix the clock, or rerun with `DOTFILES_MINIMUM_RELEASE_AGE=0`.
+- **`ssh host cmd` prints `Setting up xterm-ghostty terminfo on <host>...` and the output twice:** the 1.0.0 configuration turned on Ghostty's `ssh-terminfo`, which in Ghostty 1.3.1 runs the command on a first connection too. Update, then open a new Ghostty window or tab; shells already open keep the old setting ([Ghostty](tools.md#ghostty)).
 - **Something of yours is in the way:** `~/.local/bin/nvim exists and is not a link` or `~/.local/share/fonts/CaskaydiaCove exists and the bootstrap did not install it`. Move it away and rerun.
 - **sudo asks for the password again** during the bootstrap: it remembers it only for some minutes ([Linux](linux.md#sudo)).
 - **"Unsupported Linux distribution":** only Debian, Ubuntu and their derivatives are supported.

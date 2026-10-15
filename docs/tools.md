@@ -32,7 +32,7 @@ New interactive shells start with a machine summary in Catppuccin colors; tmux p
 - `` Cmd+` `` opens a drop-down quick terminal from any app on macOS, after macOS grants the Accessibility permission it asks for.
 - Machine-local settings, shaders and extra themes go in `~/.config/ghostty/local`, which the managed file loads when it exists. On macOS Ghostty also reads `~/Library/Application Support/com.mitchellh.ghostty/config`; keep a setting in one of the two places, since which one wins was not checked ([roadmap](roadmap.md#known-issues)).
 - On Linux, install Ghostty from [ghostty.org](https://ghostty.org/download); the configuration is already in place.
-- `ssh` from a Ghostty shell sends `TERM=xterm-256color`, which every host knows, and true color. Ghostty's `ssh-terminfo` feature, which installs its own terminfo entry on the host, is off: in Ghostty 1.3.1 it ran a command given to `ssh` twice ([roadmap](roadmap.md)).
+- `ssh` from a Ghostty shell tells the host the terminal is `xterm-256color`, a name nearly every host knows, and sends `COLORTERM=truecolor` to hosts whose sshd accepts it (`AcceptEnv COLORTERM`). Ghostty can also copy its own terminal description (`xterm-ghostty`) to each host; that option, `ssh-terminfo`, is off because in Ghostty 1.3.1 it runs a command given to `ssh` twice ([roadmap](roadmap.md)).
 
 ## tmux
 

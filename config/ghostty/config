@@ -39,12 +39,13 @@ copy-on-select = clipboard
 # itself (shell-integration = detect), which gives prompt jumping, the cursor
 # shape and the working directory in new tabs. TERM stays at the default
 # xterm-ghostty so local programs get Ghostty's full terminfo. ssh-env wraps
-# ssh to send TERM=xterm-256color, which every host knows, with COLORTERM.
-# ssh-terminfo stays off: in Ghostty 1.3.1 its install step passes the remote
-# command too, so `ssh host cmd` ran cmd twice (see docs/roadmap.md). sudo
-# keeps TERMINFO for root. Inside tmux none of this applies, because the tmux
+# ssh to send TERM=xterm-256color, which nearly every host knows, and
+# COLORTERM where the host accepts it. ssh-terminfo stays off: Ghostty 1.3.1
+# installs its entry over a first connection that also runs the remote
+# command, so `ssh host cmd` runs cmd twice (see docs/roadmap.md). sudo keeps
+# TERMINFO for root. Inside tmux none of this applies, because the tmux
 # configuration forces tmux-256color.
-shell-integration-features = cursor,sudo,title,ssh-env,path
+shell-integration-features = cursor,sudo,title,ssh-env,no-ssh-terminfo,path
 
 # Keyboard. The left Option key acts as Alt so fzf's Alt-C and zsh's Alt-w
 # work; the right Option key keeps typing macOS special characters.
