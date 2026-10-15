@@ -337,26 +337,27 @@ github_api_cache() {
 
 # The answers are compressed on the way (--compressed): a list of releases
 # with all their assets runs to megabytes of JSON, a tenth of that gzipped.
-# The status comes from %{http_code}: macOS's curl 8.7.1 exits 56 rather than
-# 22 for an HTTP error over HTTP/2.
+# Whether to try without the token is decided by the status (%{http_code},
+# 000 when nothing answered), not by curl's exit status.
 github_api_request() {
     local args=(--compressed --retry-max-time 120 -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28')
-    local answer code="" status=0
-    answer="$(mktemp "${TMPDIR:-/tmp}/dotfiles-api.XXXXXX")" || return
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
+    local answer code status=0
+    # In the run's cache directory when there is one, whose EXIT trap removes
+    # the file even when the run is interrupted.
+    answer="$(mktemp "${DOTFILES_GITHUB_API_CACHE:-${TMPDIR:-/tmp}}/dotfiles-api.XXXXXX")" || return
+    if [ -z "${GITHUB_TOKEN:-}" ]; then
+        dotfiles_curl "${args[@]}" -o "$answer" "https://api.github.com/$1" || status=$?
+    else
         code="$(printf 'Authorization: Bearer %s\n' "$GITHUB_TOKEN" |
             dotfiles_curl "${args[@]}" -H @- -o "$answer" -w '%{http_code}' "https://api.github.com/$1")" || status=$?
+        case "$code" in
+            401|403)
+                echo "The GitHub API refused GITHUB_TOKEN (HTTP $code); trying once without it." >&2
+                status=0
+                dotfiles_curl "${args[@]}" -o "$answer" "https://api.github.com/$1" || status=$?
+                ;;
+        esac
     fi
-    case "$code" in
-        401|403)
-            echo "The GitHub API refused GITHUB_TOKEN (HTTP $code); trying once without it." >&2
-            status=0
-            dotfiles_curl "${args[@]}" -o "$answer" "https://api.github.com/$1" || status=$?
-            ;;
-        "")
-            dotfiles_curl "${args[@]}" -o "$answer" "https://api.github.com/$1" || status=$?
-            ;;
-    esac
     if [ "$status" -eq 0 ]; then
         cat "$answer" || status=$?
     fi

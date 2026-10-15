@@ -1504,18 +1504,24 @@ ZINIT
 # Every download goes through dotfiles_curl, which bounds an unreachable
 # host and a stalled transfer, and writes to a file: a retry starts a file
 # over but appends to stdout after what the stalled try wrote, so a script or
-# JSON read from stdout could arrive twice, the first copy cut short.
+# JSON read from stdout could arrive twice, the first copy cut short. The
+# greps cannot see curl run through a variable.
 test_downloads_are_bounded() {
+    local scripts=("$TEST_REPO_DIR"/install.sh "$TEST_REPO_DIR"/scripts/*.sh "$TEST_REPO_DIR"/scripts/lib/*.sh)
     local direct unfiled
-    direct="$(grep -n -E '(^|[^_[:alnum:]])curl[[:space:]]' "$TEST_REPO_DIR"/install.sh "$TEST_REPO_DIR"/scripts/*.sh "$TEST_REPO_DIR"/scripts/lib/*.sh |
-        grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#' | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*curl -fsSL --connect-timeout' || :)"
+    # No curl or wget but the one in dotfiles_curl.
+    direct="$(grep -n -E '(^|[^_[:alnum:]])(curl|wget)([[:space:]]|$)' "${scripts[@]}" |
+        grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#' |
+        grep -v -E '^[^:]*/scripts/lib/environment\.sh:[0-9]+:    curl --fail-with-body ' || :)"
     assert_equal '' "$direct"
-    unfiled="$(grep -n -E 'dotfiles_curl[[:space:]]' "$TEST_REPO_DIR"/install.sh "$TEST_REPO_DIR"/scripts/*.sh "$TEST_REPO_DIR"/scripts/lib/*.sh |
-        grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#' | grep -v -E '[[:space:]]-o[[:space:]]' || :)"
+    # Each call names a file after -o (not -, which is stdout).
+    unfiled="$(grep -n -E 'dotfiles_curl[[:space:]]' "${scripts[@]}" |
+        grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#' |
+        grep -v -E '[[:space:]]-o[[:space:]]+[^-[:space:]]' || :)"
     assert_equal '' "$unfiled"
     source "$TEST_REPO_DIR/scripts/lib/environment.sh"
     curl() { printf '%s\n' "$*"; }
-    assert_equal '-fsSL --connect-timeout 30 --speed-limit 1 --speed-time 60 --retry 7 -o file https://example.invalid/x' \
+    assert_equal '--fail-with-body -sSL --connect-timeout 30 --speed-limit 1 --speed-time 60 --retry 7 --retry-max-time 180 -o file https://example.invalid/x' \
         "$(dotfiles_curl -o file https://example.invalid/x)"
 }
 
@@ -1936,7 +1942,7 @@ JSON
                     fi
                     shift
                     ;;
-                --retry|--retry-max-time) shift ;;
+                --retry|--retry-max-time|--connect-timeout|--speed-limit|--speed-time) shift ;;
                 -*) ;;
                 *) url="$1" ;;
             esac
@@ -1952,6 +1958,11 @@ JSON
                 [ -n "$output" ] || return 97
                 code=200
                 [ ! -f "$DOTFILES_TEST_FIXTURE/api-down" ] || code=503
+                # Nothing answered: curl prints 000 and exits 28.
+                if [ -f "$DOTFILES_TEST_FIXTURE/api-silent" ]; then
+                    [ "$write_out" != '%{http_code}' ] || printf 000
+                    return 28
+                fi
                 if [ -n "$token" ] && [ -f "$DOTFILES_TEST_FIXTURE/token-rejected" ]; then
                     code="$(cat "$DOTFILES_TEST_FIXTURE/token-rejected")"
                     code="${code:-401}"
@@ -2032,6 +2043,15 @@ JSON
     assert_equal "$((calls_before + 1))" "$(wc -l < "$test_dir/calls" | tr -d ' ')"
     assert_equal 0 "$(grep -c 'refused GITHUB_TOKEN' "$test_dir/output" || :)"
     rm "$test_dir/api-down"
+    # Nor is a host that never answered.
+    : > "$test_dir/api-silent"
+    calls_before="$(wc -l < "$test_dir/calls" | tr -d ' ')"
+    status=0
+    release_asset_digest owner/tool v1.2.3 tool-v1.2.3.tar.gz > /dev/null 2> "$test_dir/output" || status=$?
+    [ "$status" -ne 0 ]
+    assert_equal "$((calls_before + 1))" "$(wc -l < "$test_dir/calls" | tr -d ' ')"
+    assert_equal 0 "$(grep -c 'refused GITHUB_TOKEN' "$test_dir/output" || :)"
+    rm "$test_dir/api-silent"
     unset GITHUB_TOKEN
     rm "$test_dir/stdin"
     # An unreadable release stops the install before anything is downloaded.
@@ -2064,7 +2084,7 @@ JSON
     # Every call, the API's included, retries transient failures and bounds
     # connects and stalls, and none leaves a temporary file behind.
     assert_equal 0 "$(grep -c -v -- '--retry 7' "$test_dir/calls")"
-    assert_equal 0 "$(grep -c -v -- '--connect-timeout 30 --speed-limit 1 --speed-time 60' "$test_dir/calls")"
+    assert_equal 0 "$(grep -c -v -- '--connect-timeout 30 --speed-limit 1 --speed-time 60 --retry 7 --retry-max-time 180' "$test_dir/calls")"
     assert_equal 0 "$(find "$TMPDIR" -maxdepth 1 -name 'dotfiles-api.*' | wc -l | tr -d ' ')"
 }
 
@@ -2225,7 +2245,7 @@ v2.0.0 false false $oldest" "$(release_records < "$test_dir/api/list.json")"
         while [ "$#" -gt 0 ]; do
             case "$1" in
                 -o) output="$2"; shift ;;
-                -w|-H|--retry|--retry-max-time) shift ;;
+                -w|-H|--retry|--retry-max-time|--connect-timeout|--speed-limit|--speed-time) shift ;;
                 -*) ;;
                 *) url="$1" ;;
             esac

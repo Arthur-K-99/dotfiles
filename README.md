@@ -128,7 +128,7 @@ The update does not pull the repository, so `git pull` first. It runs the instal
 - [docs/tools.md](docs/tools.md): what each tool does after install and where its configuration lives.
 - [docs/linux.md](docs/linux.md) and [docs/windows.md](docs/windows.md): what differs by platform, WSL included.
 - [docs/updating.md](docs/updating.md): everything the update upgrades and leaves alone.
-- [docs/downloads.md](docs/downloads.md): verified downloads, the release age and `GITHUB_TOKEN`.
+- [docs/downloads.md](docs/downloads.md): verified downloads, timeouts and retries, the release age and `GITHUB_TOKEN`.
 - [docs/troubleshooting.md](docs/troubleshooting.md): messages that are not errors, first-try problems, undoing an install, reporting.
 - [docs/development.md](docs/development.md): repository checks, fresh installs and CI.
 - [docs/theming.md](docs/theming.md): where every color lives and how to switch Catppuccin flavor.
