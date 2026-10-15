@@ -172,16 +172,20 @@ dotfiles_yazi_flavors() {
 # dotfiles_stale_zinit_completions <zinit data directory>: each link in
 # zinit's completions directory that points into its plugins at a file that
 # is gone. zinit links a plugin's completion files there and keeps the links
-# when the plugin drops a file, and compinit then prints "no such file or
-# directory" for each one whenever it rebuilds ~/.zcompdump. Links elsewhere
-# and plain files are someone else's.
+# when the plugin drops a file. compinit then prints "no such file or
+# directory" for each one whenever it rebuilds ~/.zcompdump, and skips a
+# working completion of the same name later on fpath. Disabled completions
+# (no leading _), links elsewhere and plain files stay.
 dotfiles_stale_zinit_completions() {
-    local link target
-    for link in "$1/completions"/*; do
+    local link target plugins="$1/plugins" resolved
+    # zinit links to the plugin file with symlinks resolved (zsh's :A).
+    resolved="$(CDPATH= cd -- "$plugins" 2>/dev/null && pwd -P)" ||
+        resolved="$plugins"
+    for link in "$1/completions"/_*; do
         if [ ! -L "$link" ] || [ -e "$link" ]; then continue; fi
         target="$(readlink "$link")" || continue
         case "$target" in
-            "$1/plugins/"*) printf '%s\n' "$link" ;;
+            "$plugins/"* | "$resolved/"*) printf '%s\n' "$link" ;;
         esac
     done
 }

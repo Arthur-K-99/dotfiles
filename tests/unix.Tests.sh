@@ -1501,15 +1501,19 @@ ZINIT
 }
 
 # zinit keeps a link in its completions directory when a plugin drops the
-# file behind it (zsh-completions removed _android and 17 others in 2026), and
+# file behind it (zsh-completions dropped 18, _android among them), and
 # compinit then complains about each whenever it rebuilds its dump. Installing
 # and updating remove those links, and only those; the doctor reports any left.
+# The data directory is reached through a symlink, and the links name the
+# resolved path, as zinit writes them.
 test_zinit_stale_completions() {
     source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    mkdir -p "$test_dir/real"
+    ln -s "$test_dir/real" "$test_dir/xdg"
     export XDG_DATA_HOME="$test_dir/xdg" DOTFILES_TEST_FIXTURE="$test_dir"
-    local data="$XDG_DATA_HOME/zinit" link
-    local plugin="$XDG_DATA_HOME/zinit/plugins/owner---plugin"
-    mkdir -p "$data/zinit.git" "$data/completions" "$plugin"
+    local data="$XDG_DATA_HOME/zinit" link plugin
+    mkdir -p "$data/zinit.git" "$data/completions" "$data/plugins/owner---plugin"
+    plugin="$(cd "$data/plugins/owner---plugin" && pwd -P)"
     cat > "$data/zinit.git/zinit.zsh" <<'ZINIT'
 zinit() {
     # Like zsh-completions dropping a completion in an update.
@@ -1523,11 +1527,13 @@ ZINIT
         ln -s "$plugin/$link" "$data/completions/$link"
     done
     ln -s "$test_dir/elsewhere/_other" "$data/completions/_other"
+    # A completion the user disabled (zinit cdisable drops the _).
+    ln -s "$plugin/_disabled" "$data/completions/disabled"
     : > "$data/completions/_mine"
     bootstrap_zinit "$data/zinit.git" > "$test_dir/output"
     assert_contains "$(cat "$test_dir/output")" '  removed 1 zinit completion link(s) to files their plugins no longer ship'
     [ ! -L "$data/completions/_gone" ] || { echo "The link to a dropped file stayed." >&2; return 1; }
-    for link in _kept _dropped _other; do
+    for link in _kept _dropped _other disabled; do
         [ -L "$data/completions/$link" ] || { echo "$link was removed." >&2; return 1; }
     done
     [ -f "$data/completions/_mine" ] || { echo "A plain file was removed." >&2; return 1; }
