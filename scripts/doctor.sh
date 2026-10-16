@@ -261,6 +261,13 @@ check_plugins() {
     check_readable "fzf-tab" "$zinit_base/plugins/Aloxaf---fzf-tab/fzf-tab.plugin.zsh"
     check_readable "zsh-abbr" "$zinit_base/plugins/olets---zsh-abbr/zsh-abbr.plugin.zsh"
     check_readable "zsh-you-should-use" "$zinit_base/plugins/MichaelAquilina---zsh-you-should-use/you-should-use.plugin.zsh"
+    local stale_links
+    stale_links="$(dotfiles_stale_zinit_completions "$zinit_base" | wc -l | tr -d ' ')"
+    if [ "$stale_links" -eq 0 ]; then
+        ok "zinit completions"
+    else
+        stale "zinit completions ($stale_links link(s) to files their plugins no longer ship, which compinit reports; rerun: bash $DOTFILES_SCRIPTS/bootstrap_tools.sh)"
+    fi
     # TPM installs plugins beside itself under the XDG tmux directory.
     local tmux_plugins="${XDG_CONFIG_HOME:-$HOME/.config}/tmux/plugins"
     if [ -x "$tmux_plugins/tpm/bin/install_plugins" ]; then
