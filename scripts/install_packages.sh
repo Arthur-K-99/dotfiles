@@ -53,11 +53,18 @@ brew_upgrade_declared() {
 }
 
 install_macos() {
-    local installer package installed=""
+    local installer installer_file package installed=""
     local declared=() present=() missing=()
     if ! command -v brew &>/dev/null; then
         echo "Installing Homebrew..."
-        installer="$(curl -fsSL --retry 7 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || return
+        # Into a file: a retried download appends to stdout (dotfiles_curl).
+        installer_file="$(mktemp "${TMPDIR:-/tmp}/dotfiles-brew.XXXXXX")" || return
+        if ! dotfiles_curl -o "$installer_file" https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh ||
+            ! installer="$(cat "$installer_file")"; then
+            rm -f "$installer_file"
+            return 1
+        fi
+        rm -f "$installer_file"
         /bin/bash -c "$installer" || return
         dotfiles_init_environment || return
     fi

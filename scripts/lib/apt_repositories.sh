@@ -2,7 +2,8 @@
 # Third-party apt repositories that the Linux bootstrap adds for tools Debian
 # and Ubuntu do not package, shared by install_packages.sh (which refreshes
 # their keys while updating), bootstrap_tools.sh (which adds them) and
-# doctor.sh (which checks their keyrings).
+# doctor.sh (which checks their keyrings), each after lib/environment.sh,
+# whose dotfiles_curl fetches the keys.
 #
 # Each signing key goes to /etc/apt/keyrings/<name>.gpg only when the file
 # downloaded holds exactly the key whose fingerprint is pinned here, and apt
@@ -113,7 +114,7 @@ install_apt_key() (
     work="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-key.XXXXXX")" || return
     trap 'dotfiles_gpg_home_remove "$before" "$after"; rm -rf "$work"' EXIT
     status=0
-    curl -fsSL --retry 7 -o "$work/key" "$key_url" || status=$?
+    dotfiles_curl -o "$work/key" "$key_url" || status=$?
     if [ "$status" -ne 0 ]; then
         if [ "$mode" = refresh ] && [ -e "$keyring" ]; then
             echo "Could not fetch the $name repository's key from $key_url; its keyring stays as it is." >&2

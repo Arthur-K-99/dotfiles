@@ -1,6 +1,6 @@
 # Downloads
 
-What the Unix bootstrap downloads, how each file is checked, and how long a new GitHub release waits before it is installed. The code is in `scripts/bootstrap_tools.sh` and `scripts/lib/apt_repositories.sh`.
+What the Unix bootstrap downloads, how each file is checked, what happens on a slow network, and how long a new GitHub release waits before it is installed. The code is in `scripts/bootstrap_tools.sh` and `scripts/lib/apt_repositories.sh`.
 
 ## Verified downloads
 
@@ -25,7 +25,17 @@ What this proves, and what it does not:
 
 GitHub's API answers 60 requests an hour per address without a token. A Linux install makes one per release download, about 18, plus one for each latest release that is too young to install (see [Release age](#release-age)). Repeated installs behind one address, such as several `tests/fresh_install.sh` runs, can exceed that.
 
-Set `GITHUB_TOKEN` to raise the limit, for example `GITHUB_TOKEN="$(gh auth token)" ~/dotfiles/install.sh`. The token goes to curl on stdin, so it never shows in the process list. A token GitHub does not accept is dropped with a warning and the request is made once more without it.
+Set `GITHUB_TOKEN` to raise the limit, for example `GITHUB_TOKEN="$(gh auth token)" ~/dotfiles/install.sh`. The token goes to curl on stdin, so it never shows in the process list. A token GitHub refuses (HTTP 401, or 403 for one over its limit or kept out of an organization) is dropped with a warning and the request is made once more without it; any other failure (an outage, a missing repository) is not repeated without the token.
+
+## Timeouts and retries
+
+Every download the Unix bootstrap makes with curl (the releases and their tag lookups, the GitHub API, the apt keys, the bat theme, the Homebrew installer) has limits, so a bad network ends in an error, not a hang:
+
+- **Limits:** a connection not made in 30 seconds, or a try that averages under a byte a second for a minute, ends as a timeout.
+- **Retries:** a timeout, a name that does not resolve, or an HTTP 408, 429, 500, 502, 503 or 504 answer is tried again up to seven times, 1, 2, 4 ... 64 seconds apart (about two minutes of waiting), and no try starts after three minutes. Each failed try prints a `curl: (<number>) ...` line; the run fails only when the last one fails.
+- **Worst case:** a download that cannot get through gives up within about 4 minutes, a GitHub API request within about 2. A transfer that keeps moving, however slowly, is left alone.
+- **At once:** a refused connection, and HTTP errors such as 401, 403 and 404.
+- **Not covered:** git clones (zinit, TPM, lazy.nvim, the yazi flavors), apt, Homebrew, mise, Mason and the whole Windows install, which does not use curl. They wait as their own tools do.
 
 ## Release age
 

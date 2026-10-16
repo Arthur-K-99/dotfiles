@@ -59,6 +59,24 @@ dotfiles_login_shell() {
     printf '%s\n' "${shell:-${SHELL:-}}"
 }
 
+# dotfiles_curl <curl arguments>: curl as every download here runs it, into
+# a file (-o). --retry 7 retries timeouts, names that do not resolve and
+# HTTP 408, 429, 500, 502, 503 and 504 answers, waiting 1, 2, 4 ... 64
+# seconds (about two minutes). --fail-with-body fails on an HTTP error as -f
+# does, but macOS's curl 8.7.1 exits 56 for -f over HTTP/2, which --retry
+# skips, and 22 for this. --connect-timeout 30 bounds a host that does not
+# answer, which otherwise costs the system's limit a try (75 seconds on
+# macOS, about 130 on Linux). --speed-limit 1 with --speed-time 60 ends a try
+# that has averaged under a byte a second for a minute, waiting for the
+# answer included. Both end as timeouts, so they are retried, and no retry
+# starts after 180 seconds (--retry-max-time), which also caps a server's
+# Retry-After. A retry starts a file over but appends to stdout, after what
+# the stalled try wrote, so a caller that reads the answer reads a file.
+dotfiles_curl() {
+    curl --fail-with-body -sSL --connect-timeout 30 --speed-limit 1 \
+        --speed-time 60 --retry 7 --retry-max-time 180 "$@"
+}
+
 # dotfiles_updating: scripts/update.sh exports DOTFILES_UPDATE=1 for the
 # install stages, which then bring what they installed to the newest release
 # they may take instead of keeping whatever is present.
