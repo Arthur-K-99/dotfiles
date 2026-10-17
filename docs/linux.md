@@ -1,11 +1,14 @@
 # Linux and WSL
 
-The Unix installer accepts Debian, Ubuntu and distributions whose `/etc/os-release` names either of them (`ID` or `ID_LIKE`), on x86_64 and arm64. Debian 12 and 13 and Ubuntu 24.04 and 26.04 are tested in containers; other derivatives are not. WSL runs the same install inside a Debian or Ubuntu distribution.
+The Unix installer accepts two families of distributions, on x86_64 and arm64, by `/etc/os-release`:
+
+- **Debian and Ubuntu,** and distributions whose `ID` or `ID_LIKE` names either of them. Debian 12 and 13 and Ubuntu 24.04 and 26.04 are tested in containers; other derivatives are not. WSL runs the same install inside a Debian or Ubuntu distribution.
+- **RHEL 9 and newer and the distributions built like it** (Rocky Linux, AlmaLinux, CentOS Stream): `ID` is `rhel` or `ID_LIKE` names it. Rocky Linux 9 is tested in containers; the others, and release 10, are not. Release 8 is refused: its tmux 2.7 is older than the configuration needs. Fedora and the distributions whose `ID_LIKE` names only `fedora` (Amazon Linux, Oracle Linux, Fedora remixes) are refused too, since none gets EPEL through `epel-release`. [RHEL and Rocky Linux](#rhel-and-rocky-linux) says what differs.
 
 ## sudo
 
-- The package stage runs `apt-get update` and `apt-get install` through sudo.
-- The bootstrap uses sudo again to add the eza and Charm apt repositories (their keys, sources lists and packages), a few minutes later, and the update to refresh their keys.
+- The package stage runs `apt-get update` and `apt-get install` (on the RHEL family `dnf install`, and `dnf upgrade` in the update) through sudo.
+- The bootstrap uses sudo again to add the eza and Charm apt repositories (on the RHEL family Charm's dnf repository) with their keys and packages, a few minutes later, and the update to refresh their keys.
 - sudo remembers a password only for some minutes, so it may ask again during the bootstrap.
 
 ## Where each tool comes from
@@ -47,11 +50,22 @@ vivid 0.9 or newer carries the Catppuccin `LS_COLORS`. Debian 12 ships 0.8, so c
 
 ## Clipboard
 
-tmux-yank and Neovim copy to the system clipboard with `wl-copy` on Wayland and `xsel` on X11, both from the apt list. Under WSL tmux-yank uses `clip.exe`, and so does Neovim when no display is set (it pastes through `powershell.exe` then).
+tmux-yank and Neovim copy to the system clipboard with `wl-copy` on Wayland and `xsel` on X11, both from the package list (EPEL on the RHEL family). Under WSL tmux-yank uses `clip.exe`, and so does Neovim when no display is set (it pastes through `powershell.exe` then).
 
 ## Ghostty
 
-There is no Debian or Ubuntu package. Install Ghostty from [ghostty.org](https://ghostty.org/download); the configuration is already linked, which the doctor says on every run. It reloads with `Ctrl+Shift+,` on Linux. Without Ghostty, choose `CaskaydiaCove Nerd Font Mono` in your terminal.
+There is no Debian, Ubuntu, RHEL or EPEL package. Install Ghostty from [ghostty.org](https://ghostty.org/download); the configuration is already linked, which the doctor says on every run. It reloads with `Ctrl+Shift+,` on Linux. Without Ghostty, choose `CaskaydiaCove Nerd Font Mono` in your terminal.
+
+## RHEL and Rocky Linux
+
+- **EPEL:** most of `packages/dnf.txt` comes from EPEL (Extra Packages for Enterprise Linux), which the package stage enables with `sudo dnf install epel-release` when `rpm -q epel-release` finds it missing. Rocky Linux, AlmaLinux and CentOS Stream carry that package. RHEL itself does not: install `epel-release` as [EPEL's guide](https://docs.fedoraproject.org/en-US/epel/getting-started/) describes (it enables CodeReady Builder first), then rerun. epel-release prints `Many EPEL packages require the CodeReady Builder (CRB) repository.`; none in the list does, so the installer leaves CRB off.
+- **Packages:** `packages/dnf.txt`, with what Debian's list brings: `tar`, which a minimal install can lack, `gcc`, `gcc-c++` and `make` for Neovim's parsers, `ncurses` (the tmux terminfo is in `ncurses-base`, which every image has), `procps-ng` for tmux-resurrect, and `util-linux-user` for `chsh`. Only the packages `rpm -q` does not find go to `dnf install`, so a rerun does not reach the network. curl is not in the list: every install has `curl-minimal`, which conflicts with the `curl` package.
+- **Neither BaseOS, AppStream nor EPEL** packages eza, sd, vivid, direnv, glow or gum. glow and gum come from Charm's dnf repository, added only with its pinned key ([downloads](downloads.md#verified-downloads)): `/etc/yum.repos.d/charm.repo` and `/etc/pki/rpm-gpg/RPM-GPG-KEY-dotfiles-charm`. dnf checks the repository's metadata and every package against that key and imports it into rpm's keyring the first time. eza, sd, vivid and direnv come from their GitHub releases into `~/.local/bin`, like the tools in [Where each tool comes from](#where-each-tool-comes-from).
+- **Command names:** fd and bat keep their names, so the bootstrap links nothing.
+- **Colors:** vivid's release is 0.9 or newer, so the completion menus get the Catppuccin `LS_COLORS`.
+- **Neovim:** release 9's glibc is 2.34, older than the tree-sitter releases are built for (they need 2.35 on both architectures), so it gets Debian 12's treatment: parsers skipped, Vim's syntax files ([Neovim](#neovim-and-the-tree-sitter-cli)). The Neovim, delta and procs releases run on it, on x86_64 and arm64. Release 10 has glibc 2.39.
+- **Updates:** dnf refreshes its metadata, installs any package added to the list since, and `dnf upgrade` upgrades the whole list, then glow and gum. dnf itself leaves out the packages you locked (`dnf versionlock`). An excluded package (`exclude=` in `dnf.conf`) is left out too while the command names others, but excluding both glow and gum makes their upgrade fail (`No packages marked for upgrade`); lock them instead.
+- **Not checked:** SELinux in enforcing mode with links into `~/dotfiles` (containers run without it).
 
 ## WSL
 

@@ -5,6 +5,8 @@ DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$DOTFILES_DIR/scripts/lib/environment.sh"
 # shellcheck source=lib/apt_repositories.sh
 source "$DOTFILES_DIR/scripts/lib/apt_repositories.sh"
+# shellcheck source=lib/dnf_repositories.sh
+source "$DOTFILES_DIR/scripts/lib/dnf_repositories.sh"
 failures=0
 
 # The repository's scripts directory as the hints below name it: a full path,
@@ -74,35 +76,69 @@ check_linux_font() {
 # so nothing else would notice. A key expiring within 30 days passes, with its
 # date shown.
 check_apt_keys() {
-    local name fingerprint keyring details expiry now soon
-    now="$(date +%s)"
-    soon=$((now + 30 * 86400))
+    local name fingerprint
     for name in $DOTFILES_APT_REPOSITORIES; do
         dotfiles_apt_repository_added "$name" || continue
         read -r _ fingerprint _ <<<"$(dotfiles_apt_repository "$name")"
-        keyring="$DOTFILES_APT_ETC/keyrings/$name.gpg"
-        if ! command -v gpg >/dev/null 2>&1; then
-            fail "$name apt repository key (gnupg is not installed; rerun: bash $DOTFILES_SCRIPTS/install_packages.sh)"
-            continue
-        fi
-        details="$(key_details "$keyring" 2>/dev/null)" || :
-        if [ -e "$keyring" ] && [ ! -r "$keyring" ]; then
-            fail "$name apt repository key ($keyring is not readable, so apt cannot read it either; run: bash $DOTFILES_SCRIPTS/update.sh)"
-        elif [ -z "$details" ]; then
-            fail "$name apt repository key ($keyring is missing or holds no key; run: bash $DOTFILES_SCRIPTS/update.sh)"
-        elif [ "$(printf '%s\n' "$details" | cut -d ' ' -f 1)" != "$fingerprint" ]; then
-            stale "$name apt repository key ($keyring does not hold exactly the pinned key $fingerprint; run: bash $DOTFILES_SCRIPTS/update.sh)"
-        else
-            expiry="$(printf '%s\n' "$details" | cut -s -d ' ' -f 2)"
-            if [ -n "$expiry" ] && [ "$expiry" -le "$now" ]; then
-                stale "$name apt repository key (expired on $(dotfiles_date "$expiry"); run: bash $DOTFILES_SCRIPTS/update.sh, which fetches it again)"
-            elif [ -n "$expiry" ] && [ "$expiry" -le "$soon" ]; then
-                ok "$name apt repository key (expires on $(dotfiles_date "$expiry"); $DOTFILES_SCRIPTS/update.sh fetches it again)"
-            else
-                ok "$name apt repository key"
-            fi
-        fi
+        check_repository_key apt "$name" "$DOTFILES_APT_ETC/keyrings/$name.gpg" "$fingerprint"
     done
+}
+
+# The same for each dnf repository the bootstrap added on the RHEL family,
+# whose key file dnf reads.
+check_dnf_keys() {
+    local name fingerprint
+    for name in $DOTFILES_DNF_REPOSITORIES; do
+        dotfiles_dnf_repository_added "$name" || continue
+        read -r _ fingerprint _ <<<"$(dotfiles_dnf_repository "$name")"
+        check_repository_key dnf "$name" "$(dotfiles_dnf_key_file "$name")" "$fingerprint"
+    done
+}
+
+# check_repository_key <apt|dnf> <name> <key file> <fingerprint>
+check_repository_key() {
+    local manager="$1" name="$2" keyring="$3" fingerprint="$4" details expiry now soon
+    now="$(date +%s)"
+    soon=$((now + 30 * 86400))
+    if ! command -v gpg >/dev/null 2>&1; then
+        fail "$name $manager repository key (gnupg is not installed; rerun: bash $DOTFILES_SCRIPTS/install_packages.sh)"
+        return
+    fi
+    details="$(key_details "$keyring" 2>/dev/null)" || :
+    if [ -e "$keyring" ] && [ ! -r "$keyring" ] && [ "$manager" = apt ]; then
+        fail "$name apt repository key ($keyring is not readable, so apt cannot read it either; run: bash $DOTFILES_SCRIPTS/update.sh)"
+    elif [ -e "$keyring" ] && [ ! -r "$keyring" ]; then
+        # dnf reads it as root; the update installs it readable again.
+        fail "$name $manager repository key ($keyring is not readable, so it cannot be checked; run: bash $DOTFILES_SCRIPTS/update.sh)"
+    elif [ -z "$details" ]; then
+        fail "$name $manager repository key ($keyring is missing or holds no key; run: bash $DOTFILES_SCRIPTS/update.sh)"
+    elif [ "$(printf '%s\n' "$details" | cut -d ' ' -f 1)" != "$fingerprint" ]; then
+        stale "$name $manager repository key ($keyring does not hold exactly the pinned key $fingerprint; run: bash $DOTFILES_SCRIPTS/update.sh)"
+    else
+        expiry="$(printf '%s\n' "$details" | cut -s -d ' ' -f 2)"
+        if [ -n "$expiry" ] && [ "$expiry" -le "$now" ]; then
+            stale "$name $manager repository key (expired on $(dotfiles_date "$expiry"); run: bash $DOTFILES_SCRIPTS/update.sh, which fetches it again)"
+        elif [ -n "$expiry" ] && [ "$expiry" -le "$soon" ]; then
+            ok "$name $manager repository key (expires on $(dotfiles_date "$expiry"); $DOTFILES_SCRIPTS/update.sh fetches it again)"
+        else
+            ok "$name $manager repository key"
+        fi
+    fi
+}
+
+# The Linux checks that differ by distribution family.
+check_linux_platform() {
+    echo "Checking font..."
+    check_linux_font
+    if [ "$(dotfiles_linux_family)" = rhel ]; then
+        echo "Checking dnf repository keys..."
+        check_dnf_keys
+        echo "Ghostty has no RHEL or EPEL package; its configuration is linked for when it is installed."
+    else
+        echo "Checking apt repository keys..."
+        check_apt_keys
+        echo "Ghostty has no Debian package; its configuration is linked for when it is installed."
+    fi
 }
 
 check_macos_app() {
@@ -148,6 +184,8 @@ check_absent() {
 check_terminfo() {
     if infocmp "$1" >/dev/null 2>&1; then
         ok "$1 terminfo"
+    elif [ "$(dotfiles_linux_family 2>/dev/null)" = rhel ]; then
+        fail "$1 terminfo (sudo dnf install ncurses ncurses-base)"
     else
         fail "$1 terminfo (Linux: sudo apt-get install ncurses-term)"
     fi
@@ -349,11 +387,7 @@ doctor_main() {
         check_macos_font
         check_macos_app Ghostty
     else
-        echo "Checking font..."
-        check_linux_font
-        echo "Checking apt repository keys..."
-        check_apt_keys
-        echo "Ghostty has no Debian package; its configuration is linked for when it is installed."
+        check_linux_platform
     fi
 
     echo "Checking managed links..."

@@ -15,7 +15,7 @@ Run `bash scripts/test.sh` before committing installer or configuration changes.
 ## Fresh install
 
 ```sh
-bash tests/fresh_install.sh debian:12    # or debian:13, ubuntu:24.04, ubuntu:26.04
+bash tests/fresh_install.sh debian:12    # or debian:13, ubuntu:24.04, ubuntu:26.04, rockylinux/rockylinux:9
 ```
 
 - It installs the checkout in a new container as a user with sudo, with real downloads, then reruns the installer and runs `scripts/update.sh`, after setting every recorded release tag back so the update fetches each release again.

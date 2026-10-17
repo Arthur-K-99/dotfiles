@@ -1,0 +1,55 @@
+# RHEL 9 and the distributions built like it (Rocky Linux, AlmaLinux, CentOS Stream):
+# BaseOS, AppStream and EPEL, which scripts/install_packages.sh enables first.
+# Names are the ones `rpm -q` takes.
+
+# Bootstrap prerequisites (tar, gzip, unzip and xz unpack the releases; cmp
+# from diffutils compares downloaded keys). A minimal install can lack tar.
+# curl is not listed: every image has curl-minimal, which conflicts with the
+# curl package.
+ca-certificates
+git
+gnupg2
+tar
+gzip
+unzip
+xz
+diffutils
+
+# fontconfig registers the Nerd Font that scripts/bootstrap_tools.sh installs
+# into ~/.local/share/fonts
+fontconfig
+
+# Shell, and chsh to make it the login shell
+zsh
+util-linux-user
+
+# Terminal tools
+tmux
+bat
+fzf
+btop
+gh
+# nvim-treesitter compiles parsers with cc (the tree-sitter CLI comes from a
+# GitHub release in scripts/bootstrap_tools.sh)
+gcc
+gcc-c++
+make
+# infocmp; ncurses-base, which every image has, holds the tmux-256color
+# terminfo used by the tmux configuration
+ncurses
+# ps, for tmux-resurrect
+procps-ng
+# tmux-yank copies through wl-copy on Wayland and xsel on X11
+wl-clipboard
+xsel
+
+# Phase 3 tools that EPEL packages. fd-find installs fd and bat installs
+# bat, so no alias is needed.
+ripgrep
+fd-find
+duf
+hyperfine
+
+# Not in BaseOS, AppStream or EPEL: glow and gum come from Charm's dnf
+# repository, and eza, sd, vivid and direnv from GitHub releases, beside the
+# tools that come from releases on Debian and Ubuntu too (scripts/bootstrap_tools.sh).
