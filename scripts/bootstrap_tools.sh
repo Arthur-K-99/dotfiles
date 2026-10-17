@@ -319,8 +319,9 @@ install_dnf_repository() {
 
 # Neither the RHEL family nor EPEL packages eza, sd, vivid and direnv, and
 # Charm's dnf repository carries glow and gum. The release builds run on RHEL
-# 9's glibc 2.34: eza and vivid publish glibc builds for both architectures
-# (vivid no arm64 musl one), sd musl builds, direnv static binaries. vivid's
+# 9's glibc 2.34 (checked on both architectures): eza and vivid publish glibc
+# builds for both (vivid no arm64 musl one), sd musl builds, direnv static
+# binaries. vivid's
 # carries the Catppuccin themes, which Debian 12's 0.8 lacks. fd-find
 # installs fd, which install_fd_link then finds.
 install_rhel_tools() {
@@ -914,7 +915,10 @@ install_neovim_release() (
 
 install_linux_tools() {
     local family
-    family="$(dotfiles_linux_family)" || return
+    if ! family="$(dotfiles_linux_family)"; then
+        echo "Cannot tell from /etc/os-release whether this is Debian, Ubuntu or the RHEL family; install_packages.sh says which distributions are supported." >&2
+        return 1
+    fi
     if [ "$family" = rhel ]; then
         install_rhel_tools || return
     else

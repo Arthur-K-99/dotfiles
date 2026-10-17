@@ -1284,10 +1284,11 @@ test_apt_keys_refreshed_before_updating() {
 }
 
 # The package stage names the distribution's family from os-release's ID and
-# ID_LIKE: Debian's for Debian, Ubuntu and their derivatives, RHEL's when
-# ID_LIKE names rhel or fedora, from release 9. Anything else stops it with
-# what is supported. dotfiles_linux_family reads the file in a subshell, so
-# its variables stay out of the caller's.
+# ID_LIKE: Debian's for Debian, Ubuntu and their derivatives, RHEL's for RHEL
+# and the distributions whose ID_LIKE names rhel, from release 9. Anything
+# else stops it with what is supported, including the distributions that
+# name only fedora. dotfiles_linux_family reads the file in a subshell, so
+# its variables stay out of the caller's, and the caller's out of it.
 test_linux_distribution_check() {
     source "$TEST_REPO_DIR/scripts/install_packages.sh"
     export DOTFILES_OS_RELEASE="$test_dir/os-release"
@@ -1303,9 +1304,23 @@ test_linux_distribution_check() {
         assert_equal "${case%%|*}" "$(dotfiles_linux_family)"
         assert_equal "${case%%|*}" "$(check_linux_distribution)"
     done
+    dotfiles_linux_family > /dev/null
     assert_equal '' "${ID:-}${ID_LIKE:-}"
-    # Fedora itself has no EPEL; release 8 of the RHEL family has tmux 2.7.
+    # Variables of the caller's, exported or local, do not count.
+    printf 'ID=arch\n' > "$DOTFILES_OS_RELEASE"
+    status=0
+    (export ID_LIKE=rhel; check_linux_distribution) > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    status=0
+    (ID=rhel; dotfiles_linux_family) > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    # Fedora and the distributions that name only it (Amazon Linux, Oracle
+    # Linux, Fedora remixes) get no EPEL from epel-release; release 8 of the
+    # RHEL family has tmux 2.7.
     for case in 'ID=fedora|VERSION_ID=42|PRETTY_NAME="Fedora Linux 42"' \
+        'ID="amzn"|ID_LIKE="fedora"|VERSION_ID="2023"|PRETTY_NAME="Amazon Linux 2023.9.20251014"' \
+        'ID="ol"|ID_LIKE="fedora"|VERSION_ID="9.6"|PRETTY_NAME="Oracle Linux Server 9.6"' \
+        'ID=ultramarine|ID_LIKE=fedora|VERSION_ID=40|PRETTY_NAME="Ultramarine Linux 40"' \
         'ID=arch|PRETTY_NAME="Arch Linux"' \
         'ID="rocky"|ID_LIKE="rhel centos fedora"|VERSION_ID="8.10"|PRETTY_NAME="Rocky Linux 8.10 (Green Obsidian)"'; do
         printf '%s\n' "$case" | tr '|' '\n' > "$DOTFILES_OS_RELEASE"
@@ -1384,6 +1399,12 @@ test_dnf_packages_install_and_update() {
     : > "$test_dir/commands"
     install_linux > "$test_dir/output"
     assert_equal $'install_rpm_key charm refresh\nsudo dnf upgrade -y --refresh tmux zsh fd-find' "$(cat "$test_dir/commands")"
+    # A package added to the list since is installed from refreshed metadata.
+    printf 'zsh\nepel-release\n' > "$test_dir/installed"
+    : > "$test_dir/commands"
+    install_linux > "$test_dir/output"
+    assert_equal $'install_rpm_key charm refresh\nsudo dnf install -y --refresh tmux fd-find\nsudo dnf upgrade -y --refresh tmux zsh fd-find' "$(cat "$test_dir/commands")"
+    printf 'tmux\nfd-find\n' >> "$test_dir/installed"
     : > "$test_dir/wrong-key"
     : > "$test_dir/commands"
     local status=0
@@ -1588,6 +1609,8 @@ test_rhel_tools_install_and_update() {
         assert_equal "vivid-v0.11.1-$test_arch-unknown-linux-gnu.tar.gz" "$(release_asset 'vivid-{tag}-{arch}-unknown-linux-gnu.tar.gz' v0.11.1)"
     done
     assert_equal direnv.linux-arm64 "$(release_asset 'direnv.linux-{arch_deb}' v2.38.2)"
+    test_arch=x86_64
+    assert_equal direnv.linux-amd64 "$(release_asset 'direnv.linux-{arch_deb}' v2.38.2)"
     unset -f uname
     # The family picks the route; the stages both share follow either way.
     for stage in install_eza install_fd_link install_charm_tools install_dnf_repository install_github_release \
@@ -1604,13 +1627,14 @@ test_rhel_tools_install_and_update() {
     install_linux_tools
     assert_equal $'install_eza \ninstall_fd_link \ninstall_charm_tools \nbootstrap_zoxide ' "$(head -n 4 "$test_dir/stages")"
     assert_equal 0 "$(grep -c -E 'eza-community|chmln/sd|sharkdp/vivid|direnv/direnv|install_dnf_repository' "$test_dir/stages" || :)"
-    # Neither family: the bootstrap stops before installing anything.
+    # Neither family: the bootstrap stops before installing anything, and says why.
     printf 'ID=arch\n' > "$DOTFILES_OS_RELEASE"
     : > "$test_dir/stages"
     status=0
-    install_linux_tools || status=$?
+    install_linux_tools > "$test_dir/output" 2>&1 || status=$?
     assert_equal 1 "$status"
     assert_equal '' "$(cat "$test_dir/stages")"
+    assert_contains "$(cat "$test_dir/output")" 'Cannot tell from /etc/os-release whether this is Debian, Ubuntu or the RHEL family'
 }
 
 # oh-my-posh and zoxide come from GitHub releases like the other release tools,
@@ -4037,7 +4061,8 @@ test_doctor_apt_keys() {
 
 # On the RHEL family the doctor checks the key file of each dnf repository the
 # bootstrap added as it checks apt keyrings (test_doctor_apt_keys covers the
-# cases they share), and names the dnf packages for a missing terminfo.
+# cases they share), names the dnf packages for a missing terminfo, and says
+# so for Ghostty; Debian and Ubuntu keep the apt checks.
 test_doctor_dnf_keys() {
     source "$TEST_REPO_DIR/scripts/doctor.sh"
     export DOTFILES_TEST_FIXTURE="$test_dir"
@@ -4066,9 +4091,29 @@ test_doctor_dnf_keys() {
     check_dnf_keys > "$test_dir/output"
     assert_equal 1 "$failures"
     assert_equal "  [stale] charm dnf repository key (expired on 2027-07-12; run: bash $DOTFILES_SCRIPTS/update.sh, which fetches it again)" "$(cat "$test_dir/output")"
+    # dnf reads the key file as root, so an unreadable one only escapes the
+    # check. Root reads it all the same, so only another user can check this.
+    if [ "$(id -u)" -ne 0 ]; then
+        mkdir -p "$DOTFILES_RPM_GPG"
+        : > "$key_file"
+        chmod 000 "$key_file"
+        failures=0
+        check_dnf_keys > "$test_dir/output"
+        assert_equal 1 "$failures"
+        assert_equal "  [missing] charm dnf repository key ($key_file is not readable, so it cannot be checked; run: bash $DOTFILES_SCRIPTS/update.sh)" "$(cat "$test_dir/output")"
+        rm -f "$key_file"
+    fi
+    # The family decides which keys the doctor checks and what it says of Ghostty.
+    check_linux_font() { echo 'check_linux_font'; }
+    check_apt_keys() { echo 'check_apt_keys'; }
+    check_dnf_keys() { echo 'check_dnf_keys'; }
+    export DOTFILES_OS_RELEASE="$test_dir/os-release"
+    printf 'ID=rocky\nID_LIKE="rhel centos fedora"\n' > "$DOTFILES_OS_RELEASE"
+    assert_equal $'Checking font...\ncheck_linux_font\nChecking dnf repository keys...\ncheck_dnf_keys\nGhostty has no RHEL or EPEL package; its configuration is linked for when it is installed.' "$(check_linux_platform)"
+    printf 'ID=debian\n' > "$DOTFILES_OS_RELEASE"
+    assert_equal $'Checking font...\ncheck_linux_font\nChecking apt repository keys...\ncheck_apt_keys\nGhostty has no Debian package; its configuration is linked for when it is installed.' "$(check_linux_platform)"
     # The terminfo hint names the family's packages.
     infocmp() { return 1; }
-    export DOTFILES_OS_RELEASE="$test_dir/os-release"
     printf 'ID=rocky\nID_LIKE="rhel centos fedora"\n' > "$DOTFILES_OS_RELEASE"
     check_terminfo tmux-256color > "$test_dir/output"
     assert_equal '  [missing] tmux-256color terminfo (sudo dnf install ncurses ncurses-base)' "$(cat "$test_dir/output")"

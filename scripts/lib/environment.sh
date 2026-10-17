@@ -36,22 +36,25 @@ dotfiles_linux_font_installed() {
 
 # dotfiles_linux_family: the kind of package system this Linux distribution
 # has, from /etc/os-release (DOTFILES_OS_RELEASE in tests): "debian" when ID
-# or ID_LIKE names Debian or Ubuntu, "rhel" when ID_LIKE names RHEL or Fedora
-# (RHEL itself, Rocky Linux, AlmaLinux, CentOS Stream). Fails on any other,
-# Fedora itself included, and without the file.
+# or ID_LIKE names Debian or Ubuntu, "rhel" when ID is rhel or ID_LIKE names
+# it (Rocky Linux, AlmaLinux, CentOS Stream). Fails on any other and without
+# the file: Fedora, its remixes, Amazon Linux and Oracle Linux name only
+# fedora, and none of them gets EPEL through epel-release.
 dotfiles_linux_family() {
     local fields
     # In a subshell, so the file's variables stay out of the caller's, and
-    # without the caller's: a file may leave ID_LIKE out.
+    # emptied first, so the caller's stay out of the answer: a file may leave
+    # ID_LIKE out. (unset would drop a caller's local and expose a global.)
     fields="$(
-        unset ID ID_LIKE
+        ID=""
+        ID_LIKE=""
         # shellcheck disable=SC1090
         . "${DOTFILES_OS_RELEASE:-/etc/os-release}" 2>/dev/null || exit 1
         printf '%s|%s\n' "${ID:-}" "${ID_LIKE:-}"
     )" || return 1
     case "$fields" in
         *debian*|*ubuntu*) echo debian ;;
-        *"|"*rhel*|*"|"*fedora*) echo rhel ;;
+        "rhel|"*|*"|"*rhel*) echo rhel ;;
         *) return 1 ;;
     esac
 }

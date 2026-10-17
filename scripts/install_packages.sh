@@ -138,7 +138,7 @@ check_linux_distribution() {
     . "$os_release"
     if ! family="$(dotfiles_linux_family)"; then
         echo "Unsupported Linux distribution: ${PRETTY_NAME:-${ID:-unknown}}" >&2
-        echo "Currently supported: Debian and Ubuntu (including WSL), and RHEL 9 or newer and the distributions built like it (Rocky Linux, AlmaLinux)." >&2
+        echo "Currently supported: Debian and Ubuntu (including WSL), and RHEL 9 or newer with the distributions built like it (Rocky Linux, AlmaLinux, CentOS Stream)." >&2
         return 1
     fi
     case "$family ${VERSION_ID:-}" in
@@ -252,12 +252,18 @@ enable_epel() {
 
 # install_linux_dnf: installs the packages in packages/dnf.txt that rpm does
 # not list as installed, after enabling EPEL. Updating, the keys of the
-# repositories the bootstrap added are fetched again first, and every listed
-# package is upgraded after dnf refreshes its metadata. dnf itself leaves
-# out packages the user locked (dnf versionlock) or excluded.
+# repositories the bootstrap added are fetched again first, and dnf
+# refreshes its metadata (EPEL keeps only each package's latest build, so a
+# package added to the list could otherwise be fetched from a stale index)
+# before it installs what is missing and upgrades every listed package. dnf
+# itself leaves out packages the user locked (dnf versionlock), and excluded
+# ones as long as the command names others.
 install_linux_dnf() {
     local package
-    local declared=() present=() missing=()
+    local declared=() present=() missing=() refresh=()
+    if dotfiles_updating; then
+        refresh=(--refresh)
+    fi
     if dotfiles_updating; then
         refresh_dnf_keys || return
     fi
@@ -275,7 +281,7 @@ install_linux_dnf() {
         echo "  already installed: ${present[*]}"
     fi
     if [ "${#missing[@]}" -gt 0 ]; then
-        sudo dnf install -y "${missing[@]}" || return
+        sudo dnf install -y ${refresh[@]+"${refresh[@]}"} "${missing[@]}" || return
     fi
     if dotfiles_updating && [ "${#declared[@]}" -gt 0 ]; then
         echo "Upgrading dnf packages..."

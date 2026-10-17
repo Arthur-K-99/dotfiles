@@ -105,8 +105,11 @@ check_repository_key() {
         return
     fi
     details="$(key_details "$keyring" 2>/dev/null)" || :
-    if [ -e "$keyring" ] && [ ! -r "$keyring" ]; then
-        fail "$name $manager repository key ($keyring is not readable, so $manager cannot read it either; run: bash $DOTFILES_SCRIPTS/update.sh)"
+    if [ -e "$keyring" ] && [ ! -r "$keyring" ] && [ "$manager" = apt ]; then
+        fail "$name apt repository key ($keyring is not readable, so apt cannot read it either; run: bash $DOTFILES_SCRIPTS/update.sh)"
+    elif [ -e "$keyring" ] && [ ! -r "$keyring" ]; then
+        # dnf reads it as root; the update installs it readable again.
+        fail "$name $manager repository key ($keyring is not readable, so it cannot be checked; run: bash $DOTFILES_SCRIPTS/update.sh)"
     elif [ -z "$details" ]; then
         fail "$name $manager repository key ($keyring is missing or holds no key; run: bash $DOTFILES_SCRIPTS/update.sh)"
     elif [ "$(printf '%s\n' "$details" | cut -d ' ' -f 1)" != "$fingerprint" ]; then
@@ -120,6 +123,21 @@ check_repository_key() {
         else
             ok "$name $manager repository key"
         fi
+    fi
+}
+
+# The Linux checks that differ by distribution family.
+check_linux_platform() {
+    echo "Checking font..."
+    check_linux_font
+    if [ "$(dotfiles_linux_family)" = rhel ]; then
+        echo "Checking dnf repository keys..."
+        check_dnf_keys
+        echo "Ghostty has no RHEL or EPEL package; its configuration is linked for when it is installed."
+    else
+        echo "Checking apt repository keys..."
+        check_apt_keys
+        echo "Ghostty has no Debian package; its configuration is linked for when it is installed."
     fi
 }
 
@@ -369,17 +387,7 @@ doctor_main() {
         check_macos_font
         check_macos_app Ghostty
     else
-        echo "Checking font..."
-        check_linux_font
-        if [ "$(dotfiles_linux_family)" = rhel ]; then
-            echo "Checking dnf repository keys..."
-            check_dnf_keys
-            echo "Ghostty has no RHEL or EPEL package; its configuration is linked for when it is installed."
-        else
-            echo "Checking apt repository keys..."
-            check_apt_keys
-            echo "Ghostty has no Debian package; its configuration is linked for when it is installed."
-        fi
+        check_linux_platform
     fi
 
     echo "Checking managed links..."
