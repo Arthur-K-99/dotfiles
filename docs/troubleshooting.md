@@ -9,20 +9,22 @@ Behaviour that is not fully explained, or caused upstream, is under [Known issue
 None of these is a failure.
 
 - **The doctor's `[skip]` lines** mark what a platform does without on purpose:
-  - `[skip] tree-sitter CLI (… needs a newer glibc than 2.36; …)` and `[skip] Neovim parser …` on Debian 12, whose glibc is too old for the tree-sitter releases ([Linux](linux.md#neovim-and-the-tree-sitter-cli));
+  - `[skip] tree-sitter CLI (… needs a newer glibc than 2.36; …)` and `[skip] Neovim parser …` on Debian 12, and the same with 2.34 on Rocky Linux 9, whose glibc is too old for the tree-sitter releases ([Linux](linux.md#neovim-and-the-tree-sitter-cli));
   - `[skip] Neovim parser … (no C compiler or tree-sitter CLI; …)` on Windows without the Visual Studio Build Tools ([Windows](windows.md#neovim));
   - `[skip] CaskaydiaCove Nerd Font Mono (WSL uses the Windows font, …)` under WSL.
-- **The doctor on Linux** always says `Ghostty has no Debian package; its configuration is linked for when it is installed.`
+- **The doctor on Linux** always says `Ghostty has no Debian package; its configuration is linked for when it is installed.` (on the RHEL family `Ghostty has no RHEL or EPEL package; …`).
+- **`Many EPEL packages require the CodeReady Builder (CRB) repository.`** on the RHEL family, when the installer enables EPEL: epel-release prints it, and no package in the list needs CRB ([Linux](linux.md#rhel-and-rocky-linux)).
 - **Release age notes** while installing or updating ([release age](downloads.md#release-age)):
   - `<project> <tag> dates from <time>, less than 1d ago; taking <older tag>.` The latest release is younger than a day, so an older one was installed.
   - `…; keeping <installed tag>.` The update keeps the installed release until a newer one is old enough.
   - `<project> <tag> is newer than its latest release, <tag>; keeping it.` The project deleted or unmarked its newest release.
   - mise's own `Selected mise <version> (minimum release age: 86400s)` during the update.
-  - On Debian 12: `tree-sitter <tag> needs glibc 2.39 and this system has 2.36; Neovim will skip compiling parsers …`, and on later runs `tree-sitter <tag> does not run on glibc 2.36; Neovim keeps skipping the parsers`.
+  - On Debian 12: `tree-sitter <tag> needs glibc 2.39 and this system has 2.36; Neovim will skip compiling parsers …`, and on later runs `tree-sitter <tag> does not run on glibc 2.36; Neovim keeps skipping the parsers`. Rocky Linux 9 says the same with its 2.34 (and 2.35 as the glibc needed on arm64).
 - **The update's "left alone" lines** ([updating](updating.md#what-it-leaves-alone)): `… not installed by the bootstrap; left alone`, `pinned, left alone: …`, `held, left alone: …`, and on every update `tmux plugin catppuccin/tmux is pinned to v2.3.1; left alone`. On Windows, `left alone: Microsoft.PowerShell runs this update (from another shell: …)`, `upgraded: <id> (installed again: winget upgrade cannot find it)` for Carapace on winget 1.11, and `installed: <id> (restart Windows to finish)` or `upgraded: <id> (restart Windows to finish)`, after which the doctor tells whether the package already works.
-- **apt repository keys:**
-  - `Could not fetch the <name> repository's key from …; its keyring stays as it is.` during an update: the download failed and the doctor checks the existing keyring.
-  - `[ok] charm apt repository key (expires on <date>; scripts/update.sh fetches it again)` within 30 days of the expiry.
+- **apt and dnf repository keys:**
+  - `Could not fetch the <name> repository's key from …; its keyring stays as it is.` (dnf: `its key file stays as it is`) during an update: the download failed and the doctor checks the existing keyring.
+  - `[ok] charm apt repository key (expires on <date>; scripts/update.sh fetches it again)` (`charm dnf repository key` on the RHEL family) within 30 days of the expiry.
+  - dnf's `Importing GPG key 0x…` lines, twice for Charm's key when the bootstrap adds its repository (once for the metadata, once for the packages), and once for EPEL's: dnf trusting the key in the file the repository names.
 - **`The GitHub API refused GITHUB_TOKEN (HTTP <401 or 403>); trying once without it.`** The token has expired or is for another host (401), or is over its limit or kept out of an organization (403); the request goes on without it.
 - **`curl: (22) The requested URL returned error: 502`, `curl: (28) ...` or `curl: (6) Could not resolve host`,** one line per failed try, with pauses between them: curl is retrying ([timeouts and retries](downloads.md#timeouts-and-retries)). The run fails only when the last try fails.
 - **Without a terminal** (cron, some IDE tasks and agent shells), zsh-you-should-use prints `tput: No value for $TERM`, and on Debian 12 fzf 0.38 prints `can't change option: zle`. A real terminal never shows either.
@@ -46,7 +48,8 @@ None of these is a failure.
 - **`compinit:527: no such file or directory: …/.local/share/zinit/completions/_<name>` (one line per name) when a shell rebuilds its completion dump:** zinit kept links to completions a plugin dropped (zsh-completions dropped `_android` and 17 others), and the 1.0.0 release did not remove them. Update ([updating](updating.md)): the bootstrap now removes them and says how many, and the doctor reports any left as `[stale] zinit completions`. The next shell rebuilds the dump once, without the lines. The line number may differ with the zsh build.
 - **Something of yours is in the way:** `~/.local/bin/nvim exists and is not a link` or `~/.local/share/fonts/CaskaydiaCove exists and the bootstrap did not install it`. Move it away and rerun.
 - **sudo asks for the password again** during the bootstrap: it remembers it only for some minutes ([Linux](linux.md#sudo)).
-- **"Unsupported Linux distribution":** only Debian, Ubuntu and their derivatives are supported.
+- **"Unsupported Linux distribution":** only Debian, Ubuntu and their derivatives, and RHEL 9 or newer and the distributions built like it (Rocky Linux, AlmaLinux), are supported ([Linux](linux.md)). Release 8 of the RHEL family ships tmux 2.7, too old for the configuration.
+- **"Could not install epel-release from this distribution's repositories":** on RHEL itself, install `epel-release` as [EPEL's guide](https://docs.fedoraproject.org/en-US/epel/getting-started/) describes, then rerun.
 - **The doctor reports `~/.tmux.conf`:** run the `link_dotfiles.sh` command it names, which backs the file up, and keep what you need in `~/.config/tmux/local.conf`.
 - **tmux shows "TPM is missing":** run `bash ~/dotfiles/scripts/bootstrap_tools.sh`, with your clone's path if it is elsewhere.
 - **"Could not initialize the tool environment. Check Homebrew":** `brew shellenv` failed; check that Homebrew runs, then rerun.
@@ -91,6 +94,14 @@ On a machine you want back as it was. Run the listing commands first and look at
   ```
 
   Then `sudo apt-get remove` whatever you did not have before: eza, glow, gum and the packages in `packages/apt.txt`.
+- **RHEL family, the dnf repository and packages:**
+
+  ```sh
+  sudo rm /etc/yum.repos.d/charm.repo /etc/pki/rpm-gpg/RPM-GPG-KEY-dotfiles-charm
+  sudo rpm -e gpg-pubkey-d4dfd35c-62d04775   # Charm's key, which dnf imported into rpm
+  ```
+
+  Then `sudo dnf remove` whatever you did not have before: glow, gum, the packages in `packages/dnf.txt` and `epel-release`. eza, sd, vivid and direnv are in `~/.local/bin` there, with the release tools above.
 - **macOS, Homebrew:** `brew uninstall` the formulae in `packages/brew.txt` and `brew uninstall --cask` the casks in `packages/brew-casks.txt` (Ghostty and the font) that you did not have before.
 - **The login shell:** `chsh -s /bin/bash`, or whichever shell you had.
 

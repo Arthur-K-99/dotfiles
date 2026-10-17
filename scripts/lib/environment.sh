@@ -34,6 +34,28 @@ dotfiles_linux_font_installed() {
     fc-list -q "$DOTFILES_FONT_FAMILY" 2>/dev/null
 }
 
+# dotfiles_linux_family: the kind of package system this Linux distribution
+# has, from /etc/os-release (DOTFILES_OS_RELEASE in tests): "debian" when ID
+# or ID_LIKE names Debian or Ubuntu, "rhel" when ID_LIKE names RHEL or Fedora
+# (RHEL itself, Rocky Linux, AlmaLinux, CentOS Stream). Fails on any other,
+# Fedora itself included, and without the file.
+dotfiles_linux_family() {
+    local fields
+    # In a subshell, so the file's variables stay out of the caller's, and
+    # without the caller's: a file may leave ID_LIKE out.
+    fields="$(
+        unset ID ID_LIKE
+        # shellcheck disable=SC1090
+        . "${DOTFILES_OS_RELEASE:-/etc/os-release}" 2>/dev/null || exit 1
+        printf '%s|%s\n' "${ID:-}" "${ID_LIKE:-}"
+    )" || return 1
+    case "$fields" in
+        *debian*|*ubuntu*) echo debian ;;
+        *"|"*rhel*|*"|"*fedora*) echo rhel ;;
+        *) return 1 ;;
+    esac
+}
+
 # dotfiles_is_wsl: WSL kernels name themselves in the release, such as
 # 6.6.87.2-microsoft-standard-WSL2 (WSL 1: 4.4.0-19041-Microsoft). Containers
 # share the host's kernel, so Docker on a Windows host counts as WSL too.

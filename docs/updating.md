@@ -16,11 +16,12 @@ A rerun of the installer adds what is missing. What it upgrades depends on the p
 
 - **macOS:** none of the declared packages. One `brew install` adds the missing formulae (Homebrew may upgrade their dependencies), and oh-my-posh's release is kept.
 - **Debian and Ubuntu:** the packages `packages/apt.txt` lists, since apt refreshes its index and `apt-get install` upgrades a listed package that has a newer candidate. Held packages are left out. eza, glow and gum, from their own apt repositories, are skipped once present, and the release tools are kept.
+- **Rocky Linux and the RHEL family:** none of the packages. Only those in `packages/dnf.txt` that `rpm -q` does not find go to `dnf install`; glow and gum are skipped once present, and the release tools are kept.
 - **Windows:** nothing; winget skips every package `winget list` finds.
 
 ## What the update upgrades
 
-- **Packages:** the ones `packages/*.txt` declares, after Homebrew refreshes its index. On Linux apt refreshes its index after the signing keys of the eza and Charm repositories are fetched again and checked against their pins ([downloads](downloads.md#verified-downloads)). Homebrew may also upgrade the formulae a declared one depends on and the installed formulae that depend on it; nothing else is touched. Windows upgrades each declared winget package by id; one that `winget upgrade` cannot find (Carapace on winget 1.11) is installed again when winget lists a newer version.
+- **Packages:** the ones `packages/*.txt` declares, after Homebrew refreshes its index. On Linux apt refreshes its index after the signing keys of the eza and Charm repositories are fetched again and checked against their pins ([downloads](downloads.md#verified-downloads)); on the RHEL family the key of Charm's dnf repository is fetched again the same way, then `dnf upgrade --refresh` upgrades the whole list, and glow and gum follow. Homebrew may also upgrade the formulae a declared one depends on and the installed formulae that depend on it; nothing else is touched. Windows upgrades each declared winget package by id; one that `winget upgrade` cannot find (Carapace on winget 1.11) is installed again when winget lists a newer version.
 - **Release tools (Linux, and oh-my-posh on macOS):** each tool the bootstrap fetched from a GitHub release, when a newer release exists and is old enough ([release age](downloads.md#release-age)). The installed tag is recorded under `~/.local/state/dotfiles/releases/`; a tool installed before those records existed is fetched once. mise in `~/.local/bin` updates itself with `mise self-update`.
 - **Neovim, the tree-sitter CLI and the font on Linux:** replaced when a newer release is old enough. The new one must work before the old one goes: the Neovim tree has to run, the tree-sitter release is staged first, and the previous font directory waits hidden until fontconfig lists the family again. macOS upgrades the font cask when Homebrew installed it; Windows keeps the installed font.
 - **Plugins:** zinit and TPM with their plugins, and the yazi flavors (only those the repository names). A rerun or an update also removes the links zinit kept to completions a plugin no longer ships (only dangling links into zinit's plugins), and says how many.
@@ -41,6 +42,6 @@ It says so for each of these:
 - a yazi flavor that `~/.config/yazi/package.toml` does not list (put in place by hand);
 - on Windows, the PowerShell 7 or Windows Terminal that is running it. Upgrade those from another shell with the `winget upgrade` command it prints. It also leaves packages whose installed version winget cannot tell, and those whose upgrade needs another installer type.
 
-Casks that update themselves, such as Ghostty, are not reported as outdated by Homebrew, so the update leaves them to their own updater without a word.
+Casks that update themselves, such as Ghostty, are not reported as outdated by Homebrew, so the update leaves them to their own updater without a word. On the RHEL family dnf leaves out the packages you locked (`dnf versionlock`) or excluded by itself, also without a word.
 
 The "left alone", "pinned" and "keeping" lines are information, not failures; [troubleshooting](troubleshooting.md#messages-that-look-like-errors) lists them.

@@ -1,10 +1,10 @@
 # dotfiles
 
-My personal machine setup and source of truth for rebuilding macOS, Debian/Ubuntu, WSL and native Windows environments: one terminal setup in one Catppuccin flavor, with every tool declared in this repository.
+My personal machine setup and source of truth for rebuilding macOS, Debian/Ubuntu, Rocky Linux and the RHEL family, WSL and native Windows environments: one terminal setup in one Catppuccin flavor, with every tool declared in this repository.
 
 Where it has been tried:
 
-- **Debian 12 and 13, Ubuntu 24.04 and 26.04:** fresh installs in containers, on x86_64 (CI, every week) and arm64 (on a Mac).
+- **Debian 12 and 13, Ubuntu 24.04 and 26.04, Rocky Linux 9:** fresh installs in containers, on x86_64 (CI, every week) and arm64 (on a Mac). RHEL itself, AlmaLinux and release 10 of the family are accepted but untried.
 - **macOS:** my Mac and CI's macOS runner.
 - **WSL:** the Linux install inside a Debian or Ubuntu distribution; what differs there (the font, the clipboard) is covered by the mocked tests only.
 - **Native Windows:** `install.ps1`, a rerun and the update on a clean Windows Server 2025 machine in CI (every week), plus the mocked installer tests under Windows PowerShell 5.1 and PowerShell 7; not yet on a desktop Windows 11.
@@ -13,7 +13,7 @@ Where it has been tried:
 
 The installer replaces your shell and tool configuration and installs packages. To see it without touching your machine:
 
-- **Linux, unattended:** from a clone of this repository, `bash tests/fresh_install.sh ubuntu:24.04` (or `debian:12`, `debian:13`, `ubuntu:26.04`) installs the checkout in a new Docker container, reruns it, runs the update and starts zsh and tmux, then removes the container. On a Mac prefix `DOCKER_DEFAULT_PLATFORM=linux/arm64`; for repeated runs add `GITHUB_TOKEN="$(gh auth token)"` ([development](docs/development.md#fresh-install)).
+- **Linux, unattended:** from a clone of this repository, `bash tests/fresh_install.sh ubuntu:24.04` (or `debian:12`, `debian:13`, `ubuntu:26.04`, `rockylinux/rockylinux:9`) installs the checkout in a new Docker container, reruns it, runs the update and starts zsh and tmux, then removes the container. On a Mac prefix `DOCKER_DEFAULT_PLATFORM=linux/arm64`; for repeated runs add `GITHUB_TOKEN="$(gh auth token)"` ([development](docs/development.md#fresh-install)).
 - **Linux, to look around:** a container with a user that has sudo, as on a real machine. `docker start -ai dotfiles-try` returns to it as root (`su - dev` again), and `docker rm -f dotfiles-try` removes it. On a Mac add `--platform linux/arm64` to `docker run`, or an amd64 copy of the image pulled earlier runs emulated. This installs the `main` branch from GitHub; `tests/fresh_install.sh` installs your checkout.
 
   ```sh
@@ -39,12 +39,13 @@ The installer replaces your shell and tool configuration and installs packages. 
 ### Before you start
 
 - **Debian and Ubuntu:** git (and `ca-certificates`, which minimal images lack) and a user with sudo. apt runs through sudo, which may ask again during the long bootstrap stage. Debian, Ubuntu and their derivatives only, on x86_64 or arm64.
+- **Rocky Linux, AlmaLinux and RHEL, release 9 or newer:** git (`sudo dnf install git`; a minimal install lacks it) and a user with sudo. The installer enables EPEL with `dnf install epel-release`, which RHEL itself does not carry: install it there first as [EPEL's guide](https://docs.fedoraproject.org/en-US/epel/getting-started/) describes ([Linux](docs/linux.md#rhel-and-rocky-linux)).
 - **WSL:** run the Linux install inside the distribution, not in Windows PowerShell. WSL itself comes from `wsl --install` in an administrator PowerShell and may need a restart. The font is the Windows one, which `install.ps1` installs (without `install.ps1`, see [Linux and WSL](docs/linux.md#wsl)).
 - **macOS:** an administrator account, for Homebrew's installer, which asks for your password and for RETURN. git comes from the Command Line Tools: on a brand-new Mac run `xcode-select --install` first. They also bring the C compiler for Neovim's parsers.
 - **Windows:** a working winget (App Installer), then Git with `winget install --id Git.Git --exact`, and a new PowerShell before cloning. Elevation is optional. The first run is in Windows PowerShell 5.1, which makes links only when elevated (Developer Mode helps only from PowerShell 7, and reruns keep matching copies); otherwise the installer copies the files, which stay stale until the next install or update ([Windows](docs/windows.md#links-or-copies)).
 - **Existing configuration on Windows:** a `Microsoft.PowerShell_profile.ps1` still runs after the managed profile and can replace its prompt, and extra files in `%LOCALAPPDATA%\nvim` mix with the managed ones ([Windows](docs/windows.md#existing-configurations)).
 
-### macOS / Debian / Ubuntu / WSL
+### macOS / Debian / Ubuntu / Rocky Linux / WSL
 
 ```sh
 git clone https://github.com/Arthur-K-99/dotfiles.git ~/dotfiles && ~/dotfiles/install.sh
@@ -142,7 +143,7 @@ dotfiles/
 ├── config/         # Tool configuration: atuin, bat, catppuccin (flavor and palette), eza, fastfetch,
 │                   # ghostty, git, lazygit, mise, nvim, oh-my-posh, powershell, tmux, windows-terminal,
 │                   # yazi, zsh-abbr
-├── packages/       # Declarative package lists (brew, apt, winget)
+├── packages/       # Declarative package lists (brew, apt, dnf, winget)
 ├── scripts/        # Install, symlink, bootstrap, update, doctor and theme-switch scripts
 ├── tests/          # Isolated installer regression tests and the fresh-install check
 ├── docs/           # Per-tool and per-platform notes, troubleshooting, theming and the roadmap

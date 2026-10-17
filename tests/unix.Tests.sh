@@ -480,7 +480,7 @@ test_login_shell_discovery() {
 
 test_package_index_failure() {
     source "$TEST_REPO_DIR/scripts/install_packages.sh"
-    check_linux_distribution() { return 0; }
+    check_linux_distribution() { echo debian; }
     sudo() {
         printf '%s\n' "$*" >> "$test_dir/commands"
         if [ "$*" = 'apt-get update -qq' ] && [ ! -f "$test_dir/retry" ]; then
@@ -1153,7 +1153,7 @@ test_apt_held_packages_left_alone() {
     # No repository has been added here, so updating refreshes no keys;
     # test_apt_keys_refreshed_before_updating covers that.
     export DOTFILES_APT_ETC="$test_dir/etc-apt"
-    check_linux_distribution() { return 0; }
+    check_linux_distribution() { echo debian; }
     parse_list() { printf 'tmux\nbat\nwl-clipboard\nfzf\n'; }
     apt-mark() { [ "$1" = showhold ] && cat "$DOTFILES_TEST_FIXTURE/held"; }
     sudo() {
@@ -1234,7 +1234,7 @@ test_apt_keys_refreshed_before_updating() {
     export DOTFILES_APT_ETC="$test_dir/etc-apt"
     mkdir -p "$DOTFILES_APT_ETC/sources.list.d"
     : > "$DOTFILES_APT_ETC/sources.list.d/charm.list"
-    check_linux_distribution() { return 0; }
+    check_linux_distribution() { echo debian; }
     parse_list() { printf 'tmux\n'; }
     apt-mark() { :; }
     sudo() { printf 'sudo %s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"; }
@@ -1281,6 +1281,336 @@ test_apt_keys_refreshed_before_updating() {
     install_linux > "$test_dir/output"
     assert_equal $'sudo apt-get update -qq\nsudo apt-get install -y tmux' "$(cat "$test_dir/commands")"
     assert_contains "$(cat "$test_dir/output")" 'checked on the next update, after apt installs it'
+}
+
+# The package stage names the distribution's family from os-release's ID and
+# ID_LIKE: Debian's for Debian, Ubuntu and their derivatives, RHEL's when
+# ID_LIKE names rhel or fedora, from release 9. Anything else stops it with
+# what is supported. dotfiles_linux_family reads the file in a subshell, so
+# its variables stay out of the caller's.
+test_linux_distribution_check() {
+    source "$TEST_REPO_DIR/scripts/install_packages.sh"
+    export DOTFILES_OS_RELEASE="$test_dir/os-release"
+    local case status
+    for case in 'debian|ID=debian|VERSION_ID="12"' \
+        'debian|ID=ubuntu|ID_LIKE=debian|VERSION_ID="24.04"' \
+        'debian|ID=linuxmint|ID_LIKE="ubuntu debian"' \
+        'rhel|ID="rocky"|ID_LIKE="rhel centos fedora"|VERSION_ID="9.8"' \
+        'rhel|ID="almalinux"|ID_LIKE="rhel centos fedora"|VERSION_ID="10.0"' \
+        'rhel|ID="rhel"|ID_LIKE="fedora"|VERSION_ID="9.6"' \
+        'rhel|ID="centos"|ID_LIKE="rhel fedora"|VERSION_ID="9"'; do
+        printf '%s\n' "${case#*|}" | tr '|' '\n' > "$DOTFILES_OS_RELEASE"
+        assert_equal "${case%%|*}" "$(dotfiles_linux_family)"
+        assert_equal "${case%%|*}" "$(check_linux_distribution)"
+    done
+    assert_equal '' "${ID:-}${ID_LIKE:-}"
+    # Fedora itself has no EPEL; release 8 of the RHEL family has tmux 2.7.
+    for case in 'ID=fedora|VERSION_ID=42|PRETTY_NAME="Fedora Linux 42"' \
+        'ID=arch|PRETTY_NAME="Arch Linux"' \
+        'ID="rocky"|ID_LIKE="rhel centos fedora"|VERSION_ID="8.10"|PRETTY_NAME="Rocky Linux 8.10 (Green Obsidian)"'; do
+        printf '%s\n' "$case" | tr '|' '\n' > "$DOTFILES_OS_RELEASE"
+        status=0
+        check_linux_distribution > "$test_dir/output" 2>&1 || status=$?
+        assert_equal 1 "$status"
+        assert_contains "$(cat "$test_dir/output")" "Unsupported Linux distribution: $(sed -n 's/^PRETTY_NAME="\(.*\)"$/\1/p' "$DOTFILES_OS_RELEASE")"
+    done
+    assert_contains "$(cat "$test_dir/output")" 'The RHEL family is supported from release 9'
+    printf 'ID=arch\n' > "$DOTFILES_OS_RELEASE"
+    check_linux_distribution > "$test_dir/output" 2>&1 || :
+    assert_contains "$(cat "$test_dir/output")" 'Currently supported: Debian and Ubuntu (including WSL), and RHEL 9 or newer'
+    rm "$DOTFILES_OS_RELEASE"
+    status=0
+    check_linux_distribution > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_equal 'Cannot identify this Linux distribution.' "$(cat "$test_dir/output")"
+    status=0
+    dotfiles_linux_family > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_equal '' "$(cat "$test_dir/output")"
+}
+
+# On the RHEL family the package stage enables EPEL once (its release package
+# shows it is), installs the listed packages rpm does not know, and, updating,
+# fetches the keys of the dnf repositories the bootstrap added before
+# upgrading the whole list on refreshed metadata. A key that fails its pin
+# stops the update before dnf runs. Without epel-release in the
+# distribution's repositories (RHEL itself) the stage says what it takes.
+test_dnf_packages_install_and_update() {
+    source "$TEST_REPO_DIR/scripts/install_packages.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    export DOTFILES_YUM_REPOS="$test_dir/yum.repos.d"
+    mkdir -p "$DOTFILES_YUM_REPOS"
+    check_linux_distribution() { echo rhel; }
+    parse_list() {
+        assert_equal "$DOTFILES_DIR/packages/dnf.txt" "$1" || return
+        printf 'tmux\nzsh\nfd-find\n'
+    }
+    rpm() {
+        assert_equal '-q --quiet' "$1 $2" || return
+        grep -qxF -- "$3" "$DOTFILES_TEST_FIXTURE/installed"
+    }
+    sudo() {
+        printf 'sudo %s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        case "$*" in
+            'dnf install -y epel-release')
+                [ ! -f "$DOTFILES_TEST_FIXTURE/no-epel" ] || return 1
+                echo epel-release >> "$DOTFILES_TEST_FIXTURE/installed"
+                ;;
+        esac
+    }
+    install_rpm_key() {
+        printf 'install_rpm_key %s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        [ ! -f "$DOTFILES_TEST_FIXTURE/wrong-key" ] || return 1
+    }
+    # The refresh needs gpg, which the mocked install_rpm_key never runs.
+    gpg() { return 99; }
+    printf 'zsh\n' > "$test_dir/installed"
+    install_linux > "$test_dir/output"
+    assert_equal $'sudo dnf install -y epel-release\nsudo dnf install -y tmux fd-find' "$(cat "$test_dir/commands")"
+    assert_contains "$(cat "$test_dir/output")" '  already installed: zsh'
+    # A rerun finds EPEL and every package, so dnf does not run.
+    printf 'tmux\nfd-find\n' >> "$test_dir/installed"
+    : > "$test_dir/commands"
+    install_linux > "$test_dir/output"
+    assert_equal '' "$(cat "$test_dir/commands")"
+    assert_contains "$(cat "$test_dir/output")" '  already installed: tmux zsh fd-find'
+    # Updating upgrades the whole list; the key of an added repository is
+    # fetched first, in refresh mode (test_rpm_key_pinning covers it).
+    export DOTFILES_UPDATE=1
+    : > "$test_dir/commands"
+    install_linux > "$test_dir/output"
+    assert_equal 'sudo dnf upgrade -y --refresh tmux zsh fd-find' "$(cat "$test_dir/commands")"
+    : > "$DOTFILES_YUM_REPOS/charm.repo"
+    : > "$test_dir/commands"
+    install_linux > "$test_dir/output"
+    assert_equal $'install_rpm_key charm refresh\nsudo dnf upgrade -y --refresh tmux zsh fd-find' "$(cat "$test_dir/commands")"
+    : > "$test_dir/wrong-key"
+    : > "$test_dir/commands"
+    local status=0
+    install_linux > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_equal 'install_rpm_key charm refresh' "$(cat "$test_dir/commands")"
+    rm "$test_dir/wrong-key"
+    # Without gnupg the keys wait for the next update; dnf installs it meanwhile.
+    unset -f gpg
+    command() {
+        case "$*" in
+            '-v gpg') return 1 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    : > "$test_dir/commands"
+    install_linux > "$test_dir/output"
+    assert_equal 'sudo dnf upgrade -y --refresh tmux zsh fd-find' "$(cat "$test_dir/commands")"
+    assert_contains "$(cat "$test_dir/output")" 'checked on the next update, after dnf installs it'
+    unset DOTFILES_UPDATE
+    # No epel-release to install: the stage stops before the packages.
+    : > "$test_dir/no-epel"
+    printf 'zsh\n' > "$test_dir/installed"
+    : > "$test_dir/commands"
+    status=0
+    install_linux > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_equal 'sudo dnf install -y epel-release' "$(cat "$test_dir/commands")"
+    assert_contains "$(cat "$test_dir/output")" 'On RHEL itself, install it as https://docs.fedoraproject.org/en-US/epel/getting-started/ describes'
+}
+
+# A dnf repository's key file is installed only when the download holds
+# exactly the pinned key, and replaced only when the download differs from
+# it. The update's refresh keeps an existing key file when the key cannot be
+# downloaded, but not when it fails its pin.
+test_rpm_key_pinning() {
+    source "$TEST_REPO_DIR/scripts/lib/environment.sh"
+    source "$TEST_REPO_DIR/scripts/lib/apt_repositories.sh"
+    source "$TEST_REPO_DIR/scripts/lib/dnf_repositories.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    export TMPDIR="$test_dir/tmp"
+    export DOTFILES_RPM_GPG="$test_dir/rpm-gpg"
+    mkdir -p "$TMPDIR"
+    local pinned other=0123456789ABCDEF0123456789ABCDEF01234567
+    read -r _ pinned _ <<<"$(dotfiles_dnf_repository charm)"
+    local key_file="$DOTFILES_RPM_GPG/RPM-GPG-KEY-dotfiles-charm" found mode status
+    assert_equal "$key_file" "$(dotfiles_dnf_key_file charm)"
+    curl() {
+        local output=''
+        printf 'curl %s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                -o) output="$2"; shift ;;
+            esac
+            shift
+        done
+        [ ! -f "$DOTFILES_TEST_FIXTURE/offline" ] || return 22
+        cp "$DOTFILES_TEST_FIXTURE/served" "$output"
+    }
+    # A key file here is lines of "key <fingerprint> <material>".
+    key_details() { awk '$1 == "key" && !seen[$2]++ { print $2 }' "$1"; }
+    gpg() { return 99; }
+    sudo() {
+        printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/sudo"
+        case "$*" in
+            "install -d -m 755 $DOTFILES_RPM_GPG"|"install -m 644 $TMPDIR/"*" $key_file") "$@" ;;
+            *) echo "unexpected sudo $*" >&2; return 98 ;;
+        esac
+    }
+    printf 'key %s armored-2024\n' "$pinned" > "$test_dir/served"
+    : > "$test_dir/sudo"
+    install_rpm_key charm > "$test_dir/output"
+    assert_equal "Installing the charm repository's signing key from https://repo.charm.sh/yum/gpg.key..." "$(cat "$test_dir/output")"
+    assert_equal "key $pinned armored-2024" "$(cat "$key_file")"
+    assert_equal 2 "$(wc -l < "$test_dir/sudo" | tr -d ' ')"
+    assert_contains "$(cat "$test_dir/commands")" '--retry 7'
+    assert_equal 0 "$(find "$TMPDIR" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+    # The same bytes again: current, and no sudo.
+    : > "$test_dir/sudo"
+    install_rpm_key charm refresh > "$test_dir/output"
+    assert_equal "The charm repository's signing key is current." "$(cat "$test_dir/output")"
+    assert_equal '' "$(cat "$test_dir/sudo")"
+    # The project extended the key: the file is replaced.
+    printf 'key %s armored-2026\n' "$pinned" > "$test_dir/served"
+    install_rpm_key charm refresh > "$test_dir/output"
+    assert_equal "Replacing the charm repository's key file with the pinned key from https://repo.charm.sh/yum/gpg.key..." "$(cat "$test_dir/output")"
+    assert_equal "key $pinned armored-2026" "$(cat "$key_file")"
+    # Another key, a second key beside the pinned one, or none, refreshing or
+    # not: the key file stays as it was, and sudo is not needed.
+    for mode in '' refresh; do
+        for found in "key $other signed" "key $pinned signed"$'\n'"key $other signed" 'not a key'; do
+            printf '%s\n' "$found" > "$test_dir/served"
+            : > "$test_dir/sudo"
+            status=0
+            install_rpm_key charm $mode > "$test_dir/output" 2>&1 || status=$?
+            assert_equal 1 "$status"
+            assert_contains "$(cat "$test_dir/output")" "The signing key at https://repo.charm.sh/yum/gpg.key is not the one pinned for the charm repository"
+            assert_equal "key $pinned armored-2026" "$(cat "$key_file")"
+            assert_equal '' "$(cat "$test_dir/sudo")"
+        done
+    done
+    # Offline, the refresh keeps the key file; a first install cannot.
+    : > "$test_dir/offline"
+    install_rpm_key charm refresh > "$test_dir/output" 2>&1
+    assert_contains "$(cat "$test_dir/output")" 'its key file stays as it is'
+    rm "$key_file"
+    for mode in '' refresh; do
+        status=0
+        install_rpm_key charm $mode > "$test_dir/output" 2>&1 || status=$?
+        assert_equal 22 "$status"
+    done
+    # Without gnupg no key can be checked.
+    unset -f gpg
+    command() {
+        case "$*" in
+            '-v gpg') return 1 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    status=0
+    install_rpm_key charm > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_equal 'gnupg is not installed; install packages first.' "$(cat "$test_dir/output")"
+    status=0
+    install_rpm_key gierens > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_equal 'Unknown dnf repository: gierens' "$(cat "$test_dir/output")"
+}
+
+# On the RHEL family the bootstrap adds Charm's dnf repository, with its key
+# (test_rpm_key_pinning), when glow or gum is missing, and updating upgrades
+# the ones rpm lists. eza, sd, vivid and direnv come from their releases,
+# whose assets the templates must name for both architectures; on Debian and
+# Ubuntu the apt route stays.
+test_rhel_tools_install_and_update() {
+    source "$TEST_REPO_DIR/scripts/bootstrap_tools.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    export DOTFILES_YUM_REPOS="$test_dir/yum.repos.d"
+    mkdir -p "$DOTFILES_YUM_REPOS"
+    local repo_file="$DOTFILES_YUM_REPOS/charm.repo" status
+    command() {
+        case "$*" in
+            '-v glow'|'-v gum') [ -f "$DOTFILES_TEST_FIXTURE/${2}" ] ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    rpm() { [ "$1 $2" = '-q --quiet' ] && [ -f "$DOTFILES_TEST_FIXTURE/rpm-$3" ]; }
+    install_rpm_key() {
+        printf 'install_rpm_key %s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        [ ! -f "$DOTFILES_TEST_FIXTURE/wrong-key" ] || return 1
+    }
+    sudo() {
+        printf '%s\n' "$*" >> "$DOTFILES_TEST_FIXTURE/commands"
+        case "$*" in
+            "tee $DOTFILES_YUM_REPOS/"*) cat > "$2" ;;
+            'dnf install'*) [ -f "$DOTFILES_TEST_FIXTURE/retry" ] || return 45 ;;
+        esac
+    }
+    # A key that is not the pinned one adds no repository.
+    : > "$test_dir/wrong-key"
+    status=0
+    install_dnf_repository charm glow gum > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 1 "$status"
+    assert_equal 'install_rpm_key charm' "$(cat "$test_dir/commands")"
+    [ ! -e "$repo_file" ]
+    rm "$test_dir/wrong-key"
+    # dnf failing fails the stage; a rerun installs.
+    status=0
+    install_dnf_repository charm glow gum > "$test_dir/output" 2>&1 || status=$?
+    assert_equal 45 "$status"
+    : > "$test_dir/retry"
+    : > "$test_dir/commands"
+    install_dnf_repository charm glow gum > "$test_dir/output"
+    assert_equal $'install_rpm_key charm\ntee '"$repo_file"$'\ndnf install -y glow gum' "$(cat "$test_dir/commands")"
+    assert_equal $'[charm]\nname=charm (added by the dotfiles)\nbaseurl=https://repo.charm.sh/yum/\nenabled=1\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-dotfiles-charm' "$(cat "$repo_file")"
+    # Both present: a rerun does nothing.
+    : > "$test_dir/glow"
+    : > "$test_dir/gum"
+    : > "$test_dir/commands"
+    install_dnf_repository charm glow gum > "$test_dir/output"
+    assert_equal '' "$(cat "$test_dir/commands")"
+    assert_equal 'glow gum already installed' "$(cat "$test_dir/output")"
+    # Updating upgrades what rpm lists; a gum from elsewhere is left alone.
+    export DOTFILES_UPDATE=1
+    : > "$test_dir/rpm-glow"
+    install_dnf_repository charm glow gum > "$test_dir/output"
+    assert_equal 'dnf upgrade -y glow' "$(cat "$test_dir/commands")"
+    # With one missing, the installed one rpm lists comes along.
+    rm "$test_dir/glow"
+    : > "$test_dir/rpm-gum"
+    : > "$test_dir/commands"
+    install_dnf_repository charm glow gum > "$test_dir/output"
+    assert_equal 'dnf install -y glow gum' "$(tail -n 1 "$test_dir/commands")"
+    unset DOTFILES_UPDATE
+    # The release templates name the assets eza, sd, vivid and direnv publish.
+    # release_asset has an arch of its own, so the mock reads another name.
+    local test_arch
+    for test_arch in x86_64 aarch64; do
+        uname() { if [ "${1:-}" = -m ]; then printf '%s\n' "$test_arch"; else builtin command uname "$@"; fi; }
+        assert_equal "eza_$test_arch-unknown-linux-gnu.tar.gz" "$(release_asset 'eza_{arch}-unknown-linux-gnu.tar.gz' v0.23.5)"
+        assert_equal "sd-v1.1.0-$test_arch-unknown-linux-musl.tar.gz" "$(release_asset 'sd-{tag}-{arch}-unknown-linux-musl.tar.gz' v1.1.0)"
+        assert_equal "vivid-v0.11.1-$test_arch-unknown-linux-gnu.tar.gz" "$(release_asset 'vivid-{tag}-{arch}-unknown-linux-gnu.tar.gz' v0.11.1)"
+    done
+    assert_equal direnv.linux-arm64 "$(release_asset 'direnv.linux-{arch_deb}' v2.38.2)"
+    unset -f uname
+    # The family picks the route; the stages both share follow either way.
+    for stage in install_eza install_fd_link install_charm_tools install_dnf_repository install_github_release \
+        bootstrap_zoxide bootstrap_mise_binary install_neovim_release install_tree_sitter_cli install_nerd_font; do
+        eval "$stage() { printf '%s\n' \"$stage \$*\" >> \"\$DOTFILES_TEST_FIXTURE/stages\"; }"
+    done
+    export DOTFILES_OS_RELEASE="$test_dir/os-release"
+    printf 'ID=rocky\nID_LIKE="rhel centos fedora"\nVERSION_ID="9.8"\n' > "$DOTFILES_OS_RELEASE"
+    install_linux_tools
+    assert_equal $'install_github_release eza-community/eza eza_{arch}-unknown-linux-gnu.tar.gz eza\ninstall_fd_link \ninstall_dnf_repository charm glow gum\ninstall_github_release chmln/sd sd-{tag}-{arch}-unknown-linux-musl.tar.gz sd\ninstall_github_release sharkdp/vivid vivid-{tag}-{arch}-unknown-linux-gnu.tar.gz vivid\ninstall_github_release direnv/direnv direnv.linux-{arch_deb} direnv\nbootstrap_zoxide ' "$(head -n 7 "$test_dir/stages")"
+    assert_equal 'install_nerd_font ' "$(tail -n 1 "$test_dir/stages")"
+    printf 'ID=debian\nVERSION_ID="12"\n' > "$DOTFILES_OS_RELEASE"
+    : > "$test_dir/stages"
+    install_linux_tools
+    assert_equal $'install_eza \ninstall_fd_link \ninstall_charm_tools \nbootstrap_zoxide ' "$(head -n 4 "$test_dir/stages")"
+    assert_equal 0 "$(grep -c -E 'eza-community|chmln/sd|sharkdp/vivid|direnv/direnv|install_dnf_repository' "$test_dir/stages" || :)"
+    # Neither family: the bootstrap stops before installing anything.
+    printf 'ID=arch\n' > "$DOTFILES_OS_RELEASE"
+    : > "$test_dir/stages"
+    status=0
+    install_linux_tools || status=$?
+    assert_equal 1 "$status"
+    assert_equal '' "$(cat "$test_dir/stages")"
 }
 
 # oh-my-posh and zoxide come from GitHub releases like the other release tools,
@@ -3705,6 +4035,48 @@ test_doctor_apt_keys() {
     assert_equal "  [missing] charm apt repository key (gnupg is not installed; rerun: bash $DOTFILES_SCRIPTS/install_packages.sh)" "$(grep -F ' charm apt ' "$test_dir/output")"
 }
 
+# On the RHEL family the doctor checks the key file of each dnf repository the
+# bootstrap added as it checks apt keyrings (test_doctor_apt_keys covers the
+# cases they share), and names the dnf packages for a missing terminfo.
+test_doctor_dnf_keys() {
+    source "$TEST_REPO_DIR/scripts/doctor.sh"
+    export DOTFILES_TEST_FIXTURE="$test_dir"
+    export DOTFILES_YUM_REPOS="$test_dir/yum.repos.d"
+    export DOTFILES_RPM_GPG="$test_dir/rpm-gpg"
+    local now=1815436800 charm key_file="$test_dir/rpm-gpg/RPM-GPG-KEY-dotfiles-charm"
+    read -r _ charm _ <<<"$(dotfiles_dnf_repository charm)"
+    date() { if [ "$*" = +%s ]; then echo 1815436800; else command date "$@"; fi; }
+    gpg() { echo 'gpg runs only through the mocked key_details here' >&2; return 99; }
+    key_details() { cat "$DOTFILES_TEST_FIXTURE/keys/${1##*-}" 2>/dev/null; }
+    mkdir -p "$test_dir/keys" "$DOTFILES_YUM_REPOS"
+    # No repository added: nothing to check.
+    failures=0
+    check_dnf_keys > "$test_dir/output"
+    assert_equal '' "$(cat "$test_dir/output")"
+    : > "$DOTFILES_YUM_REPOS/charm.repo"
+    check_dnf_keys > "$test_dir/output"
+    assert_equal 1 "$failures"
+    assert_equal "  [missing] charm dnf repository key ($key_file is missing or holds no key; run: bash $DOTFILES_SCRIPTS/update.sh)" "$(cat "$test_dir/output")"
+    printf '%s\n' "$charm" > "$test_dir/keys/charm"
+    failures=0
+    check_dnf_keys > "$test_dir/output"
+    assert_equal 0 "$failures"
+    assert_equal '  [ok] charm dnf repository key' "$(cat "$test_dir/output")"
+    printf '%s %s\n' "$charm" $((now - 86400)) > "$test_dir/keys/charm"
+    check_dnf_keys > "$test_dir/output"
+    assert_equal 1 "$failures"
+    assert_equal "  [stale] charm dnf repository key (expired on 2027-07-12; run: bash $DOTFILES_SCRIPTS/update.sh, which fetches it again)" "$(cat "$test_dir/output")"
+    # The terminfo hint names the family's packages.
+    infocmp() { return 1; }
+    export DOTFILES_OS_RELEASE="$test_dir/os-release"
+    printf 'ID=rocky\nID_LIKE="rhel centos fedora"\n' > "$DOTFILES_OS_RELEASE"
+    check_terminfo tmux-256color > "$test_dir/output"
+    assert_equal '  [missing] tmux-256color terminfo (sudo dnf install ncurses ncurses-base)' "$(cat "$test_dir/output")"
+    printf 'ID=debian\n' > "$DOTFILES_OS_RELEASE"
+    check_terminfo tmux-256color > "$test_dir/output"
+    assert_equal '  [missing] tmux-256color terminfo (Linux: sudo apt-get install ncurses-term)' "$(cat "$test_dir/output")"
+}
+
 # plugins() against local repositories: missing plugins are cloned at the
 # pinned commit, drifted ones return to it, a failed clone fails the run, and
 # the lockfile bytes never change. Needs an installed lazy.nvim to copy.
@@ -4350,6 +4722,10 @@ run_tests() {
         apt_held_packages_left_alone
         apt_key_pinning
         apt_keys_refreshed_before_updating
+        linux_distribution_check
+        dnf_packages_install_and_update
+        rpm_key_pinning
+        rhel_tools_install_and_update
         macos_update_upgrades_declared
         script_installers_install_and_update
         downloads_are_bounded
@@ -4369,6 +4745,7 @@ run_tests() {
         linux_font_update
         doctor_linux_font
         doctor_apt_keys
+        doctor_dnf_keys
         neovim_plugins_install_and_retry
         doctor_neovim_checks
         tmux_plugin_failure_and_retry

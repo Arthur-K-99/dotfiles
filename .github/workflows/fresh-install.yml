@@ -35,7 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: ['debian:12', 'debian:13', 'ubuntu:24.04', 'ubuntu:26.04']
+        image: ['debian:12', 'debian:13', 'ubuntu:24.04', 'ubuntu:26.04', 'rockylinux/rockylinux:9']
     steps:
       - uses: actions/checkout@v7
         with:

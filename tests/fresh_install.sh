@@ -6,7 +6,7 @@
 # renamed release asset.
 #
 # Usage:
-#   bash tests/fresh_install.sh [image]   a Debian or Ubuntu container (default: debian:12)
+#   bash tests/fresh_install.sh [image]   a Debian, Ubuntu or Rocky Linux container (default: debian:12)
 #   bash tests/fresh_install.sh --here    this machine, for a disposable one such as a CI runner
 #
 # The container form needs Docker and network access and takes several
@@ -23,14 +23,20 @@ FRESH_INSTALL_USER=""
 
 # Runs as root inside the container. A new machine already has a user with
 # sudo and git (the README clones with it); nothing else is installed here.
+# The Rocky Linux image has neither, and dnf instead of apt.
 fresh_install_prepare() {
     local home="/home/$1"
-    export DEBIAN_FRONTEND=noninteractive
-    # A desktop install has answered debconf's questions (tzdata's time zone)
-    # already; sudo drops DEBIAN_FRONTEND, so the installer's apt-get would ask.
-    echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections || return
-    apt-get update -qq || return
-    apt-get install -y -qq sudo git ca-certificates >/dev/null || return
+    if command -v dnf >/dev/null 2>&1; then
+        dnf install -y -q sudo git >/dev/null || return
+    else
+        export DEBIAN_FRONTEND=noninteractive
+        # A desktop install has answered debconf's questions (tzdata's time
+        # zone) already; sudo drops DEBIAN_FRONTEND, so the installer's
+        # apt-get would ask.
+        echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections || return
+        apt-get update -qq || return
+        apt-get install -y -qq sudo git ca-certificates >/dev/null || return
+    fi
     useradd --create-home --shell /bin/bash "$1" || return
     printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$1" > "/etc/sudoers.d/$1" || return
     chmod 440 "/etc/sudoers.d/$1" || return

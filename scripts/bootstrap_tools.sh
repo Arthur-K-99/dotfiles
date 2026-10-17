@@ -5,6 +5,8 @@ DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$DOTFILES_DIR/scripts/lib/environment.sh"
 # shellcheck source=lib/apt_repositories.sh
 source "$DOTFILES_DIR/scripts/lib/apt_repositories.sh"
+# shellcheck source=lib/dnf_repositories.sh
+source "$DOTFILES_DIR/scripts/lib/dnf_repositories.sh"
 
 # --- Release records ----------------------------------------------------------
 # The tag each tool from a GitHub release was installed at, one file per
@@ -221,10 +223,11 @@ bootstrap_bat_theme() {
 }
 
 # --- Linux installers --------------------------------------------------------
-# Debian and Ubuntu lack packages for several tools. Two routes cover them,
-# in order of preference: a signed third-party apt repository (updates arrive
-# with apt) and a static binary from a GitHub release, the latest one old
-# enough (release_tag), verified and installed into ~/.local/bin
+# Debian and Ubuntu, and the RHEL family with EPEL, lack packages for several
+# tools. Two routes cover them, in order of preference: a signed third-party
+# apt or dnf repository (updates arrive with the package manager) and a
+# static binary from a GitHub release, the latest one old enough
+# (release_tag), verified and installed into ~/.local/bin
 # (DOTFILES_LOCAL_BIN). No installer script is piped into a shell:
 # oh-my-posh's and zoxide's verified nothing they fetched.
 # Every download goes through dotfiles_curl (lib/environment.sh), which
@@ -277,6 +280,56 @@ install_eza() {
 
 install_charm_tools() {
     install_apt_repository charm glow gum
+}
+
+# install_dnf_repository <name> <package>...: on the RHEL family, installs
+# packages from one of the repositories in lib/dnf_repositories.sh, adding it
+# with its pinned key when one of them is missing. Package names double as
+# command names. Updating, the installed packages that rpm lists are upgraded
+# from the metadata the package stage has just refreshed; dnf leaves out the
+# ones the user locked, and a command rpm does not list came from elsewhere.
+install_dnf_repository() {
+    local name="$1"
+    shift
+    local package
+    local missing=() upgrades=()
+    for package in "$@"; do
+        if ! command -v "$package" &>/dev/null; then
+            missing+=("$package")
+        elif dotfiles_updating && rpm -q --quiet "$package"; then
+            upgrades+=("$package")
+        fi
+    done
+    if [ "${#missing[@]}" -eq 0 ]; then
+        if ! dotfiles_updating; then
+            echo "$* already installed"
+            return 0
+        fi
+        [ "${#upgrades[@]}" -gt 0 ] || return 0
+        echo "Upgrading ${upgrades[*]} from the $name repository..."
+        sudo dnf upgrade -y "${upgrades[@]}"
+        return
+    fi
+    echo "Installing ${missing[*]} from the $name repository..."
+    install_rpm_key "$name" || return
+    dotfiles_dnf_repository_file "$name" | sudo tee "$DOTFILES_YUM_REPOS/$name.repo" >/dev/null || return
+    # Updating, the installed packages of the repository come along.
+    sudo dnf install -y "${missing[@]}" ${upgrades[@]+"${upgrades[@]}"} || return
+}
+
+# Neither the RHEL family nor EPEL packages eza, sd, vivid and direnv, and
+# Charm's dnf repository carries glow and gum. The release builds run on RHEL
+# 9's glibc 2.34: eza and vivid publish glibc builds for both architectures
+# (vivid no arm64 musl one), sd musl builds, direnv static binaries. vivid's
+# carries the Catppuccin themes, which Debian 12's 0.8 lacks. fd-find
+# installs fd, which install_fd_link then finds.
+install_rhel_tools() {
+    install_github_release eza-community/eza 'eza_{arch}-unknown-linux-gnu.tar.gz' eza || return
+    install_fd_link || return
+    install_dnf_repository charm glow gum || return
+    install_github_release chmln/sd 'sd-{tag}-{arch}-unknown-linux-musl.tar.gz' sd || return
+    install_github_release sharkdp/vivid 'vivid-{tag}-{arch}-unknown-linux-gnu.tar.gz' vivid || return
+    install_github_release direnv/direnv 'direnv.linux-{arch_deb}' direnv || return
 }
 
 # Projects spell architectures differently. Prints five words: {arch}
@@ -860,9 +913,15 @@ install_neovim_release() (
 )
 
 install_linux_tools() {
-    install_eza || return
-    install_fd_link || return
-    install_charm_tools || return
+    local family
+    family="$(dotfiles_linux_family)" || return
+    if [ "$family" = rhel ]; then
+        install_rhel_tools || return
+    else
+        install_eza || return
+        install_fd_link || return
+        install_charm_tools || return
+    fi
     bootstrap_zoxide || return
     bootstrap_mise_binary || return
     install_github_release jesseduffield/lazygit 'lazygit_{version}_linux_{arch_go}.tar.gz' lazygit || return

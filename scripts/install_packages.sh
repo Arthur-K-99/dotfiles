@@ -4,6 +4,8 @@ DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$DOTFILES_DIR/scripts/lib/environment.sh"
 # shellcheck source=lib/apt_repositories.sh
 source "$DOTFILES_DIR/scripts/lib/apt_repositories.sh"
+# shellcheck source=lib/dnf_repositories.sh
+source "$DOTFILES_DIR/scripts/lib/dnf_repositories.sh"
 
 parse_list() {
     awk '!/^[[:space:]]*#/ && NF' "$1"
@@ -120,22 +122,33 @@ install_macos() {
     done < <(parse_list "$DOTFILES_DIR/packages/brew-casks.txt")
 }
 
+# check_linux_distribution: prints the distribution's family
+# (dotfiles_linux_family), or says why it is not supported and fails. The
+# RHEL family needs release 9 or newer: release 8 ships tmux 2.7, older than
+# the configuration needs (3.2), and zsh 5.5.
 check_linux_distribution() {
-    if [ ! -r /etc/os-release ]; then
+    local os_release="${DOTFILES_OS_RELEASE:-/etc/os-release}" family
+    local ID="" ID_LIKE="" VERSION_ID="" PRETTY_NAME=""
+    if [ ! -r "$os_release" ]; then
         echo "Cannot identify this Linux distribution." >&2
         return 1
     fi
 
-    # shellcheck disable=SC1091
-    . /etc/os-release
-    case "${ID:-} ${ID_LIKE:-}" in
-        *debian*|*ubuntu*) ;;
-        *)
+    # shellcheck disable=SC1090
+    . "$os_release"
+    if ! family="$(dotfiles_linux_family)"; then
+        echo "Unsupported Linux distribution: ${PRETTY_NAME:-${ID:-unknown}}" >&2
+        echo "Currently supported: Debian and Ubuntu (including WSL), and RHEL 9 or newer and the distributions built like it (Rocky Linux, AlmaLinux)." >&2
+        return 1
+    fi
+    case "$family ${VERSION_ID:-}" in
+        "rhel "[0-8]|"rhel "[0-8].*)
             echo "Unsupported Linux distribution: ${PRETTY_NAME:-${ID:-unknown}}" >&2
-            echo "Currently supported: Debian and Ubuntu (including WSL)." >&2
+            echo "The RHEL family is supported from release 9: release ${VERSION_ID} ships tmux and zsh too old for this configuration." >&2
             return 1
             ;;
     esac
+    printf '%s\n' "$family"
 }
 
 # refresh_apt_keys: fetches the signing key of every repository in
@@ -172,9 +185,13 @@ DOTFILES_APT_WITHOUT_RECOMMENDS="wl-clipboard"
 # list. Held packages are left out: one with an upgrade fails the whole
 # command. Updating, the third-party repositories' keys are fetched again first.
 install_linux() {
-    local package held
+    local package held family
     local packages=() lean=()
-    check_linux_distribution || return
+    family="$(check_linux_distribution)" || return
+    if [ "$family" = rhel ]; then
+        install_linux_dnf
+        return
+    fi
     if dotfiles_updating; then
         refresh_apt_keys || return
     fi
@@ -198,6 +215,71 @@ install_linux() {
     fi
     if [ "${#lean[@]}" -gt 0 ]; then
         sudo apt-get install -y --no-install-recommends "${lean[@]}" || return
+    fi
+}
+
+# --- RHEL and the distributions built like it -----------------------------
+
+# refresh_dnf_keys: fetches the signing key of every repository in
+# lib/dnf_repositories.sh that the bootstrap added and checks it against its
+# pin before dnf reads the repositories, as refresh_apt_keys does for apt.
+refresh_dnf_keys() {
+    local name
+    for name in $DOTFILES_DNF_REPOSITORIES; do
+        dotfiles_dnf_repository_added "$name" || continue
+        if ! command -v gpg >/dev/null 2>&1; then
+            echo "gnupg is not installed, so the dnf repository keys are checked on the next update, after dnf installs it."
+            return 0
+        fi
+        install_rpm_key "$name" refresh || return
+    done
+}
+
+# enable_epel: EPEL carries most of packages/dnf.txt. Rocky Linux, AlmaLinux
+# and CentOS Stream package its release file as epel-release; RHEL itself
+# does not, and the message says what it takes there.
+enable_epel() {
+    if rpm -q --quiet epel-release; then
+        return 0
+    fi
+    echo "Enabling EPEL (Extra Packages for Enterprise Linux)..."
+    if sudo dnf install -y epel-release; then
+        return 0
+    fi
+    echo "Could not install epel-release from this distribution's repositories. On RHEL itself, install it as https://docs.fedoraproject.org/en-US/epel/getting-started/ describes (it also enables CodeReady Builder there), then rerun." >&2
+    return 1
+}
+
+# install_linux_dnf: installs the packages in packages/dnf.txt that rpm does
+# not list as installed, after enabling EPEL. Updating, the keys of the
+# repositories the bootstrap added are fetched again first, and every listed
+# package is upgraded after dnf refreshes its metadata. dnf itself leaves
+# out packages the user locked (dnf versionlock) or excluded.
+install_linux_dnf() {
+    local package
+    local declared=() present=() missing=()
+    if dotfiles_updating; then
+        refresh_dnf_keys || return
+    fi
+    enable_epel || return
+    echo "Installing dnf packages..."
+    while IFS= read -r package; do
+        declared+=("$package")
+        if rpm -q --quiet "$package"; then
+            present+=("$package")
+        else
+            missing+=("$package")
+        fi
+    done < <(parse_list "$DOTFILES_DIR/packages/dnf.txt")
+    if [ "${#present[@]}" -gt 0 ]; then
+        echo "  already installed: ${present[*]}"
+    fi
+    if [ "${#missing[@]}" -gt 0 ]; then
+        sudo dnf install -y "${missing[@]}" || return
+    fi
+    if dotfiles_updating && [ "${#declared[@]}" -gt 0 ]; then
+        echo "Upgrading dnf packages..."
+        sudo dnf upgrade -y --refresh "${declared[@]}" || return
     fi
 }
 
